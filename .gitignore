@@ -5,4 +5,7 @@
 *.lock
 .codegraph
 *.bak
+*.zip
+*.tar.gz
+ob2h-linux-x86_64
 
