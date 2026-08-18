@@ -51,7 +51,15 @@ impl Settings {
 
         let llm_base_url = env::var("OB2H_LLM_BASE_URL")
             .unwrap_or_else(|_| "https://api.deepseek.com/v1".to_string());
-        let llm_api_key = env::var("OB2H_LLM_API_KEY").unwrap_or_default();
+        // OB2H_LLM_API_KEY может содержать ИМЯ переменной окружения с ключом
+        // (конвенция из README, так настраивает install.bat/Hermes),
+        // либо сам ключ. Разворачиваем индирекцию, с фолбэком на литерал.
+        let key_ref = env::var("OB2H_LLM_API_KEY").unwrap_or_default();
+        let llm_api_key = if key_ref.is_empty() {
+            String::new()
+        } else {
+            env::var(&key_ref).unwrap_or_else(|_| key_ref.clone())
+        };
         let llm_model = env::var("OB2H_LLM_MODEL")
             .unwrap_or_else(|_| "deepseek-v4-flash".to_string());
         let llm_timeout_secs = env::var("OB2H_LLM_TIMEOUT")
@@ -152,7 +160,9 @@ impl Settings {
     }
 
     pub fn logs_dir(&self) -> PathBuf {
-        PathBuf::from("logs")
+        // Логи под data_dir (README: OB2H_DATA_DIR — «папка БД, файлов памяти и логов»),
+        // а не в относительный cwd/logs — иначе файл разъезжается по рабочим каталогам.
+        self.data_dir.join("logs")
     }
 
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
