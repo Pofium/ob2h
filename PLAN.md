@@ -60,7 +60,7 @@ Hermes (config.yaml: mcp_servers.omnes-memory)
 
 ## 2. Фазы разработки
 
-### Фаза 0 — Каркас проекта ✅ (закрыта 2026-08-18, см. git log)
+### Фаза 0 — Каркас проекта ✅ (закрыта 2026-08-18, см. CHANGELOG.md)
 
 - [x] README, AGENTS.md, CLAUDE.md, PLAN.md, docs/ (ARCHITECTURE, REFERENCE, HERMES_INTEGRATION)
 - [x] `.mcp.json` — codegraph для воркспейса

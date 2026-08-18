@@ -5,6 +5,8 @@ __pycache__/
 .venv/
 build/
 dist/
+.pytest_cache/
+.ruff_cache/
 
 # Runtime-данные (личная память пользователя — в git не включать никогда)
 data/
