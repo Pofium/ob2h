@@ -50,12 +50,14 @@ class Dream:
         llm: LLMProtocol | None,
         settings: Settings,
         db: Database,
+        graph: Any = None,  # GraphService | None: сессии -> общий граф (dream-extract)
     ):
         self.workspace = workspace
         self.gitstore = gitstore
         self.llm = llm
         self.settings = settings
         self.db = db
+        self.graph = graph
 
     # --- запуск ---
 
@@ -97,13 +99,44 @@ class Dream:
 
         analysis = self._phase1(new_records)
         edits = self._phase2(analysis)
+        graph_stats = self._extract_to_graph(new_records)
         new_cursor = max(r.get("cursor", 0) for r in new_records)
         self.workspace.set_cursor("dream_cursor", new_cursor)
         self.workspace.compact_history()
         commit = self.gitstore.auto_commit(
             f"dream: {datetime.now():%Y-%m-%d %H:%M} (+{len(edits)} правок)"
         )
-        return {"processed": len(new_records), "edits": len(edits), "commit": commit}
+        stats: dict[str, Any] = {
+            "processed": len(new_records), "edits": len(edits), "commit": commit
+        }
+        if graph_stats is not None:
+            stats.update(graph_stats)
+        return stats
+
+    def _extract_to_graph(self, records: list[dict]) -> dict[str, int] | None:
+        """Извлечение сущностей из новых записей сессий в общий граф.
+
+        Один граф на владельца: узлы из сессий и из документов дедуплицируются
+        по (label, type) — упоминание в диалоге увеличивает val существующего узла.
+        Отдельная фаза дрима, выключается OMNES_DREAM_EXTRACT_ENABLED=false.
+        """
+        if self.graph is None or not self.settings.dream_extract_enabled:
+            return None
+        text = "\n".join(str(r.get("content", ""))[:1500] for r in records)[:15000]
+        if len(text.strip()) < 80:
+            return {"graph_entities": 0, "graph_edges": 0}
+        from .extractor import Extractor
+
+        try:
+            result = Extractor(self.llm, max_chunks=30).extract(text)
+        except Exception as e:  # сбой экстракции не роняет дрим
+            log.warning("dream-extract не удался: %s", e)
+            return {"graph_entities": 0, "graph_edges": 0, "graph_error": str(e)[:200]}
+        upsert = self.graph.upsert_extraction(result)
+        return {
+            "graph_entities": upsert["new_entities"] + upsert["updated_entities"],
+            "graph_edges": upsert["new_edges"],
+        }
 
     def _phase1(self, records: list[dict]) -> str:
         history = "\n".join(

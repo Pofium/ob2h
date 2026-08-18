@@ -33,8 +33,11 @@ class Settings(BaseSettings):
 
     # --- Эмбеддинги ---
     embed_provider: str = "local"  # local | api
-    embed_model: str = "intfloat/multilingual-e5-small"
-    embed_base_url: str = ""  # для api-провайдера, напр. https://api.aitunnel.ru/v1
+    # Дефолт — единственный мультиязычный (русский) в-process вариант fastembed.
+    # Альтернатива без скачивания: api + LM Studio (embeddinggemma-300m-qat),
+    # см. docs/ARCHITECTURE.md §6.
+    embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embed_base_url: str = ""  # для api-провайдера, напр. http://localhost:1234/v1
     embed_api_key: str = ""
 
     # --- Консолидация / контекст ---
@@ -47,6 +50,9 @@ class Settings(BaseSettings):
     autodream_min_interval_h: int = 4  # не чаще раза в N часов
     autodream_min_events: int = 10  # минимум новых событий daily-лога
     dream_batch: int = 20
+    # Извлечение сущностей из новых записей истории в граф во время дрима
+    # (сессии попадают в общий граф знаний вместе с документами)
+    dream_extract_enabled: bool = True
 
     # --- Ретеншн ---
     retention_days: int = 30

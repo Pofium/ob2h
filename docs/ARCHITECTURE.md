@@ -192,8 +192,20 @@ workspace/
 
 **Дриминг:** daily-логи + history.jsonl накапливаются → `dream_run` (ручной или
 автогейты ≥4ч/≥10 событий) → фаза 1: LLM-анализ новой истории на фоне текущих
-MD-файлов → фаза 2: агентный цикл (≤10 итераций) с `_dream_read`/`_dream_edit` →
-правки MEMORY/SOUL/USER → git auto-commit `dream: <дата>` → `dream_restore` откатывает.
+MD-файлов → фаза 2: агентный цикл (≤10 итераций) с read/edit/done →
+правки MEMORY/SOUL/USER → **dream-extract**: сущности и отношения из новых записей
+сессий извлекаются в общий граф (тот же пайплайн, что у документов; дедуп по
+`node_id` склеивает узлы из диалогов и документов, `val` растёт с каждым
+упоминанием) → git auto-commit `dream: <дата>` → `dream_restore` откатывает.
+Выключается `OMNES_DREAM_EXTRACT_ENABLED=false`.
+
+**Граф — один на владельца.** Сессии и документы попадают в одни и те же
+`graph_nodes`/`graph_edges`; дедуп по sha256(label|type) объединяет повторные
+упоминания. Эмбеддятся: (а) чанки документов — в `chunks.embedding` для поиска
+по тексту, (б) узлы графа как `"{label}: {description}"` — в `graph_nodes.embedding`
+для векторной ветки `graph_search`/`graph_reason`, (в) воспоминания — в
+`memories.embedding`. Сами записи сессий (daily/history) не векторизуются —
+в граф попадают только извлечённые из них сущности.
 
 ## 6. Конфигурация (env, префикс `OMNES_`)
 
@@ -203,8 +215,25 @@ MD-файлов → фаза 2: агентный цикл (≤10 итераци�
 | `OMNES_LLM_BASE_URL` | `https://api.deepseek.com/v1` | OpenAI-совместимый API |
 | `OMNES_LLM_API_KEY` | — | ключ (обязателен для фаз 3+) |
 | `OMNES_LLM_MODEL` | `deepseek-v4-flash` | модель dream/extract/reason |
-| `OMNES_EMBED_PROVIDER` | `local` | `local` (fastembed) \| `api` |
-| `OMNES_EMBED_MODEL` | `intfloat/multilingual-e5-small` | для local; для api — имя модели |
+| `OMNES_EMBED_PROVIDER` | `local` | `local` (fastembed, in-process) \| `api` |
+| `OMNES_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | для local; для api — имя модели |
+| `OMNES_DREAM_EXTRACT_ENABLED` | `true` | извлечение сущностей из сессий в граф при дриме |
+
+**Эмбеддинги — варианты (выбор владельца):**
+
+| Вариант | Качество (рус) | Зависимости | Когда использовать |
+|---|---|---|---|
+| `local` + multilingual-MiniLM-L12-v2 (дефолт, 0.22 ГБ, 384d) | хорошее | ничего внешнего, модель уже скачана в `~/.cache/fastembed` | всегда работает вместе с Hermes |
+| `api` + LM Studio `embeddinggemma-300m-qat` (уже скачана у владельца, 768d) | лучше | LM Studio запущен как сервер (localhost:1234) | если LM Studio и так крутится |
+| `api` + Ollama `mxbai-embed-large` (уже скачана, 1024d) | слабее для русского | `ollama serve` | не рекомендуется для RU |
+
+Пример переиспользования LM Studio (без скачивания):
+
+```yaml
+OMNES_EMBED_PROVIDER: api
+OMNES_EMBED_BASE_URL: http://localhost:1234/v1
+OMNES_EMBED_MODEL: lmstudio-community/embeddinggemma-300m-qat-GGUF
+```
 | `OMNES_EMBED_BASE_URL` / `OMNES_EMBED_API_KEY` | — | для `api`-провайдера |
 | `OMNES_CONTEXT_WINDOW` | `65536` | бюджет консолидатора |
 | `OMNES_AUTODREAM_ENABLED` | `true` | фоновый дрим |

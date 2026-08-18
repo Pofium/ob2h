@@ -49,13 +49,19 @@ def main(argv: list[str] | None = None) -> int:
                   else "дримов ещё не было")
             return 0
         # run
+        from .embedding import provider_for
+        from .graph_service import GraphService
+
         workspace = Workspace(settings.workspace_dir)
         gitstore = GitStore(settings.workspace_dir)
         llm = make_llm(settings)
         if llm is None:
             print("[Error] OMNES_LLM_API_KEY не задан", file=sys.stderr)
             return 1
-        result = Dream(workspace, gitstore, llm, settings, db).run(trigger="cli")
+        graph = GraphService(db, provider_for(settings))
+        result = Dream(workspace, gitstore, llm, settings, db, graph=graph).run(
+            trigger="cli"
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["status"] == "ok" else 1
     finally:

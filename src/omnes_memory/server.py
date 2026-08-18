@@ -61,7 +61,8 @@ class App:
         self.consolidator = Consolidator(self.workspace, self.llm, settings)
         self.pending_session = PendingSession()
         self.graph = GraphService(self.db, self.embedder)
-        self.dream = Dream(self.workspace, self.gitstore, self.llm, settings, self.db)
+        self.dream = Dream(self.workspace, self.gitstore, self.llm, settings,
+                           self.db, graph=self.graph)
         self.dream_lock = threading.Lock()
         self.autodream = None  # запускается в main() при OMNES_AUTODREAM_ENABLED
 

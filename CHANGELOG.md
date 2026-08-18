@@ -3,6 +3,19 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [0.1.1] — 2026-08-18
+
+### Added
+- **dream-extract**: во время дрима сущности и отношения извлекаются из новых
+  записей сессий в общий граф (`OMNES_DREAM_EXTRACT_ENABLED`, по умолчанию вкл).
+  Сессии и документы теперь populate один граф с дедупом по label|type.
+- **Локальные эмбеддинги**: fastembed 0.8.0 установлен и проверен на Python 3.14;
+  модель `paraphrase-multilingual-MiniLM-L12-v2` (0.22 ГБ, 384d) скачана и
+  протестирована на русском (semantic-тест в `tests/test_embedding_local.py`,
+  маркер `embeds`). Дефолт конфига исправлен с недоступного multilingual-e5-small.
+- Документированы альтернативы эмбеддингов: LM Studio embeddinggemma-300m-qat
+  (уже скачана у владельца) и Ollama mxbai-embed-large через `OMNES_EMBED_PROVIDER=api`.
+
 ## [0.1.0] — 2026-08-18
 
 Первая рабочая версия: локальное MCP-хранилище знаний для Hermes (stdio).

@@ -48,6 +48,7 @@ cd C:\Projects\omnesbot_for_hermes
 python -m venv .venv
 .venv\Scripts\pip install -e ".[local,docs,dev]"
 .venv\Scripts\pytest                      # проверка окружения
+# эмбеддинг-модель (0.22 ГБ) уже скачана в ~/.cache/fastembed при первой установке
 ```
 
 Запуск вручную (для отладки; Hermes сам поднимает сервер через stdio):
