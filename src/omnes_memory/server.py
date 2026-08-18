@@ -15,9 +15,11 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from .config import Settings, get_settings
+from .consolidator import Consolidator, PendingSession
 from .db import Database
 from .embedding import provider_for
 from .gitstore import GitStore
+from .llm_client import make_llm
 from .memory_service import MemoryService
 from .workspace import Workspace
 
@@ -49,6 +51,9 @@ class App:
         self.memory = MemoryService(self.db, self.embedder)
         self.workspace = Workspace(settings.workspace_dir)
         self.gitstore = GitStore(settings.workspace_dir)
+        self.llm = make_llm(settings)
+        self.consolidator = Consolidator(self.workspace, self.llm, settings)
+        self.pending_session = PendingSession()
 
 
 @functools.lru_cache(maxsize=1)
@@ -180,6 +185,36 @@ def workspace_write(file: str, content: str, commit_message: str = "") -> str:
         return f"written {rel}" + (f" commit={sha}" if sha else " (no git changes)")
     except Exception as e:
         logging.getLogger("omnes.tools").exception("workspace_write")
+        return f"[Error] {e}"
+
+
+# ── Сессии ──────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def session_log(user_text: str, assistant_text: str, source: str = "hermes") -> str:
+    """Залогировать ход диалога после ответа агента. Пишет событие в daily-лог
+    (пища для дрима) и при переполнении бюджета токенов консолидирует итог
+    в history.jsonl. Вызывай после каждого значимого обмена."""
+    try:
+        app = get_app()
+        from .db import utcnow
+
+        app.workspace.append_daily_event({
+            "timestamp": utcnow(),
+            "query": user_text[:500],
+            "answer_preview": assistant_text[:240],
+            "source": source,
+        })
+        app.pending_session.append("user", user_text)
+        app.pending_session.append("assistant", assistant_text)
+        result = app.consolidator.maybe_consolidate(app.pending_session)
+        status = "logged"
+        if result["consolidated"]:
+            status += f" +consolidated x{result['entries']}"
+        return status
+    except Exception as e:
+        logging.getLogger("omnes.tools").exception("session_log")
         return f"[Error] {e}"
 
 
