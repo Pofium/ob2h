@@ -1,6 +1,7 @@
 //! Точка входа в бинарник `ob2h.exe`.
 
 use clap::Parser;
+use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use ob2h::cli::{Cli, Commands, DreamCommands};
@@ -41,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         None | Some(Commands::Serve) => {
             start_background_workers(ctx.clone());
-            let server = McpServer::new(ctx);
+            let server = Arc::new(McpServer::new(ctx));
             server.run_stdio().await?;
         }
         Some(Commands::Dream { command }) => match command {

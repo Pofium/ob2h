@@ -56,12 +56,14 @@ impl McpServer {
         }
     }
 
-    pub async fn run_stdio(&self) -> anyhow::Result<()> {
+    pub async fn run_stdio(self: Arc<Self>) -> anyhow::Result<()> {
         let stdin = tokio::io::stdin();
-        let mut stdout = tokio::io::stdout();
+        let stdout = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
         let mut reader = BufReader::new(stdin).lines();
 
         info!("MCP Stdio Server running, waiting for JSON-RPC messages...");
+
+        let mut tasks = tokio::task::JoinSet::new();
 
         while let Some(line) = reader.next_line().await? {
             let line_str = line.trim();
@@ -83,21 +85,40 @@ impl McpServer {
                         }),
                     };
                     let resp_str = serde_json::to_string(&resp)?;
-                    stdout.write_all(resp_str.as_bytes()).await?;
-                    stdout.write_all(b"\n").await?;
-                    stdout.flush().await?;
+                    let mut out = stdout.lock().await;
+                    out.write_all(resp_str.as_bytes()).await?;
+                    out.write_all(b"\n").await?;
+                    out.flush().await?;
                     continue;
                 }
             };
 
-            let response = self.handle_request(req).await;
-            if let Some(resp) = response {
-                let resp_str = serde_json::to_string(&resp)?;
-                stdout.write_all(resp_str.as_bytes()).await?;
-                stdout.write_all(b"\n").await?;
-                stdout.flush().await?;
+            // Каждый запрос обрабатываем в отдельной задаче: пока выполняется
+            // долгий tools/call (knowledge_extract, dream_run), сервер продолжает
+            // читать stdin и отвечает на ping — иначе keepalive-клиента (Hermes)
+            // рвёт соединение («Connection closed» на вызовах >30с).
+            let this = self.clone();
+            let out = stdout.clone();
+            tasks.spawn(async move {
+                let response = this.handle_request(req).await;
+                if let Some(resp) = response {
+                    if let Ok(resp_str) = serde_json::to_string(&resp) {
+                        let mut o = out.lock().await;
+                        let _ = o.write_all(resp_str.as_bytes()).await;
+                        let _ = o.write_all(b"\n").await;
+                        let _ = o.flush().await;
+                    }
+                }
+            });
+
+            // Периодически вычищаем завершившиеся задачи, чтобы не копить.
+            if tasks.len() >= 64 {
+                while tasks.join_next().await.is_some() {}
             }
         }
+
+        // stdin закрыт — дожидаемся хвостовых задач.
+        while tasks.join_next().await.is_some() {}
 
         Ok(())
     }
