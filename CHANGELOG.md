@@ -7,14 +7,14 @@
 
 ### Added
 - **dream-extract**: во время дрима сущности и отношения извлекаются из новых
-  записей сессий в общий граф (`OMNES_DREAM_EXTRACT_ENABLED`, по умолчанию вкл).
+  записей сессий в общий граф (`OB2H_DREAM_EXTRACT_ENABLED`, по умолчанию вкл).
   Сессии и документы теперь populate один граф с дедупом по label|type.
 - **Локальные эмбеддинги**: fastembed 0.8.0 установлен и проверен на Python 3.14;
   модель `paraphrase-multilingual-MiniLM-L12-v2` (0.22 ГБ, 384d) скачана и
   протестирована на русском (semantic-тест в `tests/test_embedding_local.py`,
   маркер `embeds`). Дефолт конфига исправлен с недоступного multilingual-e5-small.
 - Документированы альтернативы эмбеддингов: LM Studio embeddinggemma-300m-qat
-  (уже скачана у владельца) и Ollama mxbai-embed-large через `OMNES_EMBED_PROVIDER=api`.
+  (уже скачана у владельца) и Ollama mxbai-embed-large через `OB2H_EMBED_PROVIDER=api`.
 
 ## [0.1.0] — 2026-08-18
 
@@ -41,7 +41,7 @@
   workspace_read/write, session_log, knowledge_extract, graph_search/reason/stats,
   dream_run/status/log/restore, omnes_stats/backup.
 - **Служебное**: бэкапы VACUUM INTO + workspace с ротацией 14, CLI
-  (`python -m omnes_memory.dream_cli run|status|backup`), логирование с ротацией.
+  (`python -m ob2h.dream_cli run|status|backup`), логирование с ротацией.
 - 102 теста (юнит + интеграционные через живой stdio MCP-клиент), ruff чисто.
 
 ## [0.0.1] — 2026-08-18

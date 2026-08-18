@@ -1,4 +1,4 @@
-# AGENTS.md — правила проекта OmnesMemory
+# AGENTS.md — правила проекта OB2H
 
 Обязателен к прочтению **перед любой работой** в этом репозитории (человеком или агентом).
 Формат Markdown, язык — русский. Соглашения кода — ниже.
@@ -43,7 +43,7 @@ omnesbot_for_hermes/
 ├── AGENTS.md / CLAUDE.md / README.md / PLAN.md / CHANGELOG.md
 ├── .mcp.json                  # codegraph (MCP для разработки)
 ├── pyproject.toml
-├── src/omnes_memory/          # весь код пакета
+├── src/ob2h/          # весь код пакета
 │   ├── config.py  db.py  embedding.py  vector.py     # фаза 1
 │   ├── memory_service.py  workspace.py  gitstore.py  # фаза 2
 │   │   server.py
@@ -67,11 +67,11 @@ python -m venv .venv                          # однократно
 .venv/Scripts/pip install -e ".[dev]"         # после смены зависимостей
 .venv/Scripts/pytest                          # тесты (перед каждым коммитом)
 .venv/Scripts/ruff check src tests            # линт (перед каждым коммитом)
-.venv/Scripts/python -m omnes_memory.server   # ручной запуск MCP-сервера
+.venv/Scripts/python -m ob2h.server   # ручной запуск MCP-сервера
 ```
 
 - Windows, Git Bash. Пути в коде — через `pathlib.Path`; не хардкодить `C:\...`.
-- Runtime-пути (БД, workspace, логи) берутся из конфига `OMNES_*`, дефолты — внутри
+- Runtime-пути (БД, workspace, логи) берутся из конфига `OB2H_*`, дефолты — внутри
   `data/` проекта.
 
 ## 6. Правила кода
@@ -87,8 +87,8 @@ python -m venv .venv                          # однократно
   Имена — английские, snake_case.
 - Портированный код **упрощается при переносе**: убрать company/user/RBAC/Postgres/Neo4j-
   ветки, leave только локальный путь. Не копировать файлы целиком ради одной функции.
-- Секреты — только через env (`OMNES_LLM_API_KEY` и т.п.). В коде и тестах ключей нет;
-  `.env` в `.gitignore`; примеры — `OMNES_LLM_API_KEY=...`.
+- Секреты — только через env (`OB2H_LLM_API_KEY` и т.п.). В коде и тестах ключей нет;
+  `.env` в `.gitignore`; примеры — `OB2H_LLM_API_KEY=...`.
 - Зависимости: прежде чем добавить — проверить, что она есть в `pyproject.toml` и
   обоснована (лёгкая, без транзитивных гигантов). Новая зависимость = запись в `PLAN.md` §6.
 - Любой LLM-вызов в коде идёт через `llm_client.py` (ретраи, таймауты, логи) — никаких
@@ -104,7 +104,7 @@ python -m venv .venv                          # однократно
 - Эмбеддинги в тестах — фиксированные векторы (детерминированная заглушка), fastembed
   не нужен. Реальный fastembed — отдельные `@pytest.mark.embeds`-тести, skip при
   отсутствии пакета.
-- Тестовая БД — `:memory:` или tmp_path. Никогда — `data/omnes.db`.
+- Тестовая БД — `:memory:` или tmp_path. Никогда — `data/ob2h.db`.
 
 ## 8. Git
 

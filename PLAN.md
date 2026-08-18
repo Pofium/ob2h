@@ -1,4 +1,4 @@
-# План разработки OmnesMemory (MCP-хранилище знаний для Hermes)
+# План разработки OB2H (MCP-хранилище знаний для Hermes)
 
 > Локальная персональная версия системы знаний OmnesBOT в виде MCP-сервера.
 > Порядок работы агентов: читать `AGENTS.md` → брать первую незакрытую задачу из этого
@@ -31,11 +31,11 @@
 Полная схема — в `docs/ARCHITECTURE.md`. Суть:
 
 ```
-Hermes (config.yaml: mcp_servers.omnes-memory)
-  └─ stdio MCP ──> omnes_memory.server (FastMCP)
+Hermes (config.yaml: mcp_servers.ob2h)
+  └─ stdio MCP ──> ob2h.server (FastMCP)
                     ├─ Инструменты: memory_* / workspace_* / session_log /
                     │              knowledge_extract / graph_* / dream_* / omnes_stats
-                    ├─ SQLite data/omnes.db (WAL, FTS5-trigram, вектора BLOB+numpy)
+                    ├─ SQLite data/ob2h.db (WAL, FTS5-trigram, вектора BLOB+numpy)
                     ├─ Файловый workspace/ (MEMORY.md, SOUL.md, USER.md,
                     │      memory/history.jsonl, курсоры) + git (auto-commit дрима)
                     ├─ LLM-клиент (OpenAI-совместимый: dream/extract/reason/consolidate)
@@ -47,7 +47,7 @@ Hermes (config.yaml: mcp_servers.omnes-memory)
 
 | # | Решение | Альтернатива | Почему |
 |---|---|---|---|
-| ADR-1 | SQLite (WAL), один файл `data/omnes.db` | Postgres+pgvector | Локально и лично: ноль администрирования, бэкап = копия файла |
+| ADR-1 | SQLite (WAL), один файл `data/ob2h.db` | Postgres+pgvector | Локально и лично: ноль администрирования, бэкап = копия файла |
 | ADR-2 | Вектора — BLOB + numpy brute-force | sqlite-vec | До ~50k векторов перебор — миллисекунды; нет риска несовместимости расширения с Python 3.14 |
 | ADR-3 | FTS5 c trigram-токенайзером | tsvector/porter | Русский ищется из коробки (проверено); гибрид FTS+вектор по RRF |
 | ADR-4 | Эмбеддинги: `fastembed` (ONNX, CPU, без torch); опция — API | sentence-transformers | Нет torch (нет поддержки py3.14/GPU); multilingual-e5-small — 384d, быстро на CPU |
@@ -64,14 +64,14 @@ Hermes (config.yaml: mcp_servers.omnes-memory)
 
 - [x] README, AGENTS.md, CLAUDE.md, PLAN.md, docs/ (ARCHITECTURE, REFERENCE, HERMES_INTEGRATION)
 - [x] `.mcp.json` — codegraph для воркспейса
-- [x] `pyproject.toml` (deps + dev), `.gitignore`, `src/omnes_memory/__init__.py`
+- [x] `pyproject.toml` (deps + dev), `.gitignore`, `src/ob2h/__init__.py`
 - [x] git init
 
 **DoD:** структура на месте, правила написаны, codegraph подключён.
 
 ### Фаза 1 ✅ (закрыта 2026-08-18) — Ядро хранения (оценка 1–2 дня)
 
-- [x] **1.1** `config.py` — pydantic-settings, префикс `OMNES_`: `DATA_DIR`, `WORKSPACE_DIR`,
+- [x] **1.1** `config.py` — pydantic-settings, префикс `OB2H_`: `DATA_DIR`, `WORKSPACE_DIR`,
       `LLM_BASE_URL/LLM_API_KEY/LLM_MODEL`, `EMBED_PROVIDER` (`local|api`), `EMBED_MODEL`,
       `EMBED_BASE_URL/EMBED_API_KEY`, `AUTODREAM_*`, `LOG_LEVEL`. Все — с дефолтами,
       валидация при старте, ключи только из env.
@@ -107,7 +107,7 @@ Hermes (config.yaml: mcp_servers.omnes-memory)
       коммитов, восстановление состояния файла из истории. Репозиторий — отдельный
       `.git` внутри `data/workspace` (не путать с git проекта).
 - [x] **2.4** `server.py` — FastMCP (stdio), регистрация инструментов, логирование в
-      `logs/omnes-memory.log` (ротация по размеру), gracefull обработка: ошибка
+      `logs/ob2h.log` (ротация по размеру), gracefull обработка: ошибка
       инструмента = **строка** `[Error] ...` (не исключение, как в ToolRegistry OmnesBOT).
 - [x] **2.5** Инструменты: `memory_save`, `memory_search`, `memory_update`,
       `memory_forget`, `memory_context`, `workspace_read`, `workspace_write`,

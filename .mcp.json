@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "codegraph": {
-      "command": "codegraph",
-      "args": ["serve", "--mcp", "--path", "C:\\Projects\\omnesbot_for_hermes"]
-    }
-  }
-}

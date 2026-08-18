@@ -1,4 +1,4 @@
-# Подключение OmnesMemory к Hermes
+# Подключение OB2H к Hermes
 
 Конфиг Hermes: `C:\Users\ipres\AppData\Local\hermes\config.yaml`, блок `mcp_servers:`.
 **Правку конфига делать вручную** (правило AGENTS.md §1: агенты конфиг Hermes не меняют).
@@ -14,7 +14,7 @@ python -m venv .venv
 Проверить ручной запуск (сервер должен молча ждать stdin — это норма для stdio-MCP):
 
 ```bash
-.venv\Scripts\python -m omnes_memory.server
+.venv\Scripts\python -m ob2h.server
 ```
 
 ## 2. Сниппет для `config.yaml`
@@ -23,17 +23,17 @@ python -m venv .venv
 
 ```yaml
 mcp_servers:
-  omnes-memory:
+  ob2h:
     command: C:/Projects/omnesbot_for_hermes/.venv/Scripts/python.exe
     args:
       - -m
-      - omnes_memory.server
+      - ob2h.server
     env:
-      OMNES_DATA_DIR: C:/Projects/omnesbot_for_hermes/data
-      OMNES_LLM_BASE_URL: https://api.deepseek.com/v1
-      OMNES_LLM_API_KEY: DEEPSEEK_API_KEY      # имя env-переменной с ключом
-      OMNES_LLM_MODEL: deepseek-v4-flash
-      OMNES_EMBED_PROVIDER: local              # или api + OMNES_EMBED_BASE_URL/KEY
+      OB2H_DATA_DIR: C:/Projects/omnesbot_for_hermes/data
+      OB2H_LLM_BASE_URL: https://api.deepseek.com/v1
+      OB2H_LLM_API_KEY: DEEPSEEK_API_KEY      # имя env-переменной с ключом
+      OB2H_LLM_MODEL: deepseek-v4-flash
+      OB2H_EMBED_PROVIDER: local              # или api + OB2H_EMBED_BASE_URL/KEY
 ```
 
 Примечания:
@@ -48,7 +48,7 @@ mcp_servers:
 
 ```yaml
 mcp_servers:
-  omnes-memory:
+  ob2h:
     command: C:\Users\ipres\.cargo\bin\mcp-compressor.exe
     args:
       - -c
@@ -56,10 +56,10 @@ mcp_servers:
       - --
       - C:/Projects/omnesbot_for_hermes/.venv/Scripts/python.exe
       - -m
-      - omnes_memory.server
+      - ob2h.server
     env:
-      OMNES_DATA_DIR: C:/Projects/omnesbot_for_hermes/data
-      # ... остальные OMNES_* те же
+      OB2H_DATA_DIR: C:/Projects/omnesbot_for_hermes/data
+      # ... остальные OB2H_* те же
 ```
 
 Компрессор полезен для `graph_reason`/`memory_context` с длинным выводом;
@@ -69,20 +69,20 @@ mcp_servers:
 
 1. Перезапустить Hermes.
 2. Убедиться, что инструменты появились (в Hermes — список MCP-инструментов сервера
-   `omnes-memory`).
+   `ob2h`).
 3. Живой сценарий (из PLAN.md §6.4):
    - попросить Hermes «сохрани в память: …» → `memory_save`;
    - в **новом** чате спросить так, чтобы всплыл факт → `memory_search`;
    - подсунуть документ → `knowledge_extract` → вопрос по содержимому → `graph_reason`;
    - запустить `dream_run` → проверить `workspace/memory/MEMORY.md` и git-историю
      (`dream_log` / `dream_restore`).
-4. Логи при проблемах: `C:\Projects\omnesbot_for_hermes\logs\omnes-memory.log`.
+4. Логи при проблемах: `C:\Projects\omnesbot_for_hermes\logs\ob2h.log`.
 
 ## 4. Ограничения жизненного цикла
 
 - Сервер живёт, пока живёт Hermes (stdio). Фоновый автодрим работает в это же время.
   Если Hermes выключен надолго — дрим можно запустить вручную:
-  `.venv\Scripts\python -m omnes_memory.dream_cli run` (появится в фазе 5, если
+  `.venv\Scripts\python -m ob2h.dream_cli run` (появится в фазе 5, если
   понадобится).
-- Все данные — в `OMNES_DATA_DIR`. Перенос на другую машину = скопировать папку
+- Все данные — в `OB2H_DATA_DIR`. Перенос на другую машину = скопировать папку
   проекта + `data/` + установить зависимости.

@@ -1,0 +1,151 @@
+//! Схема SQLite и версионные миграции (ADR-1…ADR-3).
+
+use rusqlite::{params, Connection, Result};
+
+pub const SCHEMA_VERSION: i64 = 1;
+
+pub const MIGRATION_V1: &str = r#"
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT UNIQUE NOT NULL,
+  content TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'general',
+  importance REAL NOT NULL DEFAULT 0.5,
+  source TEXT DEFAULT 'manual',
+  meta TEXT,
+  embedding BLOB,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  access_count INTEGER NOT NULL DEFAULT 0,
+  last_accessed TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_memories_cat_imp
+  ON memories (category, importance DESC);
+
+CREATE TABLE IF NOT EXISTS memory_relations (
+  source_key TEXT NOT NULL REFERENCES memories(key) ON DELETE CASCADE,
+  target_key TEXT NOT NULL REFERENCES memories(key) ON DELETE CASCADE,
+  relation_type TEXT NOT NULL,
+  weight REAL NOT NULL DEFAULT 1.0,
+  UNIQUE (source_key, target_key, relation_type)
+);
+
+CREATE TABLE IF NOT EXISTS documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT,
+  path TEXT,
+  meta TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  embedding BLOB,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks (doc_id);
+
+CREATE TABLE IF NOT EXISTS graph_nodes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  node_id TEXT UNIQUE NOT NULL,
+  label TEXT NOT NULL,
+  node_type TEXT NOT NULL,
+  description TEXT,
+  val INTEGER NOT NULL DEFAULT 1,
+  embedding BLOB,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_label ON graph_nodes (label);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes (node_type);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_id INTEGER NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+  target_id INTEGER NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  weight REAL NOT NULL DEFAULT 1.0,
+  contexts TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (source_id, target_id, label)
+);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_src ON graph_edges (source_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_dst ON graph_edges (target_id);
+
+CREATE TABLE IF NOT EXISTS dream_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT,
+  finished_at TEXT,
+  status TEXT,
+  trigger TEXT,
+  phase_log TEXT,
+  stats TEXT
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+  content, content='memories', content_rowid='id', tokenize='trigram'
+);
+CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories BEGIN
+  INSERT INTO memories_fts (rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_fts_ad AFTER DELETE ON memories BEGIN
+  INSERT INTO memories_fts (memories_fts, rowid, content)
+    VALUES ('delete', old.id, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE ON memories BEGIN
+  INSERT INTO memories_fts (memories_fts, rowid, content)
+    VALUES ('delete', old.id, old.content);
+  INSERT INTO memories_fts (rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  text, content='chunks', content_rowid='id', tokenize='trigram'
+);
+CREATE TRIGGER IF NOT EXISTS chunks_fts_ai AFTER INSERT ON chunks BEGIN
+  INSERT INTO chunks_fts (rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_fts_ad AFTER DELETE ON chunks BEGIN
+  INSERT INTO chunks_fts (chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_fts_au AFTER UPDATE ON chunks BEGIN
+  INSERT INTO chunks_fts (chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+  INSERT INTO chunks_fts (rowid, text) VALUES (new.id, new.text);
+END;
+"#;
+
+pub fn migrate(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;"
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        [],
+    )?;
+
+    let current_version: i64 = conn
+        .query_row(
+            "SELECT value FROM kv WHERE key = 'schema_version'",
+            [],
+            |row| {
+                let val: String = row.get(0)?;
+                Ok(val.parse::<i64>().unwrap_or(0))
+            },
+        )
+        .unwrap_or(0);
+
+    if current_version < 1 {
+        conn.execute_batch(MIGRATION_V1)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO kv (key, value) VALUES ('schema_version', ?1)",
+            params![SCHEMA_VERSION.to_string()],
+        )?;
+    }
+
+    Ok(())
+}

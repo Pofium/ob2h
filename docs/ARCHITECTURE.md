@@ -1,4 +1,4 @@
-# Архитектура OmnesMemory
+# Архитектура OB2H
 
 Целевая архитектура локального MCP-хранилища знаний для Hermes.
 Решения зафиксированы в `PLAN.md` §1 (ADR-1…ADR-8), источники портирования —
@@ -13,7 +13,7 @@
                          │  stdio, JSON-RPC (MCP)
                          ▼
 ┌────────────────────────────────────────────────────────────────┐
-│ omnes_memory.server — FastMCP                                  │
+│ ob2h.server — FastMCP                                  │
 │                                                                │
 │  Инструменты (см. §4)                                          │
 │  ├─ память:      memory_save/search/update/forget/context      │
@@ -33,7 +33,7 @@
 │  └─ embedding     ── fastembed ONNX CPU | API /embeddings      │
 │                                                                │
 │  Хранилища                                                     │
-│  ├─ SQLite data/omnes.db (WAL; FTS5-trigram; BLOB-вектора)     │
+│  ├─ SQLite data/ob2h.db (WAL; FTS5-trigram; BLOB-вектора)     │
 │  ├─ Файлы data/workspace/ (MD + history.jsonl + курсоры)       │
 │  └─ git data/workspace/.git (авто-коммиты дрима, restore)      │
 └────────────────────────────────────────────────────────────────┘
@@ -42,7 +42,7 @@
 Жизненный цикл: Hermes спавнит процесс при старте (stdio), инструменты доступны
 в чате; AutoDreamWorker живёт внутри процесса — работает, пока запущен Hermes.
 
-## 2. Схема SQLite (`data/omnes.db`)
+## 2. Схема SQLite (`data/ob2h.db`)
 
 Все таблицы создаются версионными миграциями (`db.py`, версия в `kv.schema_version`).
 
@@ -197,7 +197,7 @@ MD-файлов → фаза 2: агентный цикл (≤10 итераци�
 сессий извлекаются в общий граф (тот же пайплайн, что у документов; дедуп по
 `node_id` склеивает узлы из диалогов и документов, `val` растёт с каждым
 упоминанием) → git auto-commit `dream: <дата>` → `dream_restore` откатывает.
-Выключается `OMNES_DREAM_EXTRACT_ENABLED=false`.
+Выключается `OB2H_DREAM_EXTRACT_ENABLED=false`.
 
 **Граф — один на владельца.** Сессии и документы попадают в одни и те же
 `graph_nodes`/`graph_edges`; дедуп по sha256(label|type) объединяет повторные
@@ -207,17 +207,17 @@ MD-файлов → фаза 2: агентный цикл (≤10 итераци�
 `memories.embedding`. Сами записи сессий (daily/history) не векторизуются —
 в граф попадают только извлечённые из них сущности.
 
-## 6. Конфигурация (env, префикс `OMNES_`)
+## 6. Конфигурация (env, префикс `OB2H_`)
 
 | Переменная | Дефолт | Назначение |
 |---|---|---|
-| `OMNES_DATA_DIR` | `<проект>/data` | БД + workspace + lock |
-| `OMNES_LLM_BASE_URL` | `https://api.deepseek.com/v1` | OpenAI-совместимый API |
-| `OMNES_LLM_API_KEY` | — | ключ (обязателен для фаз 3+) |
-| `OMNES_LLM_MODEL` | `deepseek-v4-flash` | модель dream/extract/reason |
-| `OMNES_EMBED_PROVIDER` | `local` | `local` (fastembed, in-process) \| `api` |
-| `OMNES_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | для local; для api — имя модели |
-| `OMNES_DREAM_EXTRACT_ENABLED` | `true` | извлечение сущностей из сессий в граф при дриме |
+| `OB2H_DATA_DIR` | `<проект>/data` | БД + workspace + lock |
+| `OB2H_LLM_BASE_URL` | `https://api.deepseek.com/v1` | OpenAI-совместимый API |
+| `OB2H_LLM_API_KEY` | — | ключ (обязателен для фаз 3+) |
+| `OB2H_LLM_MODEL` | `deepseek-v4-flash` | модель dream/extract/reason |
+| `OB2H_EMBED_PROVIDER` | `local` | `local` (fastembed, in-process) \| `api` |
+| `OB2H_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | для local; для api — имя модели |
+| `OB2H_DREAM_EXTRACT_ENABLED` | `true` | извлечение сущностей из сессий в граф при дриме |
 
 **Эмбеддинги — варианты (выбор владельца):**
 
@@ -230,15 +230,15 @@ MD-файлов → фаза 2: агентный цикл (≤10 итераци�
 Пример переиспользования LM Studio (без скачивания):
 
 ```yaml
-OMNES_EMBED_PROVIDER: api
-OMNES_EMBED_BASE_URL: http://localhost:1234/v1
-OMNES_EMBED_MODEL: lmstudio-community/embeddinggemma-300m-qat-GGUF
+OB2H_EMBED_PROVIDER: api
+OB2H_EMBED_BASE_URL: http://localhost:1234/v1
+OB2H_EMBED_MODEL: lmstudio-community/embeddinggemma-300m-qat-GGUF
 ```
-| `OMNES_EMBED_BASE_URL` / `OMNES_EMBED_API_KEY` | — | для `api`-провайдера |
-| `OMNES_CONTEXT_WINDOW` | `65536` | бюджет консолидатора |
-| `OMNES_AUTODREAM_ENABLED` | `true` | фоновый дрим |
-| `OMNES_RETENTION_DAYS` | `30` | ротация daily-логов |
-| `OMNES_LOG_LEVEL` | `INFO` | логирование |
+| `OB2H_EMBED_BASE_URL` / `OB2H_EMBED_API_KEY` | — | для `api`-провайдера |
+| `OB2H_CONTEXT_WINDOW` | `65536` | бюджет консолидатора |
+| `OB2H_AUTODREAM_ENABLED` | `true` | фоновый дрим |
+| `OB2H_RETENTION_DAYS` | `30` | ротация daily-логов |
+| `OB2H_LOG_LEVEL` | `INFO` | логирование |
 
 ## 7. Надёжность
 
@@ -247,4 +247,4 @@ OMNES_EMBED_MODEL: lmstudio-community/embeddinggemma-300m-qat-GGUF
   возобновляется с места (идемпотентность по курсору).
 - Lock-файл автодрима (stale 1ч) защищает от параллельных запусков.
 - Бэкап: `VACUUM INTO` + копия workspace → `backups/`, ротация 14 копий.
-- Логи: `logs/omnes-memory.log`, ротация по 5 МБ, 5 файлов.
+- Логи: `logs/ob2h.log`, ротация по 5 МБ, 5 файлов.

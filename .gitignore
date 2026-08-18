@@ -1,22 +1,8 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-build/
-dist/
-.pytest_cache/
-.ruff_cache/
-
-# Runtime-данные (личная память пользователя — в git не включать никогда)
-data/
-logs/
-backups/
+/target
+/data
+/logs
 .env
-.env.*
+*.lock
+.codegraph
+*.bak
 
-# OS / IDE
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
