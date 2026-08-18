@@ -69,8 +69,17 @@ class App:
         if self.settings.autodream_enabled:
             from .autodream import AutoDreamWorker
 
-            self.autodream = AutoDreamWorker(self.dream, self.workspace, self.settings)
+            self.autodream = AutoDreamWorker(
+                self.dream, self.workspace, self.settings,
+                maintenance=self.memory_maintenance,
+            )
             self.autodream.start()
+
+    def memory_maintenance(self) -> dict[str, int]:
+        """Затухание важности и очистка слабых воспоминаний (фаза 6.3)."""
+        decayed = self.memory.decay_importance(rate=0.01)
+        purged = self.memory.purge_weak()
+        return {"decayed": decayed, "purged": purged}
 
 
 @functools.lru_cache(maxsize=1)
@@ -468,6 +477,19 @@ def omnes_stats() -> str:
         return " ".join(parts)
     except Exception as e:
         logging.getLogger("omnes.tools").exception("omnes_stats")
+        return f"[Error] {e}"
+
+
+@mcp.tool()
+def omnes_backup() -> str:
+    """Создать бэкап БД (VACUUM INTO) + workspace в backups/. Ротация 14 копий."""
+    try:
+        from .backup import Backup
+
+        target = Backup(get_app().settings).create()
+        return f"backup: {target}"
+    except Exception as e:
+        logging.getLogger("omnes.tools").exception("omnes_backup")
         return f"[Error] {e}"
 
 

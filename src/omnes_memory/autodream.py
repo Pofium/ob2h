@@ -31,11 +31,13 @@ class AutoDreamWorker(threading.Thread):
         workspace: Workspace,
         settings: Settings,
         clock: Callable[[], datetime] | None = None,
+        maintenance: Callable[[], None] | None = None,
     ):
         super().__init__(daemon=True, name="omnes-autodream")
         self.dream = dream
         self.workspace = workspace
         self.settings = settings
+        self.maintenance = maintenance  # напр. decay/purge памяти (фаза 6.3)
         self._clock = clock or (lambda: datetime.now(UTC))
         self._stop = threading.Event()
 
@@ -54,6 +56,11 @@ class AutoDreamWorker(threading.Thread):
                 result = self.dream.run(trigger="auto")
                 log.info("автодрим: %s", result.get("status"))
                 self._save_last_run()
+                if self.maintenance is not None:
+                    try:
+                        self.maintenance()
+                    except Exception:
+                        log.exception("maintenance после дрима не удался")
                 self.prune_daily()
             finally:
                 self._release_lock()

@@ -37,15 +37,32 @@
 
 ## Статус
 
-Проект на стадии планирования. Разработка ведётся по `PLAN.md` — следующая задача
-всегда первая незакрытая чекбоксом. Codegraph MCP для навигации по коду подключён
-через `.mcp.json` в корне.
+**v0.1.0 — реализованы все фазы 1–6** (план: `PLAN.md`). 102 теста зелёные.
+Осталось вручную: подключить сервер к живому Hermes (сниппет —
+`docs/HERMES_INTEGRATION.md`) и прогнать живой e2e-чеклист (PLAN.md §6.4).
 
-## Быстрый старт (после реализации фазы 2)
+## Быстрый старт
 
 ```bash
 cd C:\Projects\omnesbot_for_hermes
 python -m venv .venv
-.venv\Scripts\pip install -e ".[dev]"
-.venv\Scripts\python -m omnes_memory.server   # запуск MCP-сервера вручную (для отладки)
+.venv\Scripts\pip install -e ".[local,docs,dev]"
+.venv\Scripts\pytest                      # проверка окружения
 ```
+
+Запуск вручную (для отладки; Hermes сам поднимает сервер через stdio):
+
+```bash
+# MCP-сервер (молча ждёт stdio — это норма):
+.venv\Scripts\python -m omnes_memory.server
+
+# CLI: дрим/статус/бэкап без Hermes:
+.venv\Scripts\python -m omnes_memory.dream_cli run
+.venv\Scripts\python -m omnes_memory.dream_cli status
+.venv\Scripts\python -m omnes_memory.dream_cli backup
+```
+
+Переменные окружения (все с дефолтами): `OMNES_DATA_DIR`, `OMNES_LLM_BASE_URL`,
+`OMNES_LLM_API_KEY`, `OMNES_LLM_MODEL`, `OMNES_EMBED_PROVIDER` (`local|api`),
+`OMNES_EMBED_MODEL`, `OMNES_AUTODREAM_ENABLED` — полный список
+`docs/ARCHITECTURE.md` §6.
