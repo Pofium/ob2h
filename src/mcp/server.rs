@@ -113,7 +113,7 @@ impl McpServer {
                     },
                     "serverInfo": {
                         "name": "ob2h",
-                        "version": "0.1.0"
+                        "version": env!("CARGO_PKG_VERSION")
                     }
                 });
                 Some(JsonRpcResponse {
