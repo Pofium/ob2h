@@ -68,9 +68,10 @@ def test_search_hybrid_rrf_promotes_both(tmp_path):
         svc.upsert(c3, key="k3")
         hits = svc.search_hybrid(query)
         keys = [h["key"] for h in hits]
-        # k1: 1/61+1/61, k2: 1/62+1/62 — оба строго впереди k3 (макс 1/61)
+        # k1: 1/61+1/62, k2: 1/62+1/61 (порядок веток может меняться из-за bm25 —
+        # ничья легитимна), k3: максимум 1/63 — всегда последний из трёх
         assert set(keys[:2]) == {"k1", "k2"}
-        assert keys.index("k1") < keys.index("k2")
+        assert keys[-1] == "k3"
     finally:
         db.close()
 
