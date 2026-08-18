@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import logging.handlers
 from pathlib import Path
@@ -16,11 +17,14 @@ from mcp.server.mcpserver import MCPServer
 
 from .config import Settings, get_settings
 from .consolidator import Consolidator, PendingSession
-from .db import Database
+from .db import Database, utcnow
 from .embedding import provider_for
+from .extractor import Extractor, split_into_chunks
 from .gitstore import GitStore
+from .graph_service import GraphService
 from .llm_client import make_llm
 from .memory_service import MemoryService
+from .vector import serialize
 from .workspace import Workspace
 
 
@@ -54,6 +58,7 @@ class App:
         self.llm = make_llm(settings)
         self.consolidator = Consolidator(self.workspace, self.llm, settings)
         self.pending_session = PendingSession()
+        self.graph = GraphService(self.db, self.embedder)
 
 
 @functools.lru_cache(maxsize=1)
@@ -215,6 +220,117 @@ def session_log(user_text: str, assistant_text: str, source: str = "hermes") -> 
         return status
     except Exception as e:
         logging.getLogger("omnes.tools").exception("session_log")
+        return f"[Error] {e}"
+
+
+# ── Граф знаний ─────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def knowledge_extract(
+    text: str | None = None,
+    file_path: str | None = None,
+    max_chunks: int = 200,
+) -> str:
+    """Извлечь сущности и отношения из текста или файла (txt/md/pdf/docx)
+    в граф знаний. Один из аргументов text/file_path обязателен."""
+    try:
+        app = get_app()
+        if not text and not file_path:
+            return "[Error] укажите text или file_path"
+        meta: dict = {}
+        title = "текст из чата"
+        if file_path:
+            from .ingest import read_document
+
+            text, meta = read_document(file_path)
+            title = meta.get("file_name", file_path)
+        if not text or not text.strip():
+            return "[Error] пустой текст"
+
+        doc_cur = app.db.execute(
+            "INSERT INTO documents (title, path, meta, created_at) VALUES (?,?,?,?)",
+            (title, file_path, json.dumps(meta, ensure_ascii=False),
+             utcnow()),
+        )
+        doc_id = doc_cur.lastrowid
+
+        chunks = split_into_chunks(text)[:max_chunks]
+        chunk_vecs = app.embedder.embed(chunks) if chunks else []
+        for ordinal, (chunk, vec) in enumerate(zip(chunks, chunk_vecs, strict=False)):
+            app.db.execute(
+                "INSERT INTO chunks (doc_id, ordinal, text, embedding, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (doc_id, ordinal, chunk, serialize(vec), utcnow()),
+            )
+
+        if app.llm is None:
+            return ("[Error] LLM не настроен (OMNES_LLM_API_KEY) — извлечение "
+                    f"невозможно; документ и {len(chunks)} чанков сохранены doc_id={doc_id}")
+
+        extractor = Extractor(app.llm, max_chunks=max_chunks)
+        result = extractor.extract(text)
+        stats = app.graph.upsert_extraction(result)
+        return (
+            f"doc_id={doc_id} chunks={result.chunks_processed}"
+            f"(+{result.chunks_skipped} пропущено) "
+            f"entities={stats['new_entities']}новых+{stats['updated_entities']}дублей "
+            f"relations={stats['new_edges']}новых"
+        )
+    except Exception as e:
+        logging.getLogger("omnes.tools").exception("knowledge_extract")
+        return f"[Error] {e}"
+
+
+@mcp.tool()
+def graph_search(query: str, limit: int = 10) -> str:
+    """Поиск по графу знаний: узлы и связи (с 1-hop соседями)."""
+    try:
+        found = get_app().graph.search(query, limit=limit)
+        if not found["nodes"]:
+            return "граф пуст по запросу"
+        lines = [f"узлов: {len(found['nodes'])}, связей: {len(found['edges'])}"]
+        for n in found["nodes"][:limit]:
+            desc = f" — {n['description'][:120]}" if n["description"] else ""
+            lines.append(f"- {n['label']} ({n['node_type']}, val={n['val']}){desc}")
+        for e in found["edges"][:limit * 2]:
+            lines.append(f"- {e['source_label']} --[{e['label']}]--> {e['target_label']}")
+        return truncate("\n".join(lines))
+    except Exception as e:
+        logging.getLogger("omnes.tools").exception("graph_search")
+        return f"[Error] {e}"
+
+
+@mcp.tool()
+def graph_reason(query: str) -> str:
+    """Ответ по графу знаний с уверенностью и цепочкой рассуждения (KAG)."""
+    try:
+        app = get_app()
+        if app.llm is None:
+            return "[Error] LLM не настроен (OMNES_LLM_API_KEY)"
+        answer = app.graph.reason(query, app.llm)
+        steps = "; ".join(answer.get("reasoning_steps", []))
+        used = ", ".join(answer.get("used_entities", []))
+        return truncate(
+            f"answer: {answer.get('answer')}\n"
+            f"confidence: {answer.get('confidence')}\n"
+            f"entities: {used or '-'}\n"
+            f"steps: {steps or '-'}"
+        )
+    except Exception as e:
+        logging.getLogger("omnes.tools").exception("graph_reason")
+        return f"[Error] {e}"
+
+
+@mcp.tool()
+def graph_stats() -> str:
+    """Статистика графа знаний: узлы, связи, документы, чанки."""
+    try:
+        s = get_app().graph.stats()
+        return (f"nodes={s['nodes']} edges={s['edges']} "
+                f"documents={s['documents']} chunks={s['chunks']}")
+    except Exception as e:
+        logging.getLogger("omnes.tools").exception("graph_stats")
         return f"[Error] {e}"
 
 
