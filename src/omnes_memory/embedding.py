@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 from typing import Protocol
 
@@ -124,14 +123,17 @@ def get_embedding_provider(settings: Settings) -> EmbeddingProvider:
     return LocalFastembed(settings.embed_model)
 
 
-@functools.lru_cache(maxsize=1)
-def _cached_provider(_key: str, settings: Settings) -> EmbeddingProvider:
-    return get_embedding_provider(settings)
+_cached_provider: EmbeddingProvider | None = None
+_cached_provider_key: str | None = None
 
 
 def provider_for(settings: Settings) -> EmbeddingProvider:
     """Единственный экземпляр провайдера на процесс (модель грузится один раз)."""
-    return _cached_provider(
-        f"{settings.embed_provider}|{settings.embed_model}|{settings.embed_base_url}",
-        settings,
+    global _cached_provider, _cached_provider_key
+    key = (
+        f"{settings.embed_provider}|{settings.embed_model}|{settings.embed_base_url}"
     )
+    if _cached_provider_key != key:
+        _cached_provider = get_embedding_provider(settings)
+        _cached_provider_key = key
+    return _cached_provider
