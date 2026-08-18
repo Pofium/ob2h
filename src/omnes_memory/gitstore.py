@@ -46,7 +46,7 @@ class GitStore:
         if (self.root / ".git").exists():
             self._available = True
             return True
-        proc = self._git("init", "-q")
+        proc = self._git("init", "-q", "-b", "main")
         if proc is None:
             self._available = False
             return False

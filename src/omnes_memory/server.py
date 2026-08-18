@@ -10,6 +10,7 @@ import functools
 import json
 import logging
 import logging.handlers
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from mcp.server.mcpserver import MCPServer
 from .config import Settings, get_settings
 from .consolidator import Consolidator, PendingSession
 from .db import Database, utcnow
+from .dream import Dream
 from .embedding import provider_for
 from .extractor import Extractor, split_into_chunks
 from .gitstore import GitStore
@@ -59,6 +61,16 @@ class App:
         self.consolidator = Consolidator(self.workspace, self.llm, settings)
         self.pending_session = PendingSession()
         self.graph = GraphService(self.db, self.embedder)
+        self.dream = Dream(self.workspace, self.gitstore, self.llm, settings, self.db)
+        self.dream_lock = threading.Lock()
+        self.autodream = None  # запускается в main() при OMNES_AUTODREAM_ENABLED
+
+    def start_background_workers(self) -> None:
+        if self.settings.autodream_enabled:
+            from .autodream import AutoDreamWorker
+
+            self.autodream = AutoDreamWorker(self.dream, self.workspace, self.settings)
+            self.autodream.start()
 
 
 @functools.lru_cache(maxsize=1)
@@ -334,6 +346,100 @@ def graph_stats() -> str:
         return f"[Error] {e}"
 
 
+# ── Дриминг ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def dream_run(background: bool = False) -> str:
+    """Запустить дрим: анализ новой истории и правки MEMORY/SOUL/USER с git-коммитом.
+    background=false ждёт завершения (может занять минуты)."""
+    try:
+        app = get_app()
+        if not app.dream_lock.acquire(blocking=False):
+            return "дрим уже выполняется"
+        try:
+            if background:
+                threading.Thread(
+                    target=_dream_bg, args=(app,), daemon=True, name="omnes-dream",
+                ).start()
+                return "дрим запущен в фоне — статус: dream_status"
+            result = app.dream.run(trigger="manual")
+            if result["status"] == "error":
+                return f"[Error] {result.get('error')}"
+            return (f"run_id={result['run_id']} processed={result['processed']} "
+                    f"edits={result['edits']} commit={result.get('commit') or '-'}"
+                    + (f" ({result['note']})" if result.get("note") else ""))
+        finally:
+            if not background:
+                app.dream_lock.release()
+    except Exception as e:
+        logging.getLogger("omnes.tools").exception("dream_run")
+        return f"[Error] {e}"
+
+
+def _dream_bg(app: App) -> None:
+    try:
+        app.dream.run(trigger="manual-bg")
+    finally:
+        app.dream_lock.release()
+
+
+@mcp.tool()
+def dream_status() -> str:
+    """Статус дрима: последний запуск, состояние гейтов автодрима."""
+    try:
+        app = get_app()
+        row = app.db.query_one(
+            "SELECT id, started_at, finished_at, status, trigger, stats "
+            "FROM dream_runs ORDER BY id DESC LIMIT 1"
+        )
+        lines = []
+        if row:
+            lines.append(
+                f"last_run: id={row['id']} {row['status']} ({row['trigger']}) "
+                f"{row['started_at']} -> {row['finished_at']}"
+            )
+            if row["stats"]:
+                lines.append(f"stats: {row['stats'][:300]}")
+        else:
+            lines.append("last_run: никогда")
+        lines.append(f"dream_cursor: {app.workspace.get_cursor('dream_cursor')}")
+        if app.autodream is not None:
+            ok, reason = app.autodream.should_run()
+            lines.append(f"autodream: {'готов' if ok else 'ждёт'} ({reason})")
+        else:
+            lines.append("autodream: выключен")
+        return "\n".join(lines)
+    except Exception as e:
+        logging.getLogger("omnes.tools").exception("dream_status")
+        return f"[Error] {e}"
+
+
+@mcp.tool()
+def dream_log(limit: int = 10) -> str:
+    """История dream-коммитов в git-репозитории workspace."""
+    try:
+        entries = get_app().gitstore.log(limit=limit)
+        if not entries:
+            return "коммитов нет"
+        return "\n".join(
+            f"{e['sha']} {e['date']} {e['message']}" for e in entries
+        )
+    except Exception as e:
+        logging.getLogger("omnes.tools").exception("dream_log")
+        return f"[Error] {e}"
+
+
+@mcp.tool()
+def dream_restore(commit: str) -> str:
+    """Откатить MEMORY/SOUL/USER к состоянию коммита (sha из dream_log)."""
+    try:
+        return get_app().gitstore.restore(commit)
+    except Exception as e:
+        logging.getLogger("omnes.tools").exception("dream_restore")
+        return f"[Error] {e}"
+
+
 # ── Служебное ───────────────────────────────────────────────────────────
 
 
@@ -366,7 +472,10 @@ def omnes_stats() -> str:
 
 
 def main() -> None:
-    setup_logging(get_settings())
+    settings = get_settings()
+    setup_logging(settings)
+    app = get_app()
+    app.start_background_workers()
     logging.getLogger("omnes").info("OmnesMemory MCP-сервер запускается (stdio)")
     mcp.run()
 
