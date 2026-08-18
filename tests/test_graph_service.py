@@ -110,7 +110,7 @@ def test_reason_llm_error_returns_error_field(graph):
             raise LLMError("boom")
 
     graph.upsert_extraction(sample_result())
-    answer = graph.reason("тест", Broken())
+    answer = graph.reason("Иванов", Broken())  # label-совпадение гарантирует факты
     assert answer["answer"].startswith("[Error]")
 
 

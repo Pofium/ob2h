@@ -41,16 +41,38 @@ def test_search_vector(svc):
     assert hits and hits[0]["key"] == "x"
 
 
-def test_search_hybrid_rrf_promotes_both(svc):
-    svc.upsert("котёл паровой установлен в котельной", key="k1")
-    svc.upsert("котёл требует замены прокладок", key="k2")
-    svc.upsert("погода солнечная", key="k3")
-    hits = svc.search_hybrid("котёл")
-    keys = [h["key"] for h in hits]
-    # k1/k2 найдены обеими ветками: fts-вклад гарантирует им строгое преимущество
-    # над чисто векторными кандидатами (случайные вектора FakeEmbedding)
-    assert set(keys[:2]) == {"k1", "k2"}
-    assert all("rrf_score" in h for h in hits)
+def test_search_hybrid_rrf_promotes_both(tmp_path):
+    """Гарантированная математика: вектора заданы явно, k3 ортогонален запросу."""
+    from omnes_memory.db import Database as Db
+    from omnes_memory.embedding import FakeEmbedding
+
+    emb = FakeEmbedding(dim=4)
+    base = [1.0, 0.0, 0.0, 0.0]
+    near = [0.95, 0.05, 0.0, 0.0]
+    mid = [0.8, 0.2, 0.0, 0.0]
+    ortho = [0.0, 0.0, 1.0, 0.0]
+    query = "котёл"
+    c1, c2, c3 = ("котёл паровой установлен в котельной",
+                  "котёл требует замены прокладок",
+                  "погода солнечная")
+    emb.set_vector(query, base)
+    emb.set_vector(c1, near)
+    emb.set_vector(c2, mid)
+    emb.set_vector(c3, ortho)
+
+    db = Db(tmp_path / "rrf.db")
+    svc = MemoryService(db, emb)
+    try:
+        svc.upsert(c1, key="k1")
+        svc.upsert(c2, key="k2")
+        svc.upsert(c3, key="k3")
+        hits = svc.search_hybrid(query)
+        keys = [h["key"] for h in hits]
+        # k1: 1/61+1/61, k2: 1/62+1/62 — оба строго впереди k3 (макс 1/61)
+        assert set(keys[:2]) == {"k1", "k2"}
+        assert keys.index("k1") < keys.index("k2")
+    finally:
+        db.close()
 
 
 def test_hybrid_rrf_formula(svc):

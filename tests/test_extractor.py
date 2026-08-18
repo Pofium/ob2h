@@ -38,7 +38,12 @@ def test_prefilter_short_and_header_chunks():
     assert prefilter_chunk("коротко") is False
     header = "\n".join(f"Глава {i}" for i in range(10))  # без точек, < 300
     assert prefilter_chunk(header) is False
-    assert prefilter_chunk("Нормальный текст достаточной длины с точкой.") is True
+    valid = "Нормальный текст достаточной длины с точкой. " * 3  # > 80 символов
+    assert prefilter_chunk(valid) is True
+    long_header = "\n".join(f"Глава номер {i} содержание" for i in range(30))
+    # длинное без терминаторов — всё равно контент (правило порта: режем только
+    # короткие заголовочные оглавления)
+    assert prefilter_chunk(long_header) is True
 
 
 # --- пайплайн с FakeLLM ---

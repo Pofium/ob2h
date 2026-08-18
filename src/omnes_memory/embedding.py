@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Protocol
 
@@ -22,22 +23,35 @@ class EmbeddingProvider(Protocol):
 
 
 class FakeEmbedding:
-    """Детерминированная заглушка для тестов: хэш-вектор, ортогональные кластеры."""
+    """Детерминированная заглушка для тестов: md5-сеяный вектор.
+
+    Детерминизм между запусками процесса (в отличие от hash(), который
+    случаен из-за PYTHONHASHSEED) — тесты не флакают.
+    """
 
     def __init__(self, dim: int = 64):
         self.name = "fake"
         self.dim = dim
+        self._overrides: dict[str, np.ndarray] = {}
 
-    def _vec(self, text: str, salt: int) -> np.ndarray:
-        rng = np.random.default_rng(abs(hash((text, salt))) % (2**32))
+    def set_vector(self, text: str, vector: list[float] | np.ndarray) -> None:
+        """Задать вектор конкретному тексту/запросу (контроль в тестах)."""
+        v = np.asarray(vector, dtype=np.float32)
+        self._overrides[text] = v / (np.linalg.norm(v) + 1e-9)
+
+    def _vec(self, text: str) -> np.ndarray:
+        if text in self._overrides:
+            return self._overrides[text]
+        digest = hashlib.md5(text.encode("utf-8")).digest()  # noqa: S324 — не криптография
+        rng = np.random.default_rng(int.from_bytes(digest[:4], "little"))
         v = rng.standard_normal(self.dim).astype(np.float32)
         return v / (np.linalg.norm(v) + 1e-9)
 
     def embed(self, texts: list[str]) -> list[np.ndarray]:
-        return [self._vec(t, 0) for t in texts]
+        return [self._vec(t) for t in texts]
 
     def embed_query(self, text: str) -> np.ndarray:
-        return self._vec(text, 0)
+        return self._vec(text)
 
 
 class LocalFastembed:

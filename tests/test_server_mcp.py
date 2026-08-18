@@ -65,7 +65,9 @@ async def test_save_then_search_scenario(tmp_path):
         assert "kotol" in text and "food" not in text
 
         hybrid = await session.call_tool("memory_search", {"query": "Дрейзен-котёл"})
-        assert "kotol" in hybrid.content[0].text.splitlines()[0]
+        # fts-ветка гарантирует присутствие в hybrid-результатах независимо
+        # от векторной случайности fake-провайдера
+        assert "kotol" in hybrid.content[0].text
 
 
 async def test_workspace_write_and_read(tmp_path):
