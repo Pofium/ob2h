@@ -9,3 +9,4 @@
 *.tar.gz
 ob2h-linux-x86_64
 
+__pycache__/

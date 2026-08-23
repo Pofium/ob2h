@@ -4,7 +4,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use ob2h::cli::{Cli, Commands, DreamCommands};
+use ob2h::cli::{Cli, Commands, DreamCommands, PluginCommands};
 use ob2h::config::Settings;
 use ob2h::mcp::McpServer;
 use ob2h::{init_app, start_background_workers};
@@ -89,8 +89,133 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Uninstall) => {
             uninstall_from_hermes()?;
         }
+        Some(Commands::Plugin { command }) => match command {
+            PluginCommands::Install => plugin_install()?,
+            PluginCommands::Uninstall => plugin_uninstall()?,
+            PluginCommands::Status => plugin_status()?,
+        },
     }
 
+    Ok(())
+}
+
+// -- MemoryProvider-плагин (docs/PLAN_v0.8.md §7.3) -------------------------
+
+const PLUGIN_FILES: &[(&str, &str)] = &[
+    ("__init__.py", include_str!("../plugin/ob2h/__init__.py")),
+    ("_rpc.py", include_str!("../plugin/ob2h/_rpc.py")),
+    ("plugin.yaml", include_str!("../plugin/ob2h/plugin.yaml")),
+];
+
+fn get_hermes_home() -> anyhow::Result<std::path::PathBuf> {
+    if let Ok(h) = std::env::var("HERMES_HOME") {
+        return Ok(std::path::PathBuf::from(h));
+    }
+    let local_app_data = std::env::var("LOCALAPPDATA")
+        .unwrap_or_else(|_| "C:\\Users\\ipres\\AppData\\Local".to_string());
+    let candidate = std::path::PathBuf::from(local_app_data).join("hermes");
+    if candidate.is_dir() {
+        return Ok(candidate);
+    }
+    if let Ok(home) = std::env::var("USERPROFILE") {
+        let dot = std::path::PathBuf::from(home).join(".hermes");
+        if dot.is_dir() {
+            return Ok(dot);
+        }
+    }
+    Ok(candidate)
+}
+
+fn plugin_install() -> anyhow::Result<()> {
+    let home = get_hermes_home()?;
+    let dir = home.join("plugins").join("ob2h");
+    std::fs::create_dir_all(&dir)?;
+    for (name, content) in PLUGIN_FILES {
+        std::fs::write(dir.join(name), content)?;
+    }
+    println!("Плагин ob2h установлен: {}", dir.display());
+
+    // Плагин стартует из Hermes (cwd = домашняя папка): без пина путей он нашёл бы
+    // бинарник/data не там и создал вторую БД. install — явный акт деплоя ЭТОГО
+    // бинарника: binary/data_dir актуализируем, прочие ключи ob2h.json сохраняем.
+    let cfg_path = home.join("ob2h.json");
+    let exe = std::env::current_exe()?;
+    let data_dir = std::env::current_dir()?.join("data");
+    let mut cfg: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&cfg_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    cfg.insert(
+        "binary".to_string(),
+        serde_json::Value::String(exe.to_string_lossy().replace('\\', "/")),
+    );
+    cfg.insert(
+        "data_dir".to_string(),
+        serde_json::Value::String(data_dir.to_string_lossy().replace('\\', "/")),
+    );
+    std::fs::write(
+        &cfg_path,
+        serde_json::to_string_pretty(&serde_json::Value::Object(cfg))? + "\n",
+    )?;
+    println!(
+        "Пути плагина закреплены в {}: binary={}, data_dir={}",
+        cfg_path.display(),
+        exe.display(),
+        data_dir.display()
+    );
+
+    println!();
+    println!("Включите провайдер вручную в {}:", home.join("config.yaml").display());
+    println!("  memory:");
+    println!("    provider: ob2h");
+    println!();
+    println!("и перезапустите Hermes. Проверка: ob2h plugin status");
+    Ok(())
+}
+
+fn plugin_uninstall() -> anyhow::Result<()> {
+    let home = get_hermes_home()?;
+    let dir = home.join("plugins").join("ob2h");
+    if !dir.is_dir() {
+        println!("Плагин не установлен: {}", dir.display());
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&dir)?;
+    println!("Плагин удалён: {}", dir.display());
+    println!("Если был включён — уберите `provider: ob2h` из блока memory: в config.yaml Hermes.");
+    Ok(())
+}
+
+fn plugin_status() -> anyhow::Result<()> {
+    let home = get_hermes_home()?;
+    let dir = home.join("plugins").join("ob2h");
+    let installed = PLUGIN_FILES.iter().all(|(name, _)| dir.join(name).is_file());
+    println!("hermes_home: {}", home.display());
+    println!(
+        "plugin_dir:  {} [{}]",
+        dir.display(),
+        if installed { "установлен" } else { "не установлен" }
+    );
+    let cfg_path = home.join("config.yaml");
+    if let Ok(content) = std::fs::read_to_string(&cfg_path) {
+        let active = content.lines().any(|l| l.trim() == "provider: ob2h");
+        println!(
+            "memory.provider: ob2h — {}",
+            if active { "включён в конфиге" } else { "не найден в config.yaml" }
+        );
+        let mcp = content.lines().any(|l| l.starts_with("  ob2h:"));
+        println!(
+            "mcp_servers.ob2h — {} (Mode B, если включён и плагин активен)",
+            if mcp { "есть" } else { "нет" }
+        );
+    } else {
+        println!("config.yaml не найден: {}", cfg_path.display());
+    }
+    let ob2h_json = home.join("ob2h.json");
+    if ob2h_json.is_file() {
+        println!("ob2h.json:    {} (пути бинарника/data_dir плагина)", ob2h_json.display());
+    }
     Ok(())
 }
 

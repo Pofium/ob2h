@@ -26,6 +26,21 @@ pub enum Commands {
     Install,
     /// Удалить OB2H из Hermes (config.yaml)
     Uninstall,
+    /// Управление MemoryProvider-плагином ob2h для Hermes
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PluginCommands {
+    /// Установить плагин в $HERMES_HOME/plugins/ob2h (конфиг Hermes не правится)
+    Install,
+    /// Удалить плагин из $HERMES_HOME/plugins/ob2h
+    Uninstall,
+    /// Проверить установку плагина и активность в конфиге Hermes
+    Status,
 }
 
 #[derive(Subcommand, Debug)]

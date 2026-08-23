@@ -1,4 +1,4 @@
-//! 18 инструментов MCP для Hermes (память, воркспейс, сессии, граф, дриминг, бэкапы).
+//! 19 инструментов MCP для Hermes (память, воркспейс, сессии, граф, дриминг, бэкапы).
 
 use super::protocol::McpToolDef;
 
@@ -208,6 +208,31 @@ pub fn list_tools() -> Vec<McpToolDef> {
             name: "omnes_backup".to_string(),
             description: "Создать бэкап БД (VACUUM INTO) + workspace в backups/. Ротация 14 копий.".to_string(),
             input_schema: serde_json::json!({ "type": "object" }),
+        },
+        // 19. session_ingest
+        McpToolDef {
+            name: "session_ingest".to_string(),
+            description: "Массово записать транскрипту сессии (пары user/assistant) в daily-лог — пища для дрима и консолидации. При повторном вызове с тем же session_id добавляются только новые сообщения (дедуп по позиции); роли кроме user/assistant пропускаются.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "messages": {
+                        "type": "array",
+                        "description": "Сообщения сессии: [{role: user|assistant, content: str}]",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "role": { "type": "string", "enum": ["user", "assistant"] },
+                                "content": { "type": "string" }
+                            },
+                            "required": ["role", "content"]
+                        }
+                    },
+                    "source": { "type": "string", "description": "Источник (дефолт: hermes; напр. pre_compress)" },
+                    "session_id": { "type": "string", "description": "Идентификатор сессии для дедупа (опционально)" }
+                },
+                "required": ["messages"]
+            }),
         },
     ]
 }

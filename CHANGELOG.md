@@ -3,6 +3,32 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [Unreleased] — план v0.8 (docs/PLAN_v0.8.md), фаза 7
+
+### Added
+- **MCP-инструмент `session_ingest`** (19-й, в конец списка): массовая запись транскрипты
+  сессии парами user/assistant в daily-лог с дедупом по `(session_id, позиция сообщения)`
+  (kv-счётчик) — повторный вызов с полной транскриптой добавляет только хвост. Роли кроме
+  user/assistant пропускаются. Контракт старых 18 инструментов не изменился (снапшот-тест
+  `tools/list`).
+- **MemoryProvider-плагин для Hermes** (`plugin/ob2h/`, Python stdlib-only): долгоживущий
+  subprocess `ob2h serve` + JSON-RPC/stdio. Автоматически, без инициативы модели:
+  `sync_turn` → `session_ingest` каждый ход; `on_session_end`/`on_pre_compress` → полная
+  транскрипта; `queue_prefetch`/`prefetch` → инъекция `<agent_memory>` перед ходом
+  (+ `recall_status` 🧠); `get_tool_schemas` → инструменты ob2h (кроме автоматических
+  session_log/session_ingest/memory_search/memory_context); `on_memory_write` — зеркало
+  builtin-памяти. Non-primary контексты (cron/subagent) не пишут. Рестарт subprocess
+  с backoff, health-ping 60с, деградация без падения агента.
+- **CLI `ob2h plugin install|uninstall|status`**: деплой плагина в `$HERMES_HOME/plugins/ob2h/`,
+  `ob2h.json` пинит binary/data_dir; конфиг Hermes не правится — печатает сниппет
+  `memory.provider: ob2h` для ручной вставки.
+- SQLite `busy_timeout=5000` (Mode B: плагин + mcp_servers одновременно).
+
+### Tests
+- Rust: session_ingest (пары/дедуп/хвост/ошибки контракта), снапшот tools/list.
+- Python: 16 тестов — RPC-клиент против фейк-сервера (handshake/таймаут/рестарт),
+  провайдер (аккумулятор, gating, схемы, prefetch), интеграция с реальным `ob2h serve`.
+
 ## [0.1.1] — 2026-08-18
 
 ### Added

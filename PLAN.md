@@ -210,12 +210,13 @@ AutoDreamWorker уважает все три гейта (тесты со вре�
 с инъекцией `<agent_memory>`, `get_tool_schemas` → граф/дрим-инструменты.
 Контракт 18 инструментов v0.7.1 не меняется (снапшот-тест `tools/list`).
 
-- [ ] **7.1** `--version` в CLI; `session_ingest` (19-й инструмент) с дедупом по session_id.
-- [ ] **7.2** Плагин `plugin/ob2h/` (`__init__.py` + `_rpc.py` + `plugin.yaml`): lifecycle-маппинг
+- [x] **7.1** `--version` в CLI; `session_ingest` (19-й инструмент) с дедупом по session_id.
+- [x] **7.2** Плагин `plugin/ob2h/` (`__init__.py` + `_rpc.py` + `plugin.yaml`): lifecycle-маппинг
       из PLAN_v0.8 §7.1, таймауты, рестарт subprocess, non-primary контексты без записи.
-- [ ] **7.3** CLI `ob2h plugin install/uninstall/status` (деплой в `$HERMES_HOME/plugins/ob2h/`,
-      конфиг Hermes не правит — печатает сниппет `memory.provider: ob2h`).
-- [ ] **7.4** Тесты: Rust (session_ingest, снапшот tools/list, busy_timeout=5000 в db),
+- [x] **7.3** CLI `ob2h plugin install/uninstall/status` (деплой в `$HERMES_HOME/plugins/ob2h/`,
+      конфиг Hermes не правит — печатает сниппет `memory.provider: ob2h`; `ob2h.json`
+      пинит binary/data_dir плагина, чтобы не расщеплять БД).
+- [x] **7.4** Тесты: Rust (session_ingest, снапшот tools/list, busy_timeout=5000 в db),
       Python (unittest против фейк-JSON-RPC), интеграция плагин↔serve.
 - [ ] **7.5** Живой e2e владельцем (Mode A) + DoD из PLAN_v0.8 §7.6.
 

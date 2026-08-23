@@ -362,6 +362,107 @@ impl McpServer {
                     Err(e) => format!("[Error] {e}"),
                 }
             }
+            "session_ingest" => {
+                let messages = match args.get("messages").and_then(|v| v.as_array()) {
+                    Some(m) if !m.is_empty() => m,
+                    _ => return "[Error] messages is required (непустой массив {role, content})".to_string(),
+                };
+                let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("hermes");
+                let session_id = args.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+
+                // Дедуп: kv "ingest:<session_id>" хранит, сколько сообщений этой сессии
+                // уже принято (включая пропущенные роли) — повторный вызов с полной
+                // транскриптой добавляет только хвост.
+                let kv_key = format!("ingest:{session_id}");
+                let already: usize = if session_id.is_empty() {
+                    0
+                } else {
+                    self.ctx
+                        .db
+                        .get_kv(&kv_key)
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0)
+                };
+
+                let mut skipped = 0usize;
+                let mut new_pairs: Vec<(String, String)> = Vec::new();
+                let mut pending_user = String::new();
+                let mut has_user = false;
+                for (i, m) in messages.iter().enumerate() {
+                    if i < already {
+                        skipped += 1;
+                        continue;
+                    }
+                    let role = m.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                    let content = m.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    if role != "user" && role != "assistant" {
+                        continue;
+                    }
+                    if role == "user" {
+                        if has_user {
+                            pending_user.push('\n');
+                        }
+                        pending_user.push_str(content);
+                        has_user = true;
+                    } else {
+                        let user_text = if has_user { pending_user.clone() } else { String::new() };
+                        new_pairs.push((user_text, content.to_string()));
+                        pending_user.clear();
+                        has_user = false;
+                    }
+                }
+                // Хвостовой user без ответа не пишем — пара ещё не завершилась.
+
+                if new_pairs.is_empty() {
+                    if !session_id.is_empty() {
+                        let _ = self.ctx.db.set_kv(&kv_key, &messages.len().to_string());
+                    }
+                    return format!("ingested pairs=0 skipped_msgs={skipped} (новых сообщений нет)");
+                }
+
+                let mut written = 0usize;
+                let mut consolidated = 0usize;
+                let mut last_err: Option<String> = None;
+                {
+                    let mut session = self.ctx.pending_session.lock().await;
+                    for (u, a) in &new_pairs {
+                        let _ = self.ctx.workspace.log_daily_session(
+                            u,
+                            a,
+                            Some(serde_json::json!({ "source": source, "session_id": session_id })),
+                        );
+                        session.append("user", u);
+                        session.append("assistant", a);
+                        written += 1;
+                        match self.ctx.consolidator.maybe_consolidate(&mut session).await {
+                            Ok(res) if res.consolidated => consolidated += res.entries,
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::warn!("session_ingest: консолидация не удалась: {e}");
+                                last_err = Some(e.to_string());
+                            }
+                        }
+                    }
+                }
+
+                if !session_id.is_empty() {
+                    let consumed = already.max(messages.len());
+                    if let Err(e) = self.ctx.db.set_kv(&kv_key, &consumed.to_string()) {
+                        tracing::warn!("session_ingest: не сохранить дедуп-счётчик: {e}");
+                    }
+                }
+
+                let mut out = format!("ingested pairs={written} skipped_msgs={skipped}");
+                if consolidated > 0 {
+                    out.push_str(&format!(" +consolidated x{consolidated}"));
+                }
+                if let Some(e) = last_err {
+                    out.push_str(&format!(" [Error] консолидация: {e}"));
+                }
+                out
+            }
             "knowledge_extract" => {
                 let text_arg = args.get("text").and_then(|v| v.as_str());
                 let file_path = args.get("file_path").and_then(|v| v.as_str());

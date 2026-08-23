@@ -26,6 +26,9 @@ impl Database {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(p)?;
+        // Mode B (плагин + mcp_servers одновременно): два процесса на одной БД,
+        // WAL-режим — даём SQLite ждать блокировку вместо мгновенной ошибки.
+        conn.busy_timeout(std::time::Duration::from_millis(5000))?;
         schema::migrate(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -34,6 +37,7 @@ impl Database {
 
     pub fn in_memory() -> anyhow::Result<Self> {
         let conn = Connection::open_in_memory()?;
+        conn.busy_timeout(std::time::Duration::from_millis(5000))?;
         schema::migrate(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),

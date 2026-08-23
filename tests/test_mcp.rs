@@ -1,7 +1,37 @@
 use ob2h::config::Settings;
 use ob2h::init_app;
 use ob2h::mcp::McpServer;
+use ob2h::mcp::tools::list_tools;
 use tempfile::tempdir;
+
+/// Снапшот контракта: имена инструментов v0.7.1 не меняются, новые добавляются в конец.
+#[test]
+fn test_tools_list_contract_snapshot() {
+    let names: Vec<String> = list_tools().into_iter().map(|t| t.name).collect();
+    let expected = [
+        "memory_save",
+        "memory_search",
+        "memory_update",
+        "memory_forget",
+        "memory_context",
+        "workspace_read",
+        "workspace_write",
+        "session_log",
+        "knowledge_extract",
+        "graph_search",
+        "graph_reason",
+        "graph_stats",
+        "dream_run",
+        "dream_status",
+        "dream_log",
+        "dream_restore",
+        "omnes_stats",
+        "omnes_backup",
+        // v0.8: новые инструменты только в конец списка
+        "session_ingest",
+    ];
+    assert_eq!(names, expected, "контракт tools/list изменился — см. docs/PLAN_v0.8.md §1");
+}
 
 #[tokio::test]
 async fn test_mcp_all_tools_dispatch() {
@@ -74,4 +104,101 @@ async fn test_mcp_all_tools_dispatch() {
     // 7. dream_status
     let dream_status = server.call_tool("dream_status", serde_json::json!({})).await;
     assert!(dream_status.contains("last_run:"));
+}
+
+#[tokio::test]
+async fn test_session_ingest_pairs_and_dedup() {
+    let tmp = tempdir().expect("tempdir");
+    let mut settings = Settings::from_env();
+    settings.data_dir = tmp.path().to_path_buf();
+
+    let ctx = init_app(settings).expect("init app");
+    let server = McpServer::new(ctx);
+
+    let mk = |role: &str, content: &str| serde_json::json!({ "role": role, "content": content });
+
+    // 1. Первый вызов: две пары (два user подряд склеиваются в одну пару)
+    let out1 = server
+        .call_tool(
+            "session_ingest",
+            serde_json::json!({
+                "messages": [
+                    mk("user", "Привет"),
+                    mk("user", "Как дела?"),
+                    mk("assistant", "Привет! Отлично."),
+                    mk("tool", "tool call — должен быть пропущен"),
+                    mk("assistant", "Ответ без user-сообщения")
+                ],
+                "session_id": "sess-1"
+            }),
+        )
+        .await;
+    assert!(out1.starts_with("ingested pairs=2"), "got: {out1}");
+
+    // 2. Повтор той же транскрипты — дедуп, ничего нового
+    let out2 = server
+        .call_tool(
+            "session_ingest",
+            serde_json::json!({
+                "messages": [
+                    mk("user", "Привет"),
+                    mk("user", "Как дела?"),
+                    mk("assistant", "Привет! Отлично."),
+                    mk("tool", "tool call — должен быть пропущен"),
+                    mk("assistant", "Ответ без user-сообщения")
+                ],
+                "session_id": "sess-1"
+            }),
+        )
+        .await;
+    assert!(out2.starts_with("ingested pairs=0"), "got: {out2}");
+    assert!(out2.contains("skipped_msgs=5"), "got: {out2}");
+
+    // 3. Тот же session_id, транскрипта выросла — пишется только хвост (1 новая пара)
+    let out3 = server
+        .call_tool(
+            "session_ingest",
+            serde_json::json!({
+                "messages": [
+                    mk("user", "Привет"),
+                    mk("user", "Как дела?"),
+                    mk("assistant", "Привет! Отлично."),
+                    mk("tool", "tool call — должен быть пропущен"),
+                    mk("assistant", "Ответ без user-сообщения"),
+                    mk("user", "Расскажи о памяти"),
+                    mk("assistant", "Память — это ob2h.")
+                ],
+                "session_id": "sess-1"
+            }),
+        )
+        .await;
+    assert!(out3.starts_with("ingested pairs=1"), "got: {out3}");
+    assert!(out3.contains("skipped_msgs=5"), "got: {out3}");
+
+    // 4. Daily-лог содержит все три пары (2 + 1), с session_id в meta
+    let daily_dir = tmp.path().join("workspace").join("daily");
+    let mut total_lines = 0usize;
+    for entry in std::fs::read_dir(&daily_dir).expect("daily dir") {
+        let path = entry.expect("entry").path();
+        let content = std::fs::read_to_string(&path).expect("daily file");
+        total_lines += content.lines().filter(|l| !l.trim().is_empty()).count();
+    }
+    assert_eq!(total_lines, 3, "в daily-логе должно быть ровно 3 пары");
+
+    // 5. Без session_id дедупа нет — та же пара пишется снова
+    let out5 = server
+        .call_tool(
+            "session_ingest",
+            serde_json::json!({
+                "messages": [mk("user", "q"), mk("assistant", "a")]
+            }),
+        )
+        .await;
+    assert!(out5.starts_with("ingested pairs=1"), "got: {out5}");
+
+    // 6. Пустой/отсутствующий messages — ошибка контракта
+    let out6 = server
+        .call_tool("session_ingest", serde_json::json!({ "messages": [] }))
+        .await;
+    assert!(out6.starts_with("[Error]"), "got: {out6}");
 }
