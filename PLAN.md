@@ -201,6 +201,48 @@ AutoDreamWorker уважает все три гейта (тесты со вре�
 **DoD:** Hermes видит все инструменты, полный сценарий из 6.4 проходит в живом диалоге;
 бэкап восстанавливается копированием папки.
 
+### Фаза 7 — MemoryProvider-плагин Hermes: постоянный захват и recall (оценка 2–3 дня)
+
+Детали, маппинг хуков и тесты — `docs/PLAN_v0.8.md` §3. Суть: Python-плагин
+(`plugin/ob2h/`, stdlib-only) держит долгоживущий `ob2h serve` и реализует
+`MemoryProvider`: `sync_turn` → `session_log` каждый ход, `on_session_end` →
+новый инструмент `session_ingest` (полная транскрипта), `prefetch` → гибридный поиск
+с инъекцией `<agent_memory>`, `get_tool_schemas` → граф/дрим-инструменты.
+Контракт 18 инструментов v0.7.1 не меняется (снапшот-тест `tools/list`).
+
+- [ ] **7.1** `--version` в CLI; `session_ingest` (19-й инструмент) с дедупом по session_id.
+- [ ] **7.2** Плагин `plugin/ob2h/` (`__init__.py` + `_rpc.py` + `plugin.yaml`): lifecycle-маппинг
+      из PLAN_v0.8 §7.1, таймауты, рестарт subprocess, non-primary контексты без записи.
+- [ ] **7.3** CLI `ob2h plugin install/uninstall/status` (деплой в `$HERMES_HOME/plugins/ob2h/`,
+      конфиг Hermes не правит — печатает сниппет `memory.provider: ob2h`).
+- [ ] **7.4** Тесты: Rust (session_ingest, снапшот tools/list, busy_timeout=5000 в db),
+      Python (unittest против фейк-JSON-RPC), интеграция плагин↔serve.
+- [ ] **7.5** Живой e2e владельцем (Mode A) + DoD из PLAN_v0.8 §7.6.
+
+### Фаза 8 — Синхронизация двух инстансов PC ↔ VPS (оценка 3–4 дня)
+
+Детали — `docs/PLAN_v0.8.md` §4. Суть: миграция M2 (аддитивно: `origin`/`deleted_at`/
+`updated_at` + `sync_state`, авто-бэкап перед миграцией), бандлы JSONL+gzip
+(`ob2h sync export/import/status/push/pull`), LWW + tombstones, транспорт
+ssh/manual (`data/sync/peers.toml`), фаза автодрима `after_dream`.
+
+- [ ] **8.1** M2-миграция + tombstone-семантика `memory_forget`/purge (поиск фильтрует,
+      физическое удаление отложено).
+- [ ] **8.2** Export/import бандлов: идемпотентность, LWW, авто-бэкап перед новым бандлом.
+- [ ] **8.3** peers.toml + push/pull через системный ssh/scp + systemd timer / Task Scheduler
+      скрипты (`scripts/vps/`, `scripts/pc/`).
+- [ ] **8.4** Фаза автодрима after_dream (best-effort, не роняет дрим).
+- [ ] **8.5** Тесты PLAN_v0.8 §8.5 (roundtrip, LWW, tombstone, идемпотентность, миграция,
+      даунгрейт, битые бандлы).
+
+### Фаза 9 — Скилл, доки, релиз 0.8.0 (оценка 1 день)
+
+- [ ] **9.1** Скилл в репо `skills/ob2h/` + `ob2h skill install` (копия в
+      `$HERMES_HOME/skills/devops/ob2h/`, замена старого разрешена владельцем).
+- [ ] **9.2** `docs/HERMES_INTEGRATION.md` переписать под Rust-эру и режимы 0/A/B.
+- [ ] **9.3** AGENTS.md/CLAUDE.md актуализировать (Rust-структура, `plugin/`, `skills/`).
+- [ ] **9.4** CHANGELOG: догнать 0.7.1, записать 0.8.0; README (плагин, синк), версия 0.8.0.
+
 ### Бэклог (не в текущем плане)
 
 - GBAM-подобное зеркало сессий Hermes в граф (после того, как `session_log` наберёт данные).
@@ -255,3 +297,8 @@ AutoDreamWorker уважает все три гейта (тесты со вре�
 | 2026-08-18 | Никья RRF в тесте признана легитимной (bm25 отдаёт предпочтение коротким документам) — ассерт ослаблен до топ-2 множества | честная математика гибрида |
 | 2026-08-18 | Фазы 1–5 реализованы и закрыты (98→102 теста); в autodream добавлен maintenance (decay+purge памяти) | план §6.3 |
 | 2026-08-18 | Задачи 6.1 (правка config.yaml Hermes) и 6.4 (живой e2e) оставлены владельцу — агенты не меняют конфиг Hermes | AGENTS.md §1 |
+| 2026-08-23 | Владелец заказал v0.8: постоянный захват/recall через MemoryProvider-плагин Hermes + синк двух инстансов (PC↔VPS). Детальный план — `docs/PLAN_v0.8.md`, фазы 7–9 добавлены в §2 | разбор диалога «информация попадает только по просьбе» |
+| 2026-08-23 | **ADR-9**: синхронизация — файловые gzip-бандлы поверх SSH/manual; ob2h не открывает портов и не получает сетевых зависимостей (ADR-1/7 сохраняются) | транспорт файлов вместо сетевого MCP |
+| 2026-08-23 | **ADR-10**: интеграция с Hermes — MemoryProvider-плагин (Python, stdlib-only) поверх долгоживущего `ob2h serve`; MCP-режим v0.7.1 остаётся поддержанным фолбэком (Mode 0) | детерминированный поток вместо инициативы модели |
+| 2026-08-23 | **ADR-11**: `memory_forget`/purge переходят на tombstones (`deleted_at`), физическое удаление отложено в maintenance | LWW-совместимость синка |
+| 2026-08-23 | Замена скилла `$HERMES_HOME/skills/devops/ob2h/` на версию из репо (`skills/ob2h/`) разрешена владельцем явно; конфиг Hermes по-прежнему руками | заказ владельца |
