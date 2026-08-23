@@ -197,7 +197,10 @@ fn plugin_install() -> anyhow::Result<()> {
     // бинарника: binary/data_dir актуализируем, прочие ключи ob2h.json сохраняем.
     let cfg_path = home.join("ob2h.json");
     let exe = std::env::current_exe()?;
-    let data_dir = std::env::current_dir()?.join("data");
+    let data_dir = match std::env::var("OB2H_DATA_DIR") {
+        Ok(d) => std::path::PathBuf::from(d),
+        Err(_) => std::env::current_dir()?.join("data"),
+    };
     let mut cfg: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&cfg_path)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
