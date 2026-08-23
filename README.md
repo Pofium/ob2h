@@ -6,7 +6,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v0.7.1-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
+[![Release](https://img.shields.io/badge/Release-v0.8.0-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](https://github.com/Pofium/ob2h)
 [![CloudTips](https://img.shields.io/badge/%F0%9F%92%B0%20%D0%A7%D0%B0%D0%B5%D0%B2%D1%8B%20%D0%B0%D0%B2%D1%82%D0%BE%D1%80%D1%83-CloudTips%20(РФ)-ff69b4.svg)](https://pay.cloudtips.ru/p/4e7f8019)
 

@@ -111,19 +111,23 @@ fn get_hermes_home() -> anyhow::Result<std::path::PathBuf> {
     if let Ok(h) = std::env::var("HERMES_HOME") {
         return Ok(std::path::PathBuf::from(h));
     }
-    let local_app_data = std::env::var("LOCALAPPDATA")
-        .unwrap_or_else(|_| "C:\\Users\\ipres\\AppData\\Local".to_string());
-    let candidate = std::path::PathBuf::from(local_app_data).join("hermes");
-    if candidate.is_dir() {
-        return Ok(candidate);
+    // Windows: %LOCALAPPDATA%\hermes; Linux (VPS): ~/.hermes
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let candidate = std::path::PathBuf::from(local_app_data).join("hermes");
+        if candidate.is_dir() {
+            return Ok(candidate);
+        }
     }
-    if let Ok(home) = std::env::var("USERPROFILE") {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    if !home.is_empty() {
         let dot = std::path::PathBuf::from(home).join(".hermes");
         if dot.is_dir() {
             return Ok(dot);
         }
     }
-    Ok(candidate)
+    anyhow::bail!("HERMES_HOME не найден: задайте переменную HERMES_HOME");
 }
 
 fn plugin_install() -> anyhow::Result<()> {
