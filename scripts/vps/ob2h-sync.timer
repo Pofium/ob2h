@@ -1,0 +1,9 @@
+[Unit]
+Description=OB2H sync ежедневно после автодрима
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

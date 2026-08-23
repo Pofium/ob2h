@@ -74,7 +74,9 @@ impl MemoryService {
                     source = excluded.source,
                     meta = excluded.meta,
                     embedding = excluded.embedding,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    origin = '',           /* локальная правка — строка снова «наша» */
+                    deleted_at = NULL      /* повторное сохранение снимает tombstone */
                 "#,
                 params![k, content, category, importance, source, meta, emb_blob, now],
             )?;
@@ -88,7 +90,7 @@ impl MemoryService {
     pub fn get(&self, key: &str) -> anyhow::Result<Option<MemoryRecord>> {
         self.db.with_conn(|conn| {
             conn.query_row(
-                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed FROM memories WHERE key = ?1",
+                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed FROM memories WHERE key = ?1 AND deleted_at IS NULL",
                 params![key],
                 |row| {
                     Ok(MemoryRecord {
@@ -140,7 +142,8 @@ impl MemoryService {
             conn.execute(
                 r#"
                 UPDATE memories
-                SET content = ?1, importance = ?2, category = ?3, embedding = ?4, updated_at = ?5
+                SET content = ?1, importance = ?2, category = ?3, embedding = ?4,
+                    updated_at = ?5, origin = ''
                 WHERE key = ?6
                 "#,
                 params![new_content, new_importance, new_category, emb_blob, now, key],
@@ -151,11 +154,29 @@ impl MemoryService {
         Ok(true)
     }
 
-    /// Удалить воспоминание по ключу.
+    /// Удалить воспоминание по ключу (tombstone — удаление реплицируется синком,
+    /// физическая чистка отложена в maintenance автодрима).
     pub fn forget(&self, key: &str) -> anyhow::Result<bool> {
+        let now = utcnow();
         self.db.with_conn(|conn| {
-            let count = conn.execute("DELETE FROM memories WHERE key = ?1", params![key])?;
-            Ok(count > 0)
+            let count = conn.execute(
+                "UPDATE memories SET deleted_at = ?1, updated_at = ?1, origin = ''
+                 WHERE key = ?2 AND deleted_at IS NULL",
+                params![now, key],
+            )?;
+            if count > 0 {
+                return Ok(true);
+            }
+            // уже в tombstone или отсутствует: ключ мог быть удалён ранее
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM memories WHERE key = ?1",
+                    params![key],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false);
+            Ok(exists)
         })
     }
 
@@ -196,7 +217,7 @@ impl MemoryService {
                     // Фолбэк на LIKE
                     let like_pattern = format!("%{clean_query}%");
                     let mut s = conn.prepare(
-                        "SELECT id, importance FROM memories WHERE content LIKE ?1 LIMIT ?2",
+                        "SELECT id, importance FROM memories WHERE content LIKE ?1 AND deleted_at IS NULL LIMIT ?2",
                     )?;
                     let rows = s.query_map(params![like_pattern, limit as i64], |row| {
                         Ok((row.get(0)?, row.get(1)?))
@@ -224,7 +245,7 @@ impl MemoryService {
         };
 
         let candidates = self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT id, embedding FROM memories WHERE embedding IS NOT NULL")?;
+            let mut stmt = conn.prepare("SELECT id, embedding FROM memories WHERE embedding IS NOT NULL AND deleted_at IS NULL")?;
             let rows = stmt.query_map([], |row| {
                 let id: i64 = row.get(0)?;
                 let blob: Vec<u8> = row.get(1)?;
@@ -297,7 +318,7 @@ impl MemoryService {
     pub fn get_by_id(&self, id: i64) -> anyhow::Result<Option<MemoryRecord>> {
         self.db.with_conn(|conn| {
             conn.query_row(
-                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed FROM memories WHERE id = ?1",
+                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed FROM memories WHERE id = ?1 AND deleted_at IS NULL",
                 params![id],
                 |row| {
                     Ok(MemoryRecord {
@@ -348,12 +369,28 @@ impl MemoryService {
         })
     }
 
-    /// Очистка слабых воспоминаний (purge).
+    /// Очистка слабых воспоминаний (tombstone, реплицируется синком).
     pub fn purge_weak(&self, threshold: f64, max_access: i64) -> anyhow::Result<usize> {
+        let now = utcnow();
         self.db.with_conn(|conn| {
             let count = conn.execute(
-                "DELETE FROM memories WHERE importance < ?1 AND access_count < ?2",
-                params![threshold, max_access],
+                "UPDATE memories SET deleted_at = ?1, updated_at = ?1, origin = ''
+                 WHERE importance < ?2 AND access_count < ?3 AND deleted_at IS NULL",
+                params![now, threshold, max_access],
+            )?;
+            Ok(count)
+        })
+    }
+
+    /// Физическое удаление старых tombstones (maintenance автодрима).
+    /// Задержка = 2×retention, чтобы удаление успело уйти пирам через синк.
+    pub fn purge_tombstones(&self, older_than_days: i64) -> anyhow::Result<usize> {
+        self.db.with_conn(|conn| {
+            let count = conn.execute(
+                // strftime в формате utcnow() (RFC3339, +00:00) для честного сравнения строк
+                "DELETE FROM memories WHERE deleted_at IS NOT NULL AND deleted_at <
+                 strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?1)",
+                params![format!("-{older_than_days} days")],
             )?;
             Ok(count)
         })
@@ -370,7 +407,7 @@ impl MemoryService {
 
         let records = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed FROM memories ORDER BY importance DESC LIMIT 100",
+                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed FROM memories WHERE deleted_at IS NULL ORDER BY importance DESC LIMIT 100",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok(MemoryRecord {

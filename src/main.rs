@@ -4,7 +4,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use ob2h::cli::{Cli, Commands, DreamCommands, PluginCommands};
+use ob2h::cli::{Cli, Commands, DreamCommands, PluginCommands, SyncCommands};
 use ob2h::config::Settings;
 use ob2h::mcp::McpServer;
 use ob2h::{init_app, start_background_workers};
@@ -94,9 +94,60 @@ async fn main() -> anyhow::Result<()> {
             PluginCommands::Uninstall => plugin_uninstall()?,
             PluginCommands::Status => plugin_status()?,
         },
+        Some(Commands::Sync { command }) => match command {
+            SyncCommands::Status => {
+                println!("{}", ctx.sync.status());
+            }
+            SyncCommands::Export { peer } => {
+                let path = ctx.sync.export(&peer)?;
+                println!("export: {}", path.display());
+            }
+            SyncCommands::Import { files } => {
+                if files.is_empty() {
+                    anyhow::bail!("укажите пути к бандлам: ob2h sync import <file...>");
+                }
+                for f in &files {
+                    let stats = ctx.sync.import_file(std::path::Path::new(f)).await?;
+                    println!("{f}: {}", format_import_stats(&stats));
+                }
+            }
+            SyncCommands::ApplyInbox => {
+                let all = ctx.sync.apply_inbox().await?;
+                if all.is_empty() {
+                    println!("inbox пуст");
+                }
+                for stats in all {
+                    println!("{}", format_import_stats(&stats));
+                }
+            }
+            SyncCommands::Push { peer } => {
+                let path = ctx.sync.push(&peer)?;
+                println!("push: {} → {peer}", path.display());
+            }
+            SyncCommands::Pull { peer } => {
+                let all = ctx.sync.pull(&peer).await?;
+                if all.is_empty() {
+                    println!("от {peer} новых бандлов нет");
+                }
+                for stats in all {
+                    println!("{}", format_import_stats(&stats));
+                }
+            }
+        },
     }
 
     Ok(())
+}
+
+fn format_import_stats(stats: &ob2h::sync::ImportStats) -> String {
+    if stats.already_applied {
+        return format!("{}: уже применён (no-op)", stats.bundle_id);
+    }
+    format!(
+        "{}: mem={} node={} edge={} конфликтов_проиграно={} пропусков_ссылок={}",
+        stats.bundle_id, stats.memories_applied, stats.nodes_applied, stats.edges_applied,
+        stats.conflicts_lost, stats.skipped_missing_ref
+    )
 }
 
 // -- MemoryProvider-плагин (docs/PLAN_v0.8.md §7.3) -------------------------

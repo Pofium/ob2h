@@ -2,7 +2,41 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
+
+/// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
+/// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
+/// tombstone (LWW-совместимое удаление); updated_at рёбер — для watermark/LWW.
+pub const MIGRATION_V2: &str = r#"
+ALTER TABLE memories ADD COLUMN origin TEXT NOT NULL DEFAULT '';
+ALTER TABLE memories ADD COLUMN deleted_at TEXT;
+ALTER TABLE graph_nodes ADD COLUMN origin TEXT NOT NULL DEFAULT '';
+ALTER TABLE graph_nodes ADD COLUMN deleted_at TEXT;
+ALTER TABLE graph_edges ADD COLUMN origin TEXT NOT NULL DEFAULT '';
+ALTER TABLE graph_edges ADD COLUMN deleted_at TEXT;
+ALTER TABLE graph_edges ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+UPDATE graph_edges SET updated_at = created_at WHERE updated_at = '';
+
+CREATE TABLE IF NOT EXISTS sync_state (
+  peer TEXT PRIMARY KEY,
+  last_export_at TEXT,
+  last_import_at TEXT,
+  applied_bundles TEXT NOT NULL DEFAULT '[]'
+);
+"#;
+
+/// Текущая версия схемы БД (0 — свежая, ещё без таблиц).
+pub fn schema_version(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT value FROM kv WHERE key = 'schema_version'",
+        [],
+        |row| {
+            let val: String = row.get(0)?;
+            Ok(val.parse::<i64>().unwrap_or(0))
+        },
+    )
+    .unwrap_or(0)
+}
 
 pub const MIGRATION_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -128,19 +162,17 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         [],
     )?;
 
-    let current_version: i64 = conn
-        .query_row(
-            "SELECT value FROM kv WHERE key = 'schema_version'",
-            [],
-            |row| {
-                let val: String = row.get(0)?;
-                Ok(val.parse::<i64>().unwrap_or(0))
-            },
-        )
-        .unwrap_or(0);
+    let current_version: i64 = schema_version(conn);
 
     if current_version < 1 {
+        // Свежая БД: все миграции по порядку (M2 аддитивна поверх M1).
         conn.execute_batch(MIGRATION_V1)?;
+        conn.execute_batch(MIGRATION_V2)?;
+    } else if current_version < SCHEMA_VERSION {
+        // Живая БД старой схемы — применяем недостающие миграции.
+        conn.execute_batch(MIGRATION_V2)?;
+    }
+    if current_version < SCHEMA_VERSION {
         conn.execute(
             "INSERT OR REPLACE INTO kv (key, value) VALUES ('schema_version', ?1)",
             params![SCHEMA_VERSION.to_string()],

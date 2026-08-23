@@ -24,6 +24,7 @@ anyhow = "1.0"
 thiserror = "2.0"
 async-trait = "0.1"
 bytemuck = { version = "1.21", features = ["derive"] }
+flate2 = "1.0"
 candle-core = "0.8"
 candle-nn = "0.8"
 candle-transformers = "0.8"

@@ -34,6 +34,7 @@ pub struct AppContext {
     pub graph: Arc<GraphService>,
     pub dream: Arc<Dream>,
     pub backup: Arc<BackupManager>,
+    pub sync: Arc<crate::sync::SyncManager>,
     pub dream_lock: Arc<Mutex<()>>,
 }
 

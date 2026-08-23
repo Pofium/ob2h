@@ -14,6 +14,7 @@ pub mod ingest;
 pub mod llm;
 pub mod mcp;
 pub mod memory;
+pub mod sync;
 pub mod vector;
 pub mod workspace;
 
@@ -29,6 +30,7 @@ use embedding::provider_for;
 use graph::GraphService;
 use llm::make_llm;
 use mcp::AppContext;
+use sync::SyncManager;
 use memory::MemoryService;
 use workspace::{GitStore, Workspace};
 
@@ -54,6 +56,12 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         Some(graph.clone()),
     ));
     let backup = Arc::new(BackupManager::new(settings.clone(), db.clone(), 14));
+    let sync = Arc::new(SyncManager::new(
+        settings.clone(),
+        db.clone(),
+        embedder.clone(),
+        backup.clone(),
+    ));
     let dream_lock = Arc::new(Mutex::new(()));
 
     Ok(Arc::new(AppContext {
@@ -69,6 +77,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         graph,
         dream,
         backup,
+        sync,
         dream_lock,
     }))
 }
@@ -81,6 +90,7 @@ pub fn start_background_workers(ctx: Arc<AppContext>) {
             ctx.workspace.clone(),
             ctx.memory.clone(),
             ctx.settings.clone(),
+            Some(ctx.sync.clone()),
         ));
         worker.start();
     }

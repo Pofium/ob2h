@@ -11,6 +11,7 @@ use tracing::{info, warn};
 use super::Dream;
 use crate::config::Settings;
 use crate::memory::MemoryService;
+use crate::sync::SyncManager;
 use crate::workspace::Workspace;
 
 pub const LOCK_STALE_SECS: u64 = 3600;
@@ -20,6 +21,7 @@ pub struct AutoDreamWorker {
     workspace: Arc<Workspace>,
     memory: Arc<MemoryService>,
     settings: Settings,
+    sync: Option<Arc<SyncManager>>,
     #[allow(dead_code)]
     running: Arc<Mutex<bool>>,
 }
@@ -30,12 +32,14 @@ impl AutoDreamWorker {
         workspace: Arc<Workspace>,
         memory: Arc<MemoryService>,
         settings: Settings,
+        sync: Option<Arc<SyncManager>>,
     ) -> Self {
         Self {
             dream,
             workspace,
             memory,
             settings,
+            sync,
             running: Arc::new(Mutex::new(false)),
         }
     }
@@ -70,12 +74,20 @@ impl AutoDreamWorker {
 
                 self.save_last_run();
 
-                // Регламентное обслуживание памяти (decay + purge)
+                // Регламентное обслуживание памяти (decay + purge + чистка tombstones)
                 let _ = self.memory.decay_importance(0.01);
                 let _ = self.memory.purge_weak(0.05, 2);
+                let _ = self.memory.purge_tombstones(self.settings.retention_days * 2);
 
                 self.prune_daily();
                 self.release_lock();
+
+                // after_dream: обмен с пирами (best-effort, не роняет дрим)
+                if let Some(sync) = &self.sync {
+                    if let Err(e) = sync.run_scheduled().await {
+                        warn!("after_dream sync: {e}");
+                    }
+                }
             }
         });
     }

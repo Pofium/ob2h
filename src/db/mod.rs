@@ -29,6 +29,21 @@ impl Database {
         // Mode B (плагин + mcp_servers одновременно): два процесса на одной БД,
         // WAL-режим — даём SQLite ждать блокировку вместо мгновенной ошибки.
         conn.busy_timeout(std::time::Duration::from_millis(5000))?;
+
+        // Живая БД старой схемы (v1) перед миграцией M2 — снапшот в backups/
+        // (VACUUM INTO даёт консистентную копию без остановки WAL).
+        let version = schema::schema_version(&conn);
+        if version == 1 {
+            let backup_dir = p.parent().unwrap_or_else(|| Path::new(".")).join("backups");
+            let _ = std::fs::create_dir_all(&backup_dir);
+            let ts = Utc::now().format("%Y%m%d-%H%M%S");
+            let backup_path = backup_dir.join(format!("pre-v08-{ts}.db"));
+            let escaped = backup_path.to_string_lossy().replace('\'', "''");
+            if conn.execute_batch(&format!("VACUUM INTO '{escaped}'")).is_ok() {
+                tracing::info!("Бэкап перед миграцией M2: {}", backup_path.display());
+            }
+        }
+
         schema::migrate(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -50,6 +65,19 @@ impl Database {
     {
         let mut lock = self.conn.lock().map_err(|e| anyhow::anyhow!("DB lock error: {e}"))?;
         Ok(f(&mut lock)?)
+    }
+
+    /// Транзакция с anyhow-ошибками: f получает &Transaction, коммит после успеха,
+    /// откат при Err.
+    pub fn with_tx<F, R>(&self, f: F) -> anyhow::Result<R>
+    where
+        F: FnOnce(&rusqlite::Transaction) -> anyhow::Result<R>,
+    {
+        let mut lock = self.conn.lock().map_err(|e| anyhow::anyhow!("DB lock error: {e}"))?;
+        let tx = lock.transaction()?;
+        let result = f(&tx)?;
+        tx.commit()?;
+        Ok(result)
     }
 
     pub fn get_kv(&self, key: &str) -> anyhow::Result<Option<String>> {
@@ -82,7 +110,7 @@ mod tests {
     fn test_in_memory_db_migrations() {
         let db = Database::in_memory().expect("db in memory must initialize");
         let version = db.get_kv("schema_version").expect("get_kv").expect("must have version");
-        assert_eq!(version, "1");
+        assert_eq!(version, crate::db::schema::SCHEMA_VERSION.to_string());
 
         db.set_kv("test_key", "test_val").expect("set_kv");
         assert_eq!(db.get_kv("test_key").expect("get_kv").unwrap(), "test_val");

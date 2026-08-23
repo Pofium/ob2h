@@ -31,6 +31,40 @@ pub enum Commands {
         #[command(subcommand)]
         command: PluginCommands,
     },
+    /// Синхронизация двух инстансов ob2h (бандлы, PC ↔ VPS)
+    Sync {
+        #[command(subcommand)]
+        command: SyncCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SyncCommands {
+    /// Статус: конфиг пирингов, watermark'ы, бандлы в outbox/inbox
+    Status,
+    /// Выгрузить бандл изменений для пира в data/sync/outbox/
+    Export {
+        /// Имя пира из peers.json (watermark ведётся на пира; дефолт: default)
+        #[arg(short, long, default_value = "default")]
+        peer: String,
+    },
+    /// Применить бандл(и) из файлов
+    Import {
+        /// Пути к файлам бандлов (.jsonl.gz)
+        files: Vec<String>,
+    },
+    /// Применить все бандлы из data/sync/inbox/
+    ApplyInbox,
+    /// Экспорт + scp бандла на пир (method=ssh)
+    Push {
+        #[arg(short, long)]
+        peer: String,
+    },
+    /// scp бандлов пира в inbox + применение (method=ssh)
+    Pull {
+        #[arg(short, long)]
+        peer: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

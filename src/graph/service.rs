@@ -119,7 +119,7 @@ impl GraphService {
 
                 self.db.with_conn(|conn| {
                     conn.execute(
-                        "UPDATE graph_nodes SET val = val + 1, description = ?1, updated_at = ?2 WHERE id = ?3",
+                        "UPDATE graph_nodes SET val = val + 1, description = ?1, updated_at = ?2, origin = '' WHERE id = ?3",
                         params![desc, now, id],
                     )?;
                     Ok(())
@@ -181,8 +181,8 @@ impl GraphService {
 
                 self.db.with_conn(|conn| {
                     conn.execute(
-                        "UPDATE graph_edges SET weight = weight + 1, contexts = ?1 WHERE id = ?2",
-                        params![ctx_str, edge_id],
+                        "UPDATE graph_edges SET weight = weight + 1, contexts = ?1, updated_at = ?2, origin = '' WHERE id = ?3",
+                        params![ctx_str, crate::db::utcnow(), edge_id],
                     )?;
                     Ok(())
                 })?;
@@ -233,7 +233,7 @@ impl GraphService {
 
         // 1. Полнотекстовый / лексический скоринг
         let all_nodes = self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT id, label, description FROM graph_nodes")?;
+            let mut stmt = conn.prepare("SELECT id, label, description FROM graph_nodes WHERE deleted_at IS NULL")?;
             let rows = stmt.query_map([], |row| {
                 let id: i64 = row.get(0)?;
                 let label: String = row.get(1)?;
@@ -267,7 +267,7 @@ impl GraphService {
         if let Ok(q_embs) = self.embedder.embed(&[query.to_string()]).await {
             if let Some(q_vec) = q_embs.first() {
                 let candidates = self.db.with_conn(|conn| {
-                    let mut stmt = conn.prepare("SELECT id, embedding FROM graph_nodes WHERE embedding IS NOT NULL")?;
+                    let mut stmt = conn.prepare("SELECT id, embedding FROM graph_nodes WHERE embedding IS NOT NULL AND deleted_at IS NULL")?;
                     let rows = stmt.query_map([], |row| {
                         let id: i64 = row.get(0)?;
                         let blob: Vec<u8> = row.get(1)?;
@@ -334,7 +334,7 @@ impl GraphService {
                     FROM graph_edges e
                     JOIN graph_nodes s ON s.id = e.source_id
                     JOIN graph_nodes t ON t.id = e.target_id
-                    WHERE e.source_id = ?1 OR e.target_id = ?1
+                    WHERE (e.source_id = ?1 OR e.target_id = ?1) AND e.deleted_at IS NULL
                     "#,
                 )?;
                 let rows = stmt.query_map(params![id], |row| {
@@ -443,8 +443,8 @@ impl GraphService {
 
     pub fn stats(&self) -> anyhow::Result<GraphStats> {
         self.db.with_conn(|conn| {
-            let nodes: i64 = conn.query_row("SELECT count(*) FROM graph_nodes", [], |r| r.get(0))?;
-            let edges: i64 = conn.query_row("SELECT count(*) FROM graph_edges", [], |r| r.get(0))?;
+            let nodes: i64 = conn.query_row("SELECT count(*) FROM graph_nodes WHERE deleted_at IS NULL", [], |r| r.get(0))?;
+            let edges: i64 = conn.query_row("SELECT count(*) FROM graph_edges WHERE deleted_at IS NULL", [], |r| r.get(0))?;
             let documents: i64 = conn.query_row("SELECT count(*) FROM documents", [], |r| r.get(0))?;
             let chunks: i64 = conn.query_row("SELECT count(*) FROM chunks", [], |r| r.get(0))?;
             Ok(GraphStats {

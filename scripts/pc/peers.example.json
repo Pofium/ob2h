@@ -1,0 +1,13 @@
+{
+  "origin": "pc",
+  "priority": ["pc", "vps"],
+  "after_dream": true,
+  "peers": {
+    "vps": {
+      "method": "ssh",
+      "host": "vps-alt",
+      "push_to": "/root/ob2h_data/sync/inbox",
+      "pull_from": "/root/ob2h_data/sync/outbox"
+    }
+  }
+}

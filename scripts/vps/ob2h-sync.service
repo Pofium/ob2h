@@ -1,0 +1,9 @@
+[Unit]
+Description=OB2H sync: применить входящие бандлы + подготовить исходящие
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=OB2H_DATA_DIR=/root/ob2h_data
+ExecStart=/bin/bash -lc '/usr/local/bin/ob2h sync apply-inbox && /usr/local/bin/ob2h sync export --peer pc'
+# VPS не ходит на PC сам (PC за NAT): PC делает push/pull, здесь только импорт+экспорт

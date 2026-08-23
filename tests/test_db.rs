@@ -6,7 +6,7 @@ fn test_database_initialization_and_fts_trigram() {
 
     // Проверка версии миграции
     let version = db.get_kv("schema_version").expect("get_kv").expect("version exists");
-    assert_eq!(version, "1");
+    assert_eq!(version, ob2h::db::schema::SCHEMA_VERSION.to_string());
 
     // Вставляем воспоминание на русском языке
     db.with_conn(|conn| {

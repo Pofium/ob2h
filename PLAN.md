@@ -227,13 +227,13 @@ AutoDreamWorker уважает все три гейта (тесты со вре�
 (`ob2h sync export/import/status/push/pull`), LWW + tombstones, транспорт
 ssh/manual (`data/sync/peers.toml`), фаза автодрима `after_dream`.
 
-- [ ] **8.1** M2-миграция + tombstone-семантика `memory_forget`/purge (поиск фильтрует,
+- [x] **8.1** M2-миграция + tombstone-семантика `memory_forget`/purge (поиск фильтрует,
       физическое удаление отложено).
-- [ ] **8.2** Export/import бандлов: идемпотентность, LWW, авто-бэкап перед новым бандлом.
-- [ ] **8.3** peers.toml + push/pull через системный ssh/scp + systemd timer / Task Scheduler
+- [x] **8.2** Export/import бандлов: идемпотентность, LWW, авто-бэкап перед новым бандлом.
+- [x] **8.3** peers.toml + push/pull через системный ssh/scp + systemd timer / Task Scheduler
       скрипты (`scripts/vps/`, `scripts/pc/`).
-- [ ] **8.4** Фаза автодрима after_dream (best-effort, не роняет дрим).
-- [ ] **8.5** Тесты PLAN_v0.8 §8.5 (roundtrip, LWW, tombstone, идемпотентность, миграция,
+- [x] **8.4** Фаза автодрима after_dream (best-effort, не роняет дрим).
+- [x] **8.5** Тесты PLAN_v0.8 §8.5 (roundtrip, LWW, tombstone, идемпотентность, миграция,
       даунгрейт, битые бандлы).
 
 ### Фаза 9 — Скилл, доки, релиз 0.8.0 (оценка 1 день)
@@ -302,4 +302,5 @@ ssh/manual (`data/sync/peers.toml`), фаза автодрима `after_dream`.
 | 2026-08-23 | **ADR-9**: синхронизация — файловые gzip-бандлы поверх SSH/manual; ob2h не открывает портов и не получает сетевых зависимостей (ADR-1/7 сохраняются) | транспорт файлов вместо сетевого MCP |
 | 2026-08-23 | **ADR-10**: интеграция с Hermes — MemoryProvider-плагин (Python, stdlib-only) поверх долгоживущего `ob2h serve`; MCP-режим v0.7.1 остаётся поддержанным фолбэком (Mode 0) | детерминированный поток вместо инициативы модели |
 | 2026-08-23 | **ADR-11**: `memory_forget`/purge переходят на tombstones (`deleted_at`), физическое удаление отложено в maintenance | LWW-совместимость синка |
+| 2026-08-23 | Фаза 8: конфиг пирингов — `data/sync/peers.json` вместо peers.toml (не тянуть toml-крейт), транспорт ssh/scp; добавлена зависимость `flate2` (gzip-бандлы) | простота, лёгкость |
 | 2026-08-23 | Замена скилла `$HERMES_HOME/skills/devops/ob2h/` на версию из репо (`skills/ob2h/`) разрешена владельцем явно; конфиг Hermes по-прежнему руками | заказ владельца |
