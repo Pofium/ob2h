@@ -50,6 +50,9 @@ ob2h skill install   # деплой skills/ob2h/SKILL.md в $HERMES_HOME/skills/
 
 ## Синхронизация двух машин (PC ↔ VPS, v0.9+)
 
+> Полный гайд (сценарии, режим manual, конфликты, безопасность, troubleshooting) —
+> [`docs/SYNC.md`](SYNC.md). Ниже — краткая настройка.
+
 Обмен — инкрементальные gzip-бандлы (memories + граф) поверх SSH; LWW по `updated_at`,
 удаления — tombstones; идемпотентно; авто-бэкап перед каждым новым бандлом.
 **Инициатива всегда на PC** (VPS за ним не может ходить — PC за NAT).

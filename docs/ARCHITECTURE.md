@@ -1,54 +1,70 @@
 # Архитектура OB2H
 
-Целевая архитектура локального MCP-хранилища знаний для Hermes.
-Решения зафиксированы в `PLAN.md` §1 (ADR-1…ADR-8), источники портирования —
-в `REFERENCE_omnesbot.md`.
+Архитектура локального MCP-хранилища знаний для Hermes (Rust, v0.9).
+Решения зафиксированы в `PLAN.md` §1 (ADR-1…ADR-8) и §6 (ADR-9…ADR-11:
+синхронизация, MemoryProvider-плагин, tombstones). Источники портирования —
+`REFERENCE_omnesbot.md`.
 
 ---
 
 ## 1. Компоненты
 
+Два способа подключения к Hermes (подробно — `HERMES_INTEGRATION.md`):
+
 ```
-                       Hermes (Nous Research)
-                         │  stdio, JSON-RPC (MCP)
-                         ▼
-┌────────────────────────────────────────────────────────────────┐
-│ ob2h.server — FastMCP                                  │
-│                                                                │
-│  Инструменты (см. §4)                                          │
-│  ├─ память:      memory_save/search/update/forget/context      │
-│  ├─ workspace:   workspace_read/write, session_log             │
-│  ├─ граф:        knowledge_extract, graph_search/reason/stats  │
-│  ├─ дриминг:     dream_run/status/log/restore                  │
-│  └─ сервис:      omnes_stats, omnes_backup                     │
-│                                                                │
-│  Сервисы                                                       │
-│  ├─ memory_service ── гибридный поиск (FTS5+вектор, RRF k=60)  │
-│  ├─ consolidator  ── суммаризация сессий по бюджету токенов    │
-│  ├─ extractor     ── чанкинг → LLM-извлечение сущностей        │
-│  ├─ graph_service ── граф знаний, дедуп, эмбеддинги узлов       │
-│  ├─ dream         ── фаза 1 (анализ) + фаза 2 (агентные правки)│
-│  ├─ autodream     ── фоновый поток (гейты 4ч/10 событий/lock)  │
-│  ├─ llm_client    ── OpenAI-совместимый API (единственная сеть)│
-│  └─ embedding     ── fastembed ONNX CPU | API /embeddings      │
-│                                                                │
-│  Хранилища                                                     │
-│  ├─ SQLite data/ob2h.db (WAL; FTS5-trigram; BLOB-вектора)     │
-│  ├─ Файлы data/workspace/ (MD + history.jsonl + курсоры)       │
-│  └─ git data/workspace/.git (авто-коммиты дрима, restore)      │
-└────────────────────────────────────────────────────────────────┘
+            Режим A (целевой): MemoryProvider-плагин          Режим 0/фолбэк: MCP stdio
+            ┌──────────────────────────────┐                 ┌──────────────────────┐
+            │ Hermes ($HERMES_HOME/        │                 │ Hermes config.yaml   │
+            │   plugins/ob2h/, Python)     │                 │   mcp_servers.ob2h   │
+            │  prefetch → <agent_memory>   │                 │  mcp__ob2h__* tools  │
+            │  sync_turn → session_ingest  │                 └──────────┬───────────┘
+            │  get_tool_schemas → ob2h-*   │                            │ JSON-RPC/stdio
+            └───────────────┬──────────────┘                            │
+                            │ JSON-RPC/stdio (долгоживущий subprocess)  │
+                            ▼                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ ob2h serve (один Rust-бинарник; конкурентная обработка JSON-RPC)                │
+│                                                                                  │
+│  Инструменты (см. §4):                                                          │
+│  ├─ память:      memory_save/search/update/forget/context                       │
+│  ├─ workspace:   workspace_read/write, session_log, session_ingest              │
+│  ├─ граф:        knowledge_extract, graph_search/reason/stats                   │
+│  ├─ дриминг:     dream_run/status/log/restore                                   │
+│  └─ сервис:      omnes_stats, omnes_backup                                      │
+│                                                                                  │
+│  Сервисы (src/)                                                                 │
+│  ├─ memory/     ── гибридный поиск (FTS5+вектор, RRF k=60), tombstones          │
+│  ├─ consolidator── суммаризация сессий по бюджету токенов                       │
+│  ├─ extractor   ── чанкинг → LLM-извлечение сущностей (OneKE-lite)              │
+│  ├─ graph/      ── граф знаний KAG-lite, дедуп sha256(label|type), эмбеддинги   │
+│  ├─ dream/      ── фаза 1 (анализ) + фаза 2 (агентные правки) + autodream       │
+│  │                 (гейты 4ч/10 событий/lock; maintenance: decay/purge/tombstones)│
+│  ├─ sync/       ── бандлы PC↔VPS: export/import/push/pull, LWW (ADR-9)          │
+│  ├─ llm/        ── OpenAI-совместимый API (единственная сеть)                   │
+│  ├─ embedding/  ── Candle MiniLM (in-process, CPU) | API /embeddings            │
+│  └─ backup/     ── VACUUM INTO + workspace, ротация 14                          │
+│                                                                                  │
+│  Хранилища                                                                       │
+│  ├─ SQLite data/ob2h.db (WAL, busy_timeout; FTS5-trigram; BLOB-вектора)         │
+│  ├─ Файлы data/workspace/ (MD + history.jsonl + daily/*.jsonl + курсоры)        │
+│  ├─ git data/workspace/.git (авто-коммиты дрима, restore)                       │
+│  └─ data/sync/ (peers.json, бандлы outbox/inbox)                                │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Жизненный цикл: Hermes спавнит процесс при старте (stdio), инструменты доступны
-в чате; AutoDreamWorker живёт внутри процесса — работает, пока запущен Hermes.
+Жизненный цикл: процесс поднимается Hermes'ом (MCP-спавн или плагин), инструменты
+доступны в чате; AutoDreamWorker и after_dream-синк живут внутри процесса.
+CLI (`ob2h …`) открывает ту же БД параллельно — WAL + busy_timeout это позволяют.
 
 ## 2. Схема SQLite (`data/ob2h.db`)
 
-Все таблицы создаются версионными миграциями (`db.py`, версия в `kv.schema_version`).
+Версионные миграции в `src/db/schema.rs` (версия в `kv.schema_version`).
+M1 — базовые таблицы; M2 (v0.9) — аддитивные колонки синхронизации + `sync_state`,
+перед применением на живой БД создаётся бэкап `backups/pre-v08-*.db`.
 
 ```sql
--- Курсоры, версия схемы, размерность эмбеддингов, состояние autodream
 CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- версия схемы, размерность эмбеддингов, дедуп session_ingest, watermark'ы…
 
 -- Факты памяти (порт agent_memories из OmnesBOT)
 CREATE TABLE memories (
@@ -57,48 +73,48 @@ CREATE TABLE memories (
   content TEXT NOT NULL,
   category TEXT DEFAULT 'general',
   importance REAL DEFAULT 0.5,         -- 0..1, decay + purge по порогам
-  source TEXT,                         -- откуда: chat|dream|extract|manual
-  meta TEXT,                           -- JSON
+  source TEXT,                         -- chat|dream|extract|manual|sync|hermes-builtin
+  meta TEXT,
   embedding BLOB,                      -- float32[d], little-endian
   created_at TEXT, updated_at TEXT,
   access_count INTEGER DEFAULT 0,
-  last_accessed TEXT
+  last_accessed TEXT,
+  -- M2 (синк):
+  origin TEXT NOT NULL DEFAULT '',     -- '' = «этот узел»; иначе pc/vps/…
+  deleted_at TEXT                      -- tombstone: скрыт из поиска, реплицируется
 );
 
--- Связи между воспоминаниями (порт agent_memory_relations)
 CREATE TABLE memory_relations (
   source_key TEXT NOT NULL REFERENCES memories(key) ON DELETE CASCADE,
   target_key TEXT NOT NULL REFERENCES memories(key) ON DELETE CASCADE,
   relation_type TEXT NOT NULL,
   weight REAL DEFAULT 1.0,
   UNIQUE (source_key, target_key, relation_type)
-);
+);  -- локальная, не синхронизируется (выводится дримом заново)
 
--- Инжест документов (фаза 4)
 CREATE TABLE documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT, path TEXT, meta TEXT,
-  created_at TEXT
-);
+  title TEXT, path TEXT, meta TEXT, created_at TEXT
+);  -- не синхронизируются: ре-ингестируемы knowledge_extract
 CREATE TABLE chunks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-  ordinal INTEGER NOT NULL,
-  text TEXT NOT NULL,
-  embedding BLOB,
-  created_at TEXT
+  ordinal INTEGER NOT NULL, text TEXT NOT NULL,
+  embedding BLOB, created_at TEXT
 );
 
--- Граф знаний (порт graph_nodes/graph_edges, PG-путь без Neo4j)
+-- Граф знаний (PG-путь KAG без Neo4j)
 CREATE TABLE graph_nodes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   node_id TEXT UNIQUE NOT NULL,        -- sha256(label|type) — дедуп при экстракции
   label TEXT NOT NULL,
   node_type TEXT NOT NULL,             -- Person|Organization|Location|Event|Concept|Artifact|Other
   description TEXT,
-  val INTEGER DEFAULT 1,               -- счётчик упоминаний (инкремент при дедупе)
+  val INTEGER DEFAULT 1,               -- счётчик упоминаний
   embedding BLOB,                      -- "{label}: {description}"
-  created_at TEXT, updated_at TEXT
+  created_at TEXT, updated_at TEXT,
+  origin TEXT NOT NULL DEFAULT '',     -- M2
+  deleted_at TEXT                      -- M2
 );
 CREATE TABLE graph_edges (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,27 +124,34 @@ CREATE TABLE graph_edges (
   weight REAL DEFAULT 1.0,
   contexts TEXT,                       -- JSON: строки-контексты упоминаний
   created_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT '', -- M2 (backfill из created_at)
+  origin TEXT NOT NULL DEFAULT '',     -- M2
+  deleted_at TEXT,                     -- M2
   UNIQUE (source_id, target_id, label)
 );
 
--- Журнал запусков дрима (фаза 5)
 CREATE TABLE dream_runs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at TEXT, finished_at TEXT,
-  status TEXT,                         -- running|ok|error
-  trigger TEXT,                        -- manual|auto
-  phase_log TEXT,                      -- JSON: [{phase, summary, files_changed}]
-  stats TEXT                           -- JSON: записей обработано, правок, коммит
+  status TEXT, trigger TEXT, phase_log TEXT, stats TEXT
 );
 
--- Полнотекстовый индекс: русский через trigram (проверено на целевом Python)
+-- M2: состояние синхронизации (watermark на пира + идемпотентность импортов)
+CREATE TABLE sync_state (
+  peer TEXT PRIMARY KEY,               -- имя пира или '__imports' (журнал применённых)
+  last_export_at TEXT,
+  last_import_at TEXT,
+  applied_bundles TEXT NOT NULL DEFAULT '[]'
+);
+
+-- Полнотекстовый индекс: русский через trigram
 CREATE VIRTUAL TABLE memories_fts USING fts5(
   content, content='memories', content_rowid='id', tokenize='trigram'
 );
 CREATE VIRTUAL TABLE chunks_fts USING fts5(
   text, content='chunks', content_rowid='id', tokenize='trigram'
 );
--- + триггеры INSERT/UPDATE/DELETE для синхронизации с основными таблицами
+-- + триггеры INSERT/UPDATE/DELETE
 ```
 
 Индексы: `memories(category, importance DESC)`, `graph_nodes(label)`,
@@ -140,111 +163,112 @@ CREATE VIRTUAL TABLE chunks_fts USING fts5(
 
 ```
 workspace/
-├── SOUL.md               # идентичность/характер (редко меняется, правится дримом)
+├── SOUL.md               # идентичность/характер (правится дримом)
 ├── USER.md               # факты о владельце
 ├── memory/
-│   ├── MEMORY.md         # долгосрочные факты — инъектируются memory_context()
-│   ├── history.jsonl     # консолидированные итоги сессий, {"cursor","timestamp","content"}
+│   ├── MEMORY.md         # долгосрочная выжимка — входит в memory_context()
+│   ├── history.jsonl     # консолидированные итоги сессий
 │   ├── .cursor           # последний обработанный консолидатором ход
 │   └── .dream_cursor     # последний обработанный дримом ход
-└── daily/                # MemoryV2-события по дням, food для автодрима
-    └── YYYY-MM-DD.jsonl  # {"timestamp","query","answer_preview","source",...}
+└── daily/                # события по дням — пища автодрима/dream-extract
+    └── YYYY-MM-DD.jsonl  # {"timestamp","user_text","assistant_text","meta"}
 ```
 
-`memory_context()` собирает блок `<agent_memory>`: топ-факты по важности из
-`memories` + текущий `MEMORY.md` — Hermes вставляет в промпт по своему усмотрению.
+Workspace и daily-логи **не синхронизируются** — это локальные представления;
+после мержа БД дрим каждой машины перегенерирует свои MD из общей памяти.
 
-## 4. Контракт MCP-инструментов
+## 4. Контракт MCP-инструментов (19)
 
-Имена — snake_case с префиксом домена. Ответы компактные (Hermes режет вывод
-на 50 000 байт; длинное — обрезается с маркером `…[truncated]`).
+Имена — snake_case с префиксом домена. Ответы компактные (лимит Hermes 50 000 байт;
+длинное обрезается с `…[truncated]`). Ошибки — строка `[Error] …`, не исключение.
+Плагин (Mode A) не экспонирует модели: `session_log`, `session_ingest` (автоматика)
+и `memory_search`/`memory_context` (замещены prefetch-инъекцией).
 
 | Инструмент | Аргументы | Возвращает |
 |---|---|---|
-| `memory_save` | `content, key?, category?, importance?` | ключ, статус |
-| `memory_search` | `query, limit?, mode?` (auto/fts/vector/hybrid) | топ-записи с score |
-| `memory_update` | `key, content?, importance?` | статус |
-| `memory_forget` | `key` | статус |
-| `memory_context` | — | блок фактов для промпта |
+| `memory_save` | `content, key?, category?, importance?, source?` | ключ, статус |
+| `memory_search` | `query, limit?, mode?` (hybrid/fts/vector) | топ-записи с score |
+| `memory_update` | `key, content?, importance?, category?` | статус |
+| `memory_forget` | `key` | статус (tombstone) |
+| `memory_context` | `query?, max_tokens?` | блок `<agent_memory>` |
 | `workspace_read` | `file` (memory/soul/user/history) | содержимое |
-| `workspace_write` | `file, content` | статус (+git-коммит) |
-| `session_log` | `user_text, assistant_text, meta?` | статус + факт консолидации |
-| `knowledge_extract` | `text \| file_path, max_chunks?` | статистика: сущности/отношения/чанки |
+| `workspace_write` | `file, content, commit_message?` | статус (+git-коммит) |
+| `session_log` | `user_text, assistant_text, source?` | статус + консолидация |
+| `session_ingest` | `messages[{role,content}], source?, session_id?` | пары + дедуп по позиции |
+| `knowledge_extract` | `text \| file_path, max_chunks?` | сущности/отношения/чанки |
 | `graph_search` | `query, limit?` | узлы+рёбра со скорингом |
-| `graph_reason` | `query` | `{answer, confidence, used_entities, reasoning_steps}` |
+| `graph_reason` | `query` | `{answer, confidence, used_entities, steps}` |
 | `graph_stats` | — | счётчики графа |
-| `dream_run` | — | id запуска (фон) |
-| `dream_status` | — | состояние, последний запуск |
+| `dream_run` | `background?` | id запуска |
+| `dream_status` | — | состояние, гейты |
 | `dream_log` | `limit?` | история dream-коммитов |
 | `dream_restore` | `commit` | статус отката |
-| `omnes_stats` | — | счётчики всех хранилищ |
+| `omnes_stats` | — | счётчики хранилищ |
 | `omnes_backup` | — | путь к бэкапу |
 
 ## 5. Потоки данных
 
-**Память:** Hermes вызывает `memory_save`/`session_log` → запись + эмбеддинг →
-`memory_search(query)` → FTS5 + cosine → RRF(k=60) → топ-K.
+**Память (автоматическая, Mode A):** каждый ход — плагин `sync_turn` →
+`session_ingest` (полный префикс сессии; сервер пишет только хвост по дедупу) →
+daily-лог; перед ходом плагин `prefetch` → `memory_context`/`memory_search` →
+инъекция `<agent_memory>` (+ `recall_status` 🧠). Явное сохранение — `memory_save`.
+
+**Поиск:** `memory_search(query)` → FTS5 (trigram) + cosine по BLOB → RRF(k=60) →
+топ-K. Tombstones отфильтрованы на всех ветках.
 
 **Знания:** `knowledge_extract` → чанки (3000/300, границы предложений) → LLM-JSON
-(сущности/отношения) → валидация + инференс отношений + фильтр мусора → upsert
-в граф (дедуп по `node_id`, val++) → эмбеддинг узлов → `graph_reason` →
-ретрив (граф 1-hop + вектор + FTS) → блок фактов → LLM-ответ.
+→ валидация + инференс отношений (~44 шаблона) + фильтр мусора → upsert в граф
+(дедуп `node_id`, val++) → эмбеддинг узлов → `graph_reason` → ретрив
+(граф 1-hop + вектор + FTS) → LLM-ответ с confidence.
 
-**Дриминг:** daily-логи + history.jsonl накапливаются → `dream_run` (ручной или
-автогейты ≥4ч/≥10 событий) → фаза 1: LLM-анализ новой истории на фоне текущих
-MD-файлов → фаза 2: агентный цикл (≤10 итераций) с read/edit/done →
-правки MEMORY/SOUL/USER → **dream-extract**: сущности и отношения из новых записей
-сессий извлекаются в общий граф (тот же пайплайн, что у документов; дедуп по
-`node_id` склеивает узлы из диалогов и документов, `val` растёт с каждым
-упоминанием) → git auto-commit `dream: <дата>` → `dream_restore` откатывает.
-Выключается `OB2H_DREAM_EXTRACT_ENABLED=false`.
+**Дриминг:** daily-логи накапливаются → автогейты ≥4ч/≥10 событий → фаза 1: LLM-анализ;
+фаза 2: агентный цикл правки MD (≤10 итераций) → dream-extract: сущности из сессий
+в общий граф → git auto-commit → `dream_restore` откатывает. Maintenance:
+decay важности, purge слабых (tombstone), физическая чистка tombstones
+(retention×2 — чтобы удаления успели уйти пирам).
 
-**Граф — один на владельца.** Сессии и документы попадают в одни и те же
-`graph_nodes`/`graph_edges`; дедуп по sha256(label|type) объединяет повторные
-упоминания. Эмбеддятся: (а) чанки документов — в `chunks.embedding` для поиска
-по тексту, (б) узлы графа как `"{label}: {description}"` — в `graph_nodes.embedding`
-для векторной ветки `graph_search`/`graph_reason`, (в) воспоминания — в
-`memories.embedding`. Сами записи сессий (daily/history) не векторизуются —
-в граф попадают только извлечённые из них сущности.
+**Синхронизация (ADR-9):** `sync export` — строки четырёх синхронизируемых таблиц
+с `MAX(updated_at, deleted_at) >= watermark(пира)` → gzip-бандл (hex-эмбеддинги
+внутри; origin нормализуется из ''). `sync import` — транзакция целиком: LWW
+(`updated_at`, tie-break `priority` по origin), no-op для идентичных строк,
+tombstones, идемпотентность `applied_bundles`, авто-бэкап перед новым бандлом.
+Транспорт: scp (peer method=ssh) или manual. Полный гайд — `SYNC.md`.
 
 ## 6. Конфигурация (env, префикс `OB2H_`)
 
 | Переменная | Дефолт | Назначение |
 |---|---|---|
-| `OB2H_DATA_DIR` | `<проект>/data` | БД + workspace + lock |
+| `OB2H_DATA_DIR` | `<проект>/data` | БД + workspace + sync + lock |
 | `OB2H_LLM_BASE_URL` | `https://api.deepseek.com/v1` | OpenAI-совместимый API |
-| `OB2H_LLM_API_KEY` | — | ключ (обязателен для фаз 3+) |
+| `OB2H_LLM_API_KEY` | — | **имя env-переменной** с ключом (индрекция; фолбэк — литерал) |
 | `OB2H_LLM_MODEL` | `deepseek-v4-flash` | модель dream/extract/reason |
-| `OB2H_EMBED_PROVIDER` | `local` | `local` (fastembed, in-process) \| `api` |
-| `OB2H_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | для local; для api — имя модели |
-| `OB2H_DREAM_EXTRACT_ENABLED` | `true` | извлечение сущностей из сессий в граф при дриме |
+| `OB2H_EMBED_PROVIDER` | `local` | `local` (Candle, in-process) \| `api` \| `fake` (тесты) |
+| `OB2H_EMBED_MODEL` | `paraphrase-multilingual-MiniLM-L12-v2` | для local; для api — имя модели |
+| `OB2H_EMBED_BASE_URL` / `OB2H_EMBED_API_KEY` | — | для `api`-провайдера |
+| `OB2H_CONTEXT_WINDOW` | `65536` | бюджет консолидатора |
+| `OB2H_AUTODREAM_ENABLED` | `true` | фоновый дрим (+ after_dream синк) |
+| `OB2H_DREAM_EXTRACT_ENABLED` | `true` | извлечение сущностей из сессий в граф |
+| `OB2H_RETENTION_DAYS` | `30` | ротация daily-логов; tombstones ×2 |
+| `OB2H_LOG_LEVEL` | `INFO` | логирование |
 
-**Эмбеддинги — варианты (выбор владельца):**
+**Эмбеддинги — варианты:**
 
 | Вариант | Качество (рус) | Зависимости | Когда использовать |
 |---|---|---|---|
-| `local` + multilingual-MiniLM-L12-v2 (дефолт, 0.22 ГБ, 384d) | хорошее | ничего внешнего, модель уже скачана в `~/.cache/fastembed` | всегда работает вместе с Hermes |
-| `api` + LM Studio `embeddinggemma-300m-qat` (уже скачана у владельца, 768d) | лучше | LM Studio запущен как сервер (localhost:1234) | если LM Studio и так крутится |
-| `api` + Ollama `mxbai-embed-large` (уже скачана, 1024d) | слабее для русского | `ollama serve` | не рекомендуется для RU |
+| `local` + MiniLM-L12-v2 (дефолт, 384d) | хорошее | ничего — чистый Rust/Candle, кэш `~/.cache/huggingface` | всегда; одинаковые векторы на всех машинах (важно для синка) |
+| `api` + LM Studio / Ollama / любой OpenAI-совместимый | зависит от модели | внешний сервер | если локальная модель уже крутится; при смешивании провайдеров недостающие векторы пересчитываются на приёмнике |
 
-Пример переиспользования LM Studio (без скачивания):
-
-```yaml
-OB2H_EMBED_PROVIDER: api
-OB2H_EMBED_BASE_URL: http://localhost:1234/v1
-OB2H_EMBED_MODEL: lmstudio-community/embeddinggemma-300m-qat-GGUF
-```
-| `OB2H_EMBED_BASE_URL` / `OB2H_EMBED_API_KEY` | — | для `api`-провайдера |
-| `OB2H_CONTEXT_WINDOW` | `65536` | бюджет консолидатора |
-| `OB2H_AUTODREAM_ENABLED` | `true` | фоновый дрим |
-| `OB2H_RETENTION_DAYS` | `30` | ротация daily-логов |
-| `OB2H_LOG_LEVEL` | `INFO` | логирование |
+**Синхронизация** настраивается не env, а `data/sync/peers.json`
+(origin, priority, peers, after_dream) — см. `SYNC.md`.
 
 ## 7. Надёжность
 
-- SQLite WAL + `foreign_keys=ON`; все записи — короткие транзакции.
-- Курсоры консолидации/дрима в kv-таблице и dot-файлах — любое прерывание
-  возобновляется с места (идемпотентность по курсору).
-- Lock-файл автодрима (stale 1ч) защищает от параллельных запусков.
-- Бэкап: `VACUUM INTO` + копия workspace → `backups/`, ротация 14 копий.
-- Логи: `logs/ob2h.log`, ротация по 5 МБ, 5 файлов.
+- SQLite WAL + `foreign_keys=ON` + `busy_timeout=5000` (несколько процессов:
+  плагин + mcp_servers + CLI); все записи — короткие транзакции.
+- Курсоры консолидации/дрима — идемпотентность после любого сбоя; lock автодрима
+  (stale 1ч) защищает от параллельных запусков.
+- Бэкап: `VACUUM INTO` + workspace → `backups/`, ротация 14; дополнительно перед
+  миграцией M2 и перед каждым новым синк-бандлом.
+- Миграции аддитивные и даунгрейт-безопасные (новые колонки с DEFAULT; старый
+  бинарник продолжает работать).
+- Логи: `data/logs/ob2h.log`.
