@@ -3,6 +3,28 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [0.9.0] — 2026-08-23
+
+### Added
+- **Синхронизация двух инстансов PC ↔ VPS** (ADR-9): инкрементальные gzip-бандлы JSONL
+  поверх SSH/manual, `ob2h sync status/export/import/apply-inbox/push/pull`.
+  LWW по `updated_at` + tie-break по приоритету `origin`, tombstones, идемпотентность
+  по bundle_id, авто-бэкап перед каждым новым бандлом, эмбеддинги в бандле
+  (или re-embed локальной моделью). Фаза автодрима `after_dream` (best-effort).
+- **Миграция M2** (аддитивная): `origin`/`deleted_at`/`updated_at` +
+  `sync_state`; авто-бэкап `pre-v08-*.db` перед миграцией живой БД; даунгрейт-безопасно.
+- **Tombstones**: `memory_forget`/`purge_weak` реплицируют удаление, поиск и контекст
+  фильтруют удалённое, физическая чистка — в maintenance автодрима (retention×2).
+- **CLI `ob2h skill install`**: скилл из репо (`skills/ob2h/`) деплоится в Hermes
+  с подстановкой путей машины (единый исходник Windows/Linux).
+- Обвязка синка: systemd-таймер (`scripts/vps/`), Task Scheduler-скрипт
+  (`scripts/pc/`), образец `peers.json`.
+- SQLite `busy_timeout`, `origin=''`-семантика («строка этого узла»).
+
+### Changed
+- AGENTS.md/docs приведены к Rust-реальности; HERMES_INTEGRATION.md переписан
+  (режимы 0/A/B, синк, обновление).
+
 ## [0.8.0] — 2026-08-23
 
 ### Added

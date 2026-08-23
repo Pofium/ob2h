@@ -40,21 +40,29 @@
 
 ```
 omnesbot_for_hermes/
-├── AGENTS.md / CLAUDE.md / README.md / PLAN.md / CHANGELOG.md
-├── .mcp.json                  # codegraph (MCP для разработки)
-├── pyproject.toml
-├── src/ob2h/          # весь код пакета
-│   ├── config.py  db.py  embedding.py  vector.py     # фаза 1
-│   ├── memory_service.py  workspace.py  gitstore.py  # фаза 2
-│   │   server.py
-│   ├── llm_client.py  consolidator.py                # фаза 3
-│   ├── ingest.py  extractor.py  graph_service.py     # фаза 4
-│   ├── dream.py  autodream.py                        # фаза 5
-│   └── backup.py                                      # фаза 6
-├── tests/                     # зеркало структуры src, имя test_*.py
-├── docs/                      # ARCHITECTURE / REFERENCE_omnesbot / HERMES_INTEGRATION
-├── logs/                      # runtime-логи сервера (gitignored)
-└── data/                      # БД + файловый workspace + их git (gitignored)
+├── AGENTS.md / README.md / PLAN.md / CHANGELOG.md
+├── Cargo.toml                 # Rust 1.80+, flate2 (бандлы синка)
+├── src/                       # весь Rust-код (бинарник ob2h.exe / ob2h)
+│   ├── main.rs  cli/          # точка входа, clap-подкоманды (serve/dream/backup/
+│   │                          #   stats/install/plugin/skill/sync)
+│   ├── config.rs  db/         # env-конфиг; SQLite WAL+FTS5+миграции (M1, M2)
+│   ├── embedding/  vector/    # Candle MiniLM / API; косинус+RRF
+│   ├── memory/                # MemoryService (tombstones с v0.9)
+│   ├── workspace/             # MD-файлы + daily-логи + git
+│   ├── llm/  consolidator/    # OpenAI-клиент, суммаризация сессий
+│   ├── ingest/  extractor/  graph/   # документы, OneKE-lite, KAG-lite граф
+│   ├── dream/                 # Dream + AutoDreamWorker (+ after_dream sync)
+│   ├── sync/                  # бандлы PC<->VPS: export/import/push/pull
+│   ├── backup/                # VACUUM INTO + ротация
+│   └── mcp/                   # stdio JSON-RPC, 19 инструментов
+├── plugin/ob2h/               # MemoryProvider-плагин Hermes (Python, stdlib-only)
+│   └── tests/                 # unittest: RPC-клиент, провайдер, интеграция
+├── skills/ob2h/               # исходник скилла (темплейты путей {{...}})
+├── scripts/                   # pc/ (sync-task.ps1, peers-образец), vps/ (systemd)
+├── tests/                     # интеграционные Rust-тесты test_*.rs
+├── docs/                      # ARCHITECTURE / REFERENCE_omnesbot / HERMES_INTEGRATION / PLAN_v0.8
+├── logs/                      # runtime-логи (gitignored)
+└── data/                      # БД + workspace + sync/ (бандлы, peers.json) — gitignored
 ```
 
 Новые модули — только по плану. Если нужен модуль вне плана → сначала запись в
@@ -63,11 +71,13 @@ omnesbot_for_hermes/
 ## 5. Команды
 
 ```bash
-python -m venv .venv                          # однократно
-.venv/Scripts/pip install -e ".[dev]"         # после смены зависимостей
-.venv/Scripts/pytest                          # тесты (перед каждым коммитом)
-.venv/Scripts/ruff check src tests            # линт (перед каждым коммитом)
-.venv/Scripts/python -m ob2h.server   # ручной запуск MCP-сервера
+cargo build --release                # сборка (target/release/ob2h.exe)
+cargo test                           # Rust-тесты (перед каждым коммитом)
+cargo clippy --all-targets           # линт (перед каждым коммитом)
+python -m unittest discover -s plugin/tests   # тесты плагина (Python 3.10+)
+./target/release/ob2h.exe serve      # ручной запуск MCP-сервера
+./target/release/ob2h.exe plugin install && ./target/release/ob2h.exe skill install
+                                      # деплой плагина/скилла в Hermes (из корня репо)
 ```
 
 - Windows, Git Bash. Пути в коде — через `pathlib.Path`; не хардкодить `C:\...`.
@@ -76,9 +86,9 @@ python -m venv .venv                          # однократно
 
 ## 6. Правила кода
 
-- **Python 3.12+** (синтаксис и библиотеки должны работать на 3.12 и 3.14).
-- Типизация аннотациями обязательна на публичных функциях/методах; `pydantic v2` для
-  схем и конфига.
+- **Rust 1.80+** — основной код; **Python (только plugin/ob2h)** — stdlib-only,
+  без pip-зависимостей (плагин не может «не установиться»).
+- Типизация: аннотации на публичных функциях/методах; serde для схем.
 - Асинхронность: MCP-слой async; SQLite — синхронный доступ через один поток/lock
   (SQLite не любит конкурентные писатели; обёртка — в `db.py` с фазы 1).
 - **Ошибки инструментов MCP — возвращаемая строка `[Error] <что случилось> [Подсказка]`,

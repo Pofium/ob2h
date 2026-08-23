@@ -94,8 +94,7 @@ async fn main() -> anyhow::Result<()> {
             PluginCommands::Uninstall => plugin_uninstall()?,
             PluginCommands::Status => plugin_status()?,
         },
-        Some(Commands::Sync { command }) => match command {
-            SyncCommands::Status => {
+        Some(Commands::Sync { command }) => match command {            SyncCommands::Status => {
                 println!("{}", ctx.sync.status());
             }
             SyncCommands::Export { peer } => {
@@ -134,6 +133,9 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         },
+        Some(Commands::SkillInstall) => {
+            skill_install()?;
+        }
     }
 
     Ok(())
@@ -271,6 +273,34 @@ fn plugin_status() -> anyhow::Result<()> {
     if ob2h_json.is_file() {
         println!("ob2h.json:    {} (пути бинарника/data_dir плагина)", ob2h_json.display());
     }
+    Ok(())
+}
+
+const SKILL_SOURCE: &str = include_str!("../skills/ob2h/SKILL.md");
+
+/// Деплой скилла в $HERMES_HOME/skills/devops/ob2h/SKILL.md с темплейтами
+/// путей этой машины (единый исходник для Windows/Linux).
+fn skill_install() -> anyhow::Result<()> {
+    let home = get_hermes_home()?;
+    let exe = std::env::current_exe()?;
+    let data_dir = match std::env::var("OB2H_DATA_DIR") {
+        Ok(d) => std::path::PathBuf::from(d),
+        Err(_) => std::env::current_dir()?.join("data"),
+    };
+    let project_dir = std::env::current_dir()?;
+
+    let skill = SKILL_SOURCE
+        .replace("{{BINARY}}", &exe.to_string_lossy())
+        .replace("{{DATA_DIR}}", &data_dir.to_string_lossy())
+        .replace("{{PROJECT_DIR}}", &project_dir.to_string_lossy())
+        .replace("{{HERMES_HOME}}", &home.to_string_lossy())
+        .replace("{{STATE_DB}}", &home.join("state.db").to_string_lossy());
+
+    let dir = home.join("skills").join("devops").join("ob2h");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("SKILL.md"), skill)?;
+    println!("Скилл ob2h установлен: {}", dir.join("SKILL.md").display());
+    println!("Пути: binary={}, data_dir={}", exe.display(), data_dir.display());
     Ok(())
 }
 

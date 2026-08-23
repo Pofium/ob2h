@@ -36,6 +36,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: SyncCommands,
     },
+    /// Установить/обновить скилл ob2h в Hermes (пути темплейтятся под эту машину)
+    SkillInstall,
 }
 
 #[derive(Subcommand, Debug)]

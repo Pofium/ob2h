@@ -238,11 +238,11 @@ ssh/manual (`data/sync/peers.toml`), фаза автодрима `after_dream`.
 
 ### Фаза 9 — Скилл, доки, релиз 0.8.0 (оценка 1 день)
 
-- [ ] **9.1** Скилл в репо `skills/ob2h/` + `ob2h skill install` (копия в
+- [x] **9.1** Скилл в репо `skills/ob2h/` + `ob2h skill install` (копия в
       `$HERMES_HOME/skills/devops/ob2h/`, замена старого разрешена владельцем).
-- [ ] **9.2** `docs/HERMES_INTEGRATION.md` переписать под Rust-эру и режимы 0/A/B.
-- [ ] **9.3** AGENTS.md/CLAUDE.md актуализировать (Rust-структура, `plugin/`, `skills/`).
-- [ ] **9.4** CHANGELOG: догнать 0.7.1, записать 0.8.0; README (плагин, синк), версия 0.8.0.
+- [x] **9.2** `docs/HERMES_INTEGRATION.md` переписать под Rust-эру и режимы 0/A/B.
+- [x] **9.3** AGENTS.md/CLAUDE.md актуализировать (Rust-структура, `plugin/`, `skills/`).
+- [x] **9.4** CHANGELOG: догнать 0.7.1, записать 0.8.0; README (плагин, синк), версия 0.8.0.
 
 ### Бэклог (не в текущем плане)
 
