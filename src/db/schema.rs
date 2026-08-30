@@ -55,6 +55,7 @@ ALTER TABLE graph_nodes ADD COLUMN file_path TEXT;
 ALTER TABLE graph_nodes ADD COLUMN line_start INTEGER;
 ALTER TABLE graph_nodes ADD COLUMN line_end INTEGER;
 ALTER TABLE graph_nodes ADD COLUMN provenance TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE graph_nodes ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0;
 ALTER TABLE graph_nodes ADD COLUMN is_god_node INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_project ON graph_nodes(project_id);
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_provenance ON graph_nodes(provenance);

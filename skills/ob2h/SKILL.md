@@ -33,12 +33,17 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   данные/БД `{{DATA_DIR}}` (ob2h.db, workspace/: SOUL.md/USER.md/memory/MEMORY.md +
   daily/*.jsonl — файлы создаются лениво, `workspace_read` отсутствующего = `""`),
   Hermes home `{{HERMES_HOME}}` (config.yaml, plugins/ob2h, ob2h.json).
-- Инструменты: memory_save/search/update/forget/context, workspace_read/write,
+- Инструменты (24 шт): memory_save/search/update/forget/context, workspace_read/write,
   session_log, session_ingest (bulk-транскрипта), knowledge_extract,
-  graph_search/reason/stats, dream_run/status/log/restore, omnes_stats/backup.
+  graph_search/reason/stats, dream_run/status/log/restore, omnes_stats/backup,
+  project_init, project_scan, project_context, project_graph_search, project_report.
+- Детерминированный AST-граф кода: `project_scan` извлекает классы, функции, трейты и связи
+  со 100% точностью (Graphify-подход) без вызовов LLM; `project_report` и `project_context`
+  выделяют центральные хабы архитектуры (God Nodes).
 - AutoDreamWorker: гейты ≥4ч и ≥10 событий, lock, git-история правок, бэкапы
   VACUUM INTO с ротацией 14. CLI: `ob2h stats | dream run/status/log/restore <sha> |
   backup | install/uninstall | plugin install/uninstall/status | skill install |
+  agent install/status | project init/scan/list/report |
   sync status/export/import/apply-inbox/push/pull`.
 
 ## Синхронизация двух машин (PC ↔ VPS)

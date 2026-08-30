@@ -185,7 +185,7 @@ impl SyncManager {
 
         // memories (embedding конвертируем в hex прямо в SQL — collect_rows не знает blob)
         self.collect_rows(
-            "SELECT key, content, category, importance, source, meta, hex(embedding) AS embedding, created_at, updated_at, origin, deleted_at
+            "SELECT key, content, category, importance, source, meta, hex(embedding) AS embedding, created_at, updated_at, origin, deleted_at, project_id
              FROM memories WHERE ?1 IS NULL OR MAX(updated_at, COALESCE(deleted_at, '')) >= ?1",
             watermark.as_deref(),
             &mut |v| {
@@ -199,7 +199,7 @@ impl SyncManager {
         )?;
         // graph_nodes
         self.collect_rows(
-            "SELECT node_id, label, node_type, description, val, hex(embedding) AS embedding, created_at, updated_at, origin, deleted_at
+            "SELECT node_id, label, node_type, description, val, hex(embedding) AS embedding, created_at, updated_at, origin, deleted_at, project_id, provenance, confidence, file_path, line_start, line_end, is_god_node
              FROM graph_nodes WHERE ?1 IS NULL OR MAX(updated_at, COALESCE(deleted_at, '')) >= ?1",
             watermark.as_deref(),
             &mut |v| {
@@ -213,7 +213,7 @@ impl SyncManager {
         )?;
         // graph_edges (с текстовыми node_id вместо локальных INTEGER id)
         self.collect_rows(
-            "SELECT s.node_id AS source_node, t.node_id AS target_node, e.label, e.weight, e.contexts, e.created_at, e.updated_at, e.origin, e.deleted_at
+            "SELECT s.node_id AS source_node, t.node_id AS target_node, e.label, e.weight, e.contexts, e.created_at, e.updated_at, e.origin, e.deleted_at, e.project_id, e.provenance, e.confidence
              FROM graph_edges e
              JOIN graph_nodes s ON s.id = e.source_id
              JOIN graph_nodes t ON t.id = e.target_id
@@ -225,6 +225,16 @@ impl SyncManager {
                 v["origin"] = json!(self.node.effective_origin(
                     v["origin"].as_str().unwrap_or("")
                 ));
+                rows.push(v.clone());
+            },
+        )?;
+        // projects
+        self.collect_rows(
+            "SELECT id, name, root_path, description, tech_stack, created_at, updated_at, last_scanned_at
+             FROM projects WHERE ?1 IS NULL OR updated_at >= ?1",
+            watermark.as_deref(),
+            &mut |v| {
+                v["type"] = json!("proj");
                 rows.push(v.clone());
             },
         )?;
@@ -429,19 +439,21 @@ impl SyncManager {
             }
         }
 
-        // Узлы применяем первыми (рёбра ссылаются на них).
+        // Проекты и узлы применяем первыми (память и рёбра ссылаются на них).
         let mut ordered: Vec<&serde_json::Value> = lines.iter().collect();
         ordered.sort_by_key(|l| match l["type"].as_str().unwrap_or("") {
-            "node" => 0,
-            "mem" => 1,
-            "edge" => 2,
-            _ => 3,
+            "proj" => 0,
+            "node" => 1,
+            "mem" => 2,
+            "edge" => 3,
+            _ => 4,
         });
 
         self.db.with_tx(|tx| {
             // Вся транзакция: либо бандл применился целиком, либо откат.
             for l in ordered {
                 match l["type"].as_str().unwrap_or("") {
+                    "proj" => Self::apply_project(tx, l)?,
                     "mem" => Self::apply_mem(tx, l, &self.node, &mem_emb, &mut stats)?,
                     "node" => Self::apply_node(tx, l, &self.node, &node_emb, &mut stats)?,
                     "edge" => Self::apply_edge(tx, l, &self.node, &mut stats)?,
@@ -550,7 +562,8 @@ impl SyncManager {
             }
             tx.execute(
                 "UPDATE memories SET content=?1, category=?2, importance=?3, source=?4,
-                 meta=?5, embedding=?6, updated_at=?7, origin=?8, deleted_at=?9 WHERE key=?10",
+                 meta=?5, embedding=?6, updated_at=?7, origin=?8, deleted_at=?9,
+                 project_id=COALESCE(?10, project_id) WHERE key=?11",
                 params![
                     content_in,
                     get_s("category").unwrap_or_else(|| "general".into()),
@@ -561,14 +574,15 @@ impl SyncManager {
                     inc_upd,
                     inc_origin,
                     deleted,
+                    get_s("project_id"),
                     key,
                 ],
             )?;
         } else {
             tx.execute(
                 "INSERT INTO memories (key, content, category, importance, source, meta, embedding,
-                 created_at, updated_at, origin, deleted_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                 created_at, updated_at, origin, deleted_at, project_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
                 params![
                     key,
                     content_in,
@@ -581,6 +595,7 @@ impl SyncManager {
                     inc_upd,
                     inc_origin,
                     deleted,
+                    get_s("project_id"),
                 ],
             )?;
         }
@@ -609,6 +624,13 @@ impl SyncManager {
         let deleted = l["deleted_at"].as_str();
         let desc_in = get_s("description");
         let val_in = l["val"].as_i64().unwrap_or(1);
+        let proj_id = get_s("project_id");
+        let prov = get_s("provenance").unwrap_or_else(|| "manual".into());
+        let conf = l["confidence"].as_f64().unwrap_or(1.0);
+        let fpath = get_s("file_path");
+        let lstart = l["line_start"].as_i64();
+        let lend = l["line_end"].as_i64();
+        let is_god = l["is_god_node"].as_i64().unwrap_or(0);
 
         /// (updated_at, origin, description, val, deleted_at) существующей ноды
         type NodeRow = (String, String, Option<String>, i64, Option<String>);
@@ -638,7 +660,9 @@ impl SyncManager {
             }
             tx.execute(
                 "UPDATE graph_nodes SET label=?1, node_type=?2, description=?3, val=?4,
-                 embedding=?5, updated_at=?6, origin=?7, deleted_at=?8 WHERE node_id=?9",
+                 embedding=?5, updated_at=?6, origin=?7, deleted_at=?8,
+                 project_id=COALESCE(?9, project_id), provenance=?10, confidence=?11,
+                 file_path=?12, line_start=?13, line_end=?14, is_god_node=?15 WHERE node_id=?16",
                 params![
                     get_s("label").unwrap_or_default(),
                     get_s("node_type").unwrap_or_else(|| "Other".into()),
@@ -648,14 +672,22 @@ impl SyncManager {
                     inc_upd,
                     inc_origin,
                     deleted,
+                    proj_id,
+                    prov,
+                    conf,
+                    fpath,
+                    lstart,
+                    lend,
+                    is_god,
                     node_id,
                 ],
             )?;
         } else {
             tx.execute(
                 "INSERT INTO graph_nodes (node_id, label, node_type, description, val, embedding,
-                 created_at, updated_at, origin, deleted_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                 created_at, updated_at, origin, deleted_at, project_id, provenance, confidence,
+                 file_path, line_start, line_end, is_god_node)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
                 params![
                     node_id,
                     get_s("label").unwrap_or_default(),
@@ -667,6 +699,13 @@ impl SyncManager {
                     inc_upd,
                     inc_origin,
                     deleted,
+                    proj_id,
+                    prov,
+                    conf,
+                    fpath,
+                    lstart,
+                    lend,
+                    is_god,
                 ],
             )?;
         }
@@ -705,6 +744,9 @@ impl SyncManager {
         let inc_upd = get_s("updated_at").unwrap_or_default();
         let inc_origin = get_s("origin").unwrap_or_default();
         let deleted = l["deleted_at"].as_str();
+        let proj_id = get_s("project_id");
+        let prov = get_s("provenance").unwrap_or_else(|| "manual".into());
+        let conf = l["confidence"].as_f64().unwrap_or(1.0);
 
         let existing: Option<(i64, String, String)> = tx
             .query_row(
@@ -721,22 +763,26 @@ impl SyncManager {
                 return Ok(());
             }
             tx.execute(
-                "UPDATE graph_edges SET weight=?1, contexts=?2, updated_at=?3, origin=?4, deleted_at=?5
-                 WHERE id=?6",
+                "UPDATE graph_edges SET weight=?1, contexts=?2, updated_at=?3, origin=?4, deleted_at=?5,
+                 project_id=COALESCE(?6, project_id), provenance=?7, confidence=?8
+                 WHERE id=?9",
                 params![
                     l["weight"].as_f64().unwrap_or(1.0),
                     get_s("contexts"),
                     inc_upd,
                     inc_origin,
                     deleted,
+                    proj_id,
+                    prov,
+                    conf,
                     edge_id,
                 ],
             )?;
         } else {
             tx.execute(
                 "INSERT INTO graph_edges (source_id, target_id, label, weight, contexts,
-                 created_at, updated_at, origin, deleted_at)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                 created_at, updated_at, origin, deleted_at, project_id, provenance, confidence)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
                 params![
                     src_id,
                     tgt_id,
@@ -747,10 +793,47 @@ impl SyncManager {
                     inc_upd,
                     inc_origin,
                     deleted,
+                    proj_id,
+                    prov,
+                    conf,
                 ],
             )?;
         }
         stats.edges_applied += 1;
+        Ok(())
+    }
+
+    fn apply_project(
+        tx: &rusqlite::Transaction,
+        l: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let id = l["id"].as_str().unwrap_or_default();
+        if id.is_empty() {
+            bail!("строка proj без id");
+        }
+        let get_s = |k: &str| l[k].as_str().map(|s| s.to_string());
+        let name = get_s("name").unwrap_or_else(|| id.to_string());
+        let root_path = get_s("root_path").unwrap_or_default();
+        let desc = get_s("description");
+        let tech_stack = get_s("tech_stack");
+        let inc_upd = get_s("updated_at").unwrap_or_else(utcnow);
+        let created_at = get_s("created_at").unwrap_or_else(|| inc_upd.clone());
+        let last_scanned_at = get_s("last_scanned_at");
+
+        tx.execute(
+            r#"
+            INSERT INTO projects (id, name, root_path, description, tech_stack, created_at, updated_at, last_scanned_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                description = COALESCE(excluded.description, projects.description),
+                tech_stack = COALESCE(excluded.tech_stack, projects.tech_stack),
+                updated_at = excluded.updated_at,
+                last_scanned_at = COALESCE(excluded.last_scanned_at, projects.last_scanned_at)
+            WHERE excluded.updated_at >= projects.updated_at
+            "#,
+            params![id, name, root_path, desc, tech_stack, created_at, inc_upd, last_scanned_at],
+        )?;
         Ok(())
     }
 
