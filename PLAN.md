@@ -304,3 +304,4 @@ ssh/manual (`data/sync/peers.toml`), фаза автодрима `after_dream`.
 | 2026-08-23 | **ADR-11**: `memory_forget`/purge переходят на tombstones (`deleted_at`), физическое удаление отложено в maintenance | LWW-совместимость синка |
 | 2026-08-23 | Фаза 8: конфиг пирингов — `data/sync/peers.json` вместо peers.toml (не тянуть toml-крейт), транспорт ssh/scp; добавлена зависимость `flate2` (gzip-бандлы) | простота, лёгкость |
 | 2026-08-23 | Замена скилла `$HERMES_HOME/skills/devops/ob2h/` на версию из репо (`skills/ob2h/`) разрешена владельцем явно; конфиг Hermes по-прежнему руками | заказ владельца |
+| 2026-08-30 | Заказ v1.0: память по проектам (AST-граф без LLM по опыту Graphify), типизация связей (`EXTRACTED`/`INFERRED`), God Nodes, поддержка других агентов (Claude, Cursor, Windsurf, Gemini, Qwen). Детальный план — `PLAN_v1.0.md` в корне репозитория | эволюция в мультиагентное хранилище знаний |

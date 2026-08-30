@@ -35,7 +35,7 @@ impl MemoryService {
         format!("m_{}", &hash[..12])
     }
 
-    /// Сохранить или обновить воспоминание.
+    /// Сохранить воспоминание (upsert по ключу).
     pub async fn save(
         &self,
         content: &str,
@@ -44,6 +44,20 @@ impl MemoryService {
         importance: f64,
         source: &str,
         meta: Option<&str>,
+    ) -> anyhow::Result<String> {
+        self.save_with_project(content, key, category, importance, source, meta, None).await
+    }
+
+    /// Сохранить воспоминание с опциональной привязкой к проекту.
+    pub async fn save_with_project(
+        &self,
+        content: &str,
+        key: Option<&str>,
+        category: &str,
+        importance: f64,
+        source: &str,
+        meta: Option<&str>,
+        project_id: Option<&str>,
     ) -> anyhow::Result<String> {
         let content = content.trim();
         if content.is_empty() {
@@ -65,8 +79,8 @@ impl MemoryService {
             conn.execute(
                 r#"
                 INSERT INTO memories (
-                    key, content, category, importance, source, meta, embedding, created_at, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+                    key, content, category, importance, source, meta, embedding, created_at, updated_at, project_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
                 ON CONFLICT(key) DO UPDATE SET
                     content = excluded.content,
                     category = excluded.category,
@@ -75,10 +89,11 @@ impl MemoryService {
                     meta = excluded.meta,
                     embedding = excluded.embedding,
                     updated_at = excluded.updated_at,
+                    project_id = COALESCE(excluded.project_id, memories.project_id),
                     origin = '',           /* локальная правка — строка снова «наша» */
                     deleted_at = NULL      /* повторное сохранение снимает tombstone */
                 "#,
-                params![k, content, category, importance, source, meta, emb_blob, now],
+                params![k, content, category, importance, source, meta, emb_blob, now, project_id],
             )?;
             Ok(())
         })?;
@@ -90,7 +105,7 @@ impl MemoryService {
     pub fn get(&self, key: &str) -> anyhow::Result<Option<MemoryRecord>> {
         self.db.with_conn(|conn| {
             conn.query_row(
-                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed FROM memories WHERE key = ?1 AND deleted_at IS NULL",
+                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed, project_id FROM memories WHERE key = ?1 AND deleted_at IS NULL",
                 params![key],
                 |row| {
                     Ok(MemoryRecord {
@@ -106,6 +121,7 @@ impl MemoryService {
                         updated_at: row.get(9)?,
                         access_count: row.get(10)?,
                         last_accessed: row.get(11)?,
+                        project_id: row.get(12)?,
                     })
                 },
             )
@@ -318,7 +334,7 @@ impl MemoryService {
     pub fn get_by_id(&self, id: i64) -> anyhow::Result<Option<MemoryRecord>> {
         self.db.with_conn(|conn| {
             conn.query_row(
-                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed FROM memories WHERE id = ?1 AND deleted_at IS NULL",
+                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed, project_id FROM memories WHERE id = ?1 AND deleted_at IS NULL",
                 params![id],
                 |row| {
                     Ok(MemoryRecord {
@@ -334,6 +350,7 @@ impl MemoryService {
                         updated_at: row.get(9)?,
                         access_count: row.get(10)?,
                         last_accessed: row.get(11)?,
+                        project_id: row.get(12)?,
                     })
                 },
             )
@@ -407,7 +424,7 @@ impl MemoryService {
 
         let records = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed FROM memories WHERE deleted_at IS NULL ORDER BY importance DESC LIMIT 100",
+                "SELECT id, key, content, category, importance, source, meta, embedding, created_at, updated_at, access_count, last_accessed, project_id FROM memories WHERE deleted_at IS NULL ORDER BY importance DESC LIMIT 100",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok(MemoryRecord {
@@ -423,6 +440,7 @@ impl MemoryService {
                     updated_at: row.get(9)?,
                     access_count: row.get(10)?,
                     last_accessed: row.get(11)?,
+                    project_id: row.get(12)?,
                 })
             })?;
             let mut list = Vec::new();

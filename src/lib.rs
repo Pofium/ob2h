@@ -14,6 +14,7 @@ pub mod ingest;
 pub mod llm;
 pub mod mcp;
 pub mod memory;
+pub mod project;
 pub mod sync;
 pub mod vector;
 pub mod workspace;
@@ -30,6 +31,7 @@ use embedding::provider_for;
 use graph::GraphService;
 use llm::make_llm;
 use mcp::AppContext;
+use project::ProjectService;
 use sync::SyncManager;
 use memory::MemoryService;
 use workspace::{GitStore, Workspace};
@@ -47,6 +49,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
     let consolidator = Arc::new(Consolidator::new(workspace.clone(), llm.clone(), settings.clone()));
     let pending_session = Arc::new(Mutex::new(PendingSession::new()));
     let graph = Arc::new(GraphService::new(db.clone(), embedder.clone()));
+    let project = Arc::new(ProjectService::new(db.conn_arc()));
     let dream = Arc::new(Dream::new(
         workspace.clone(),
         gitstore.clone(),
@@ -75,6 +78,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         consolidator,
         pending_session,
         graph,
+        project,
         dream,
         backup,
         sync,

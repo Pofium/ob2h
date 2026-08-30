@@ -4,7 +4,7 @@ use ob2h::mcp::McpServer;
 use ob2h::mcp::tools::list_tools;
 use tempfile::tempdir;
 
-/// Снапшот контракта: имена инструментов v0.7.1 не меняются, новые добавляются в конец.
+/// Снапшот контракта: 24 инструмента (19 базовых + 5 проектных v1.0).
 #[test]
 fn test_tools_list_contract_snapshot() {
     let names: Vec<String> = list_tools().into_iter().map(|t| t.name).collect();
@@ -27,10 +27,15 @@ fn test_tools_list_contract_snapshot() {
         "dream_restore",
         "omnes_stats",
         "omnes_backup",
-        // v0.8: новые инструменты только в конец списка
         "session_ingest",
+        // v1.0: Проектные инструменты и AST-граф
+        "project_init",
+        "project_scan",
+        "project_context",
+        "project_graph_search",
+        "project_report",
     ];
-    assert_eq!(names, expected, "контракт tools/list изменился — см. docs/PLAN_v0.8.md §1");
+    assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.0.md");
 }
 
 #[tokio::test]
@@ -49,7 +54,8 @@ async fn test_mcp_all_tools_dispatch() {
             serde_json::json!({
                 "content": "Hermes использует локальный MCP сервер ob2h",
                 "category": "system",
-                "importance": 0.95
+                "importance": 0.95,
+                "project_id": "ob2h"
             }),
         )
         .await;
@@ -59,7 +65,7 @@ async fn test_mcp_all_tools_dispatch() {
     let search_out = server
         .call_tool(
             "memory_search",
-            serde_json::json!({ "query": "Hermes ob2h" }),
+            serde_json::json!({ "query": "Hermes ob2h", "project_id": "ob2h" }),
         )
         .await;
     assert!(search_out.contains("Hermes"));
@@ -104,6 +110,48 @@ async fn test_mcp_all_tools_dispatch() {
     // 7. dream_status
     let dream_status = server.call_tool("dream_status", serde_json::json!({})).await;
     assert!(dream_status.contains("last_run:"));
+
+    // 8. project_init
+    let p_init_out = server
+        .call_tool(
+            "project_init",
+            serde_json::json!({
+                "id": "my_proj",
+                "name": "My Project",
+                "path": tmp.path().to_str().unwrap(),
+                "description": "Test project via MCP",
+                "tech_stack": ["rust", "mcp"]
+            }),
+        )
+        .await;
+    assert!(p_init_out.contains("project registered: id=my_proj"));
+
+    // 9. project_scan
+    let p_scan_out = server
+        .call_tool(
+            "project_scan",
+            serde_json::json!({ "id": "my_proj" }),
+        )
+        .await;
+    assert!(p_scan_out.contains("project 'my_proj' scanned:"));
+
+    // 10. project_context
+    let p_ctx_out = server
+        .call_tool(
+            "project_context",
+            serde_json::json!({ "id": "my_proj" }),
+        )
+        .await;
+    assert!(p_ctx_out.contains("<project_context id=\"my_proj\">"));
+
+    // 11. project_report
+    let p_rep_out = server
+        .call_tool(
+            "project_report",
+            serde_json::json!({ "id": "my_proj" }),
+        )
+        .await;
+    assert!(p_rep_out.contains("Архитектурный дайджест проекта: My Project"));
 }
 
 #[tokio::test]

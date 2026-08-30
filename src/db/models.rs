@@ -3,6 +3,19 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectRecord {
+    pub id: String,
+    pub name: String,
+    pub root_path: String,
+    pub description: Option<String>,
+    pub tech_stack: Option<String>,
+    pub active_branch: Option<String>,
+    pub last_scanned_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryRecord {
     pub id: i64,
     pub key: String,
@@ -16,6 +29,7 @@ pub struct MemoryRecord {
     pub updated_at: String,
     pub access_count: i64,
     pub last_accessed: Option<String>,
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +47,7 @@ pub struct DocumentRecord {
     pub path: Option<String>,
     pub meta: Option<String>,
     pub created_at: String,
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +58,7 @@ pub struct ChunkRecord {
     pub text: String,
     pub embedding: Option<Vec<u8>>,
     pub created_at: String,
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +72,12 @@ pub struct GraphNodeRecord {
     pub embedding: Option<Vec<u8>>,
     pub created_at: String,
     pub updated_at: String,
+    pub project_id: Option<String>,
+    pub file_path: Option<String>,
+    pub line_start: Option<i64>,
+    pub line_end: Option<i64>,
+    pub provenance: Option<String>,
+    pub is_god_node: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +89,9 @@ pub struct GraphEdgeRecord {
     pub weight: f64,
     pub contexts: Option<String>,
     pub created_at: String,
+    pub project_id: Option<String>,
+    pub provenance: Option<String>,
+    pub confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

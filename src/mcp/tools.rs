@@ -1,4 +1,4 @@
-//! 19 инструментов MCP для Hermes (память, воркспейс, сессии, граф, дриминг, бэкапы).
+//! 24 инструмента MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты).
 
 use super::protocol::McpToolDef;
 
@@ -7,7 +7,7 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 1. memory_save
         McpToolDef {
             name: "memory_save".to_string(),
-            description: "Сохранить факт в долгосрочную память. key опционален (сгенерируется). importance 0..1 — насколько важно помнить. category — произвольная метка.".to_string(),
+            description: "Сохранить факт в долгосрочную память. key опционален (сгенерируется). importance 0..1 — насколько важно помнить. category — произвольная метка. project_id — привязка к проекту (опционально).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -15,7 +15,8 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "key": { "type": "string", "description": "Стабильный ключ дедупликации (опционально)" },
                     "category": { "type": "string", "description": "Категория (дефолт: general)" },
                     "importance": { "type": "number", "description": "Важность от 0.0 до 1.0 (дефолт: 0.5)" },
-                    "source": { "type": "string", "description": "Источник (chat|dream|extract|manual)" }
+                    "source": { "type": "string", "description": "Источник (chat|dream|extract|manual)" },
+                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
                 },
                 "required": ["content"]
             }),
@@ -23,13 +24,14 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 2. memory_search
         McpToolDef {
             name: "memory_search".to_string(),
-            description: "Поиск по памяти: hybrid (по умолчанию, FTS+вектор RRF) | fts | vector.".to_string(),
+            description: "Поиск по памяти: hybrid (по умолчанию, FTS+вектор RRF) | fts | vector. project_id фильтрует по проекту.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Поисковый запрос" },
                     "limit": { "type": "integer", "description": "Количество результатов (дефолт: 5)" },
-                    "mode": { "type": "string", "enum": ["hybrid", "fts", "vector"], "description": "Режим поиска" }
+                    "mode": { "type": "string", "enum": ["hybrid", "fts", "vector"], "description": "Режим поиска" },
+                    "project_id": { "type": "string", "description": "Идентификатор проекта для фильтрации (опционально)" }
                 },
                 "required": ["query"]
             }),
@@ -44,7 +46,8 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "key": { "type": "string", "description": "Ключ воспоминания" },
                     "content": { "type": "string", "description": "Новый текст" },
                     "importance": { "type": "number", "description": "Новая важность" },
-                    "category": { "type": "string", "description": "Новая категория" }
+                    "category": { "type": "string", "description": "Новая категория" },
+                    "project_id": { "type": "string", "description": "Новый проект (опционально)" }
                 },
                 "required": ["key"]
             }),
@@ -64,12 +67,13 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 5. memory_context
         McpToolDef {
             name: "memory_context".to_string(),
-            description: "Блок <agent_memory> с самыми важными фактами — для вставки в промпт. query повышает релевантность отбора.".to_string(),
+            description: "Блок <agent_memory> с самыми важными фактами — для вставки в промпт. query повышает релевантность отбора. project_id фильтрует контекст проекта.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Контекстный запрос" },
-                    "max_tokens": { "type": "integer", "description": "Максимальный объем токенов" }
+                    "max_tokens": { "type": "integer", "description": "Максимальный объем токенов" },
+                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
                 }
             }),
         },
@@ -108,7 +112,8 @@ pub fn list_tools() -> Vec<McpToolDef> {
                 "properties": {
                     "user_text": { "type": "string", "description": "Сообщение пользователя" },
                     "assistant_text": { "type": "string", "description": "Ответ ассистента" },
-                    "source": { "type": "string", "description": "Источник сессии (дефолт: hermes)" }
+                    "source": { "type": "string", "description": "Источник сессии (дефолт: hermes)" },
+                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
                 },
                 "required": ["user_text", "assistant_text"]
             }),
@@ -122,19 +127,22 @@ pub fn list_tools() -> Vec<McpToolDef> {
                 "properties": {
                     "text": { "type": "string", "description": "Текст для анализа" },
                     "file_path": { "type": "string", "description": "Путь к файлу" },
-                    "max_chunks": { "type": "integer", "description": "Максимум чанков (дефолт: 200)" }
+                    "max_chunks": { "type": "integer", "description": "Максимум чанков (дефолт: 200)" },
+                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
                 }
             }),
         },
         // 10. graph_search
         McpToolDef {
             name: "graph_search".to_string(),
-            description: "Поиск по графу знаний: узлы и связи (с 1-hop соседями).".to_string(),
+            description: "Поиск по графу знаний: узлы и связи (с 1-hop соседями). project_id и provenance позволяют точечно фильтровать.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Поисковый запрос по графу" },
-                    "limit": { "type": "integer", "description": "Лимит узлов (дефолт: 10)" }
+                    "limit": { "type": "integer", "description": "Лимит узлов (дефолт: 10)" },
+                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" },
+                    "provenance": { "type": "string", "enum": ["ast", "llm", "manual", "all"], "description": "Тип источника связей (дефолт: all)" }
                 },
                 "required": ["query"]
             }),
@@ -146,7 +154,8 @@ pub fn list_tools() -> Vec<McpToolDef> {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Вопрос к графу знаний" }
+                    "query": { "type": "string", "description": "Вопрос к графу знаний" },
+                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
                 },
                 "required": ["query"]
             }),
@@ -155,7 +164,12 @@ pub fn list_tools() -> Vec<McpToolDef> {
         McpToolDef {
             name: "graph_stats".to_string(),
             description: "Статистика графа знаний: узлы, связи, документы, чанки.".to_string(),
-            input_schema: serde_json::json!({ "type": "object" }),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
+                }
+            }),
         },
         // 13. dream_run
         McpToolDef {
@@ -229,9 +243,84 @@ pub fn list_tools() -> Vec<McpToolDef> {
                         }
                     },
                     "source": { "type": "string", "description": "Источник (дефолт: hermes; напр. pre_compress)" },
-                    "session_id": { "type": "string", "description": "Идентификатор сессии для дедупа (опционально)" }
+                    "session_id": { "type": "string", "description": "Идентификатор сессии для дедупа (опционально)" },
+                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
                 },
                 "required": ["messages"]
+            }),
+        },
+        // 20. project_init
+        McpToolDef {
+            name: "project_init".to_string(),
+            description: "Зарегистрировать или обновить проект в памяти OB2H с привязкой к локальному пути кодовой базы.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Уникальный ID проекта (например 'ob2h', 'my-web-app')" },
+                    "name": { "type": "string", "description": "Человекопонятное название проекта" },
+                    "path": { "type": "string", "description": "Абсолютный или относительный путь к каталогу репозитория" },
+                    "description": { "type": "string", "description": "Краткое описание назначения проекта" },
+                    "tech_stack": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Список ключевых технологий (например ['rust', 'sqlite', 'mcp'])"
+                    }
+                },
+                "required": ["id", "name", "path"]
+            }),
+        },
+        // 21. project_scan
+        McpToolDef {
+            name: "project_scan".to_string(),
+            description: "Запустить детерминированное статическое AST-сканирование кодовой базы проекта (без расхода LLM-токенов). Извлекает модули, функции, классы, структуры, таблицы и связи.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Идентификатор зарегистрированного проекта" },
+                    "path": { "type": "string", "description": "Кастомный путь сканирования (опционально)" },
+                    "incremental": { "type": "boolean", "description": "Инкрементальное обновление по SHA256 хэшам (дефолт: true)" }
+                },
+                "required": ["id"]
+            }),
+        },
+        // 22. project_context
+        McpToolDef {
+            name: "project_context".to_string(),
+            description: "Сформировать сжатый блок <project_context> для промпта агента: архитектурные хабы (God Nodes), релевантные подсистемы под задачу и метаданные.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Идентификатор проекта" },
+                    "query": { "type": "string", "description": "Описание текущей задачи для точечного подбора модулей (опционально)" }
+                },
+                "required": ["id"]
+            }),
+        },
+        // 23. project_graph_search
+        McpToolDef {
+            name: "project_graph_search".to_string(),
+            description: "Поиск по кодовому графу связей и зависимостей проекта (IMPORTS, CALLS, DEFINES, IMPLEMENTS).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Идентификатор проекта" },
+                    "query": { "type": "string", "description": "Поисковый запрос (имя структуры, функции или модуля)" },
+                    "limit": { "type": "integer", "description": "Лимит результатов (дефолт: 15)" },
+                    "provenance": { "type": "string", "enum": ["ast", "llm", "all"], "description": "Фильтр источника связей (дефолт: all)" }
+                },
+                "required": ["id", "query"]
+            }),
+        },
+        // 24. project_report
+        McpToolDef {
+            name: "project_report".to_string(),
+            description: "Сгенерировать архитектурный дайджест проекта: ключевые хабы (God Nodes), компоненты, наиболее используемые зависимости.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Идентификатор проекта" }
+                },
+                "required": ["id"]
             }),
         },
     ]

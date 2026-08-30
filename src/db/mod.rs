@@ -30,17 +30,20 @@ impl Database {
         // WAL-режим — даём SQLite ждать блокировку вместо мгновенной ошибки.
         conn.busy_timeout(std::time::Duration::from_millis(5000))?;
 
-        // Живая БД старой схемы (v1) перед миграцией M2 — снапшот в backups/
-        // (VACUUM INTO даёт консистентную копию без остановки WAL).
+        // Живая БД старой схемы (< v3) перед миграцией — снапшот в backups/
         let version = schema::schema_version(&conn);
-        if version == 1 {
+        if version > 0 && version < 3 {
             let backup_dir = p.parent().unwrap_or_else(|| Path::new(".")).join("backups");
             let _ = std::fs::create_dir_all(&backup_dir);
             let ts = Utc::now().format("%Y%m%d-%H%M%S");
-            let backup_path = backup_dir.join(format!("pre-v08-{ts}.db"));
+            let backup_path = if version == 1 {
+                backup_dir.join(format!("pre-v08-m2-{ts}.db"))
+            } else {
+                backup_dir.join(format!("pre-v10-m3-{ts}.db"))
+            };
             let escaped = backup_path.to_string_lossy().replace('\'', "''");
             if conn.execute_batch(&format!("VACUUM INTO '{escaped}'")).is_ok() {
-                tracing::info!("Бэкап перед миграцией M2: {}", backup_path.display());
+                tracing::info!("Бэкап перед миграцией: {}", backup_path.display());
             }
         }
 
@@ -48,6 +51,10 @@ impl Database {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
+    }
+
+    pub fn conn_arc(&self) -> Arc<Mutex<Connection>> {
+        self.conn.clone()
     }
 
     pub fn in_memory() -> anyhow::Result<Self> {

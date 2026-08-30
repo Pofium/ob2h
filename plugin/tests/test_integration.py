@@ -41,9 +41,9 @@ class TestRealServer(unittest.TestCase):
     def test_handshake_and_contract(self):
         tools = self.rpc.tools_list()
         names = [t["name"] for t in tools]
-        # контракт v0.8: старые 18 не тронуты, session_ingest добавлен в конец
-        self.assertEqual(names[-1], "session_ingest")
-        self.assertEqual(len(names), 19)
+        # контракт v1.0: 24 инструмента (19 базовых + 5 проектных)
+        self.assertEqual(names[-1], "project_report")
+        self.assertEqual(len(names), 24)
 
     def test_turn_lands_in_daily_log(self):
         out = self.rpc.tool_call(

@@ -1,6 +1,7 @@
 //! MCP-сервер (stdio transport). Обработка JSON-RPC запросов и вызов инструментов.
 
 use std::sync::Arc;
+use rusqlite::params;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tracing::info;
@@ -18,6 +19,7 @@ use crate::graph::GraphService;
 use crate::ingest::read_document;
 use crate::llm::LLMClient;
 use crate::memory::MemoryService;
+use crate::project::ProjectService;
 use crate::vector::serialize;
 use crate::workspace::{GitStore, Workspace};
 
@@ -32,6 +34,7 @@ pub struct AppContext {
     pub consolidator: Arc<Consolidator>,
     pub pending_session: Arc<Mutex<PendingSession>>,
     pub graph: Arc<GraphService>,
+    pub project: Arc<ProjectService>,
     pub dream: Arc<Dream>,
     pub backup: Arc<BackupManager>,
     pub sync: Arc<crate::sync::SyncManager>,
@@ -655,6 +658,144 @@ impl McpServer {
                 Ok(path) => format!("backup: {}", path.display()),
                 Err(e) => format!("[Error] {e}"),
             },
+            "project_init" => {
+                let id = match args.get("id").and_then(|v| v.as_str()) {
+                    Some(i) => i,
+                    None => return "[Error] id is required".to_string(),
+                };
+                let name = match args.get("name").and_then(|v| v.as_str()) {
+                    Some(n) => n,
+                    None => return "[Error] name is required".to_string(),
+                };
+                let path = match args.get("path").and_then(|v| v.as_str()) {
+                    Some(p) => p,
+                    None => return "[Error] path is required".to_string(),
+                };
+                let desc = args.get("description").and_then(|v| v.as_str());
+                let tech_stack: Option<Vec<String>> = args.get("tech_stack").and_then(|v| {
+                    v.as_array().map(|arr| {
+                        arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()
+                    })
+                });
+
+                match self.ctx.project.register_project(id, name, path, desc, tech_stack.as_deref()) {
+                    Ok(p) => format!("project registered: id={} name='{}' root='{}'", p.id, p.name, p.root_path),
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "project_scan" => {
+                let id = match args.get("id").and_then(|v| v.as_str()) {
+                    Some(i) => i,
+                    None => return "[Error] id is required".to_string(),
+                };
+                let path = args.get("path").and_then(|v| v.as_str());
+                let incremental = args.get("incremental").and_then(|v| v.as_bool()).unwrap_or(true);
+
+                match self.ctx.project.scan_project(id, path, incremental) {
+                    Ok(res) => {
+                        let _ = self.ctx.db.with_conn(|conn| {
+                            let _ = crate::graph::GraphAnalytics::update_god_nodes(conn, id);
+                            Ok(())
+                        });
+                        format!(
+                            "project '{}' scanned: files={} nodes={} edges={} total_lines={}",
+                            id, res.files_scanned, res.nodes.len(), res.edges.len(), res.lines_total
+                        )
+                    }
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "project_context" => {
+                let id = match args.get("id").and_then(|v| v.as_str()) {
+                    Some(i) => i,
+                    None => return "[Error] id is required".to_string(),
+                };
+                let query = args.get("query").and_then(|v| v.as_str());
+
+                match self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::build_project_context(conn, id, query)) {
+                    Ok(ctx) => ctx,
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "project_graph_search" => {
+                let id = match args.get("id").and_then(|v| v.as_str()) {
+                    Some(i) => i,
+                    None => return "[Error] id is required".to_string(),
+                };
+                let query = match args.get("query").and_then(|v| v.as_str()) {
+                    Some(q) => q,
+                    None => return "[Error] query is required".to_string(),
+                };
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
+                let provenance = args.get("provenance").and_then(|v| v.as_str()).unwrap_or("all");
+
+                let res = self.ctx.db.with_conn(|conn| {
+                    let mut stmt = conn.prepare(
+                        r#"
+                        SELECT id, node_id, label, node_type, file_path, line_start, provenance, is_god_node, description
+                        FROM graph_nodes
+                        WHERE project_id = ?1 
+                          AND (label LIKE ?2 OR description LIKE ?2 OR file_path LIKE ?2)
+                          AND (?3 = 'all' OR provenance = ?3)
+                          AND (deleted_at IS NULL OR deleted_at = '')
+                        LIMIT ?4
+                        "#,
+                    )?;
+                    let query_like = format!("%{}%", query);
+                    let rows = stmt.query_map(params![id, query_like, provenance, limit as i64], |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, String>(3)?,
+                            r.get::<_, Option<String>>(4)?,
+                            r.get::<_, Option<i64>>(5)?,
+                            r.get::<_, Option<String>>(6)?,
+                            r.get::<_, Option<i64>>(7)?,
+                            r.get::<_, Option<String>>(8)?,
+                        ))
+                    })?;
+
+                    let mut nodes = Vec::new();
+                    for r in rows {
+                        let (_pk, _nid, lbl, ntype, fpath, lstart, prov, is_god, desc) = r?;
+                        let loc = if let (Some(f), Some(l)) = (fpath, lstart) {
+                            format!("{}:{}", f, l)
+                        } else {
+                            "-".to_string()
+                        };
+                        let god_mark = if is_god.unwrap_or(0) == 1 { " [👑 GodNode]" } else { "" };
+                        nodes.push(format!(
+                            "- `{}` [{}] ({}) prov={}{}: {}",
+                            lbl, ntype, loc, prov.unwrap_or_else(|| "manual".to_string()),
+                            god_mark, desc.unwrap_or_default()
+                        ));
+                    }
+                    Ok(nodes)
+                });
+
+                match res {
+                    Ok(nodes) => {
+                        if nodes.is_empty() {
+                            "совпадений в графе проекта не найдено".to_string()
+                        } else {
+                            nodes.join("\n")
+                        }
+                    }
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "project_report" => {
+                let id = match args.get("id").and_then(|v| v.as_str()) {
+                    Some(i) => i,
+                    None => return "[Error] id is required".to_string(),
+                };
+
+                match self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::generate_project_report(conn, id)) {
+                    Ok(rep) => rep.markdown_summary,
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
             other => format!("[Error] Unknown tool {other}"),
         }
     }

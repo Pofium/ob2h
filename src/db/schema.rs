@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -23,6 +23,46 @@ CREATE TABLE IF NOT EXISTS sync_state (
   last_import_at TEXT,
   applied_bundles TEXT NOT NULL DEFAULT '[]'
 );
+"#;
+
+/// M3 (v1.0+): пространства проектов, AST-детерминированный граф,
+/// маркировка достоверности связей (provenance/confidence) и узлы-боги (God Nodes).
+pub const MIGRATION_V3: &str = r#"
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  root_path TEXT NOT NULL,
+  description TEXT,
+  tech_stack TEXT,
+  active_branch TEXT,
+  last_scanned_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_projects_root_path ON projects(root_path);
+
+ALTER TABLE memories ADD COLUMN project_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id);
+
+ALTER TABLE documents ADD COLUMN project_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_documents_project ON documents(project_id);
+
+ALTER TABLE chunks ADD COLUMN project_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project_id);
+
+ALTER TABLE graph_nodes ADD COLUMN project_id TEXT;
+ALTER TABLE graph_nodes ADD COLUMN file_path TEXT;
+ALTER TABLE graph_nodes ADD COLUMN line_start INTEGER;
+ALTER TABLE graph_nodes ADD COLUMN line_end INTEGER;
+ALTER TABLE graph_nodes ADD COLUMN provenance TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE graph_nodes ADD COLUMN is_god_node INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_project ON graph_nodes(project_id);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_provenance ON graph_nodes(provenance);
+
+ALTER TABLE graph_edges ADD COLUMN project_id TEXT;
+ALTER TABLE graph_edges ADD COLUMN provenance TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE graph_edges ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0;
+CREATE INDEX IF NOT EXISTS idx_graph_edges_project ON graph_edges(project_id);
 "#;
 
 /// Текущая версия схемы БД (0 — свежая, ещё без таблиц).
@@ -165,13 +205,19 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     let current_version: i64 = schema_version(conn);
 
     if current_version < 1 {
-        // Свежая БД: все миграции по порядку (M2 аддитивна поверх M1).
+        // Свежая БД: все миграции по порядку.
         conn.execute_batch(MIGRATION_V1)?;
         conn.execute_batch(MIGRATION_V2)?;
-    } else if current_version < SCHEMA_VERSION {
-        // Живая БД старой схемы — применяем недостающие миграции.
-        conn.execute_batch(MIGRATION_V2)?;
+        conn.execute_batch(MIGRATION_V3)?;
+    } else {
+        if current_version < 2 {
+            conn.execute_batch(MIGRATION_V2)?;
+        }
+        if current_version < 3 {
+            conn.execute_batch(MIGRATION_V3)?;
+        }
     }
+
     if current_version < SCHEMA_VERSION {
         conn.execute(
             "INSERT OR REPLACE INTO kv (key, value) VALUES ('schema_version', ?1)",

@@ -1,9 +1,10 @@
-//! CLI-интерфейс на базе clap.
+pub mod agent;
 
+pub use agent::{AgentManager, AgentTarget};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "ob2h", author, version, about = "Локальное MCP-хранилище знаний для Hermes на Rust", long_about = None)]
+#[command(name = "ob2h", author, version, about = "Локальное MCP-хранилище знаний для AI-агентов на Rust", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -38,6 +39,60 @@ pub enum Commands {
     },
     /// Установить/обновить скилл ob2h в Hermes (пути темплейтятся под эту машину)
     SkillInstall,
+    /// Управление интеграциями с AI-агентами (Claude, Cursor, Windsurf, ZCode, Gemini, Qwen, OpenCode)
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommands,
+    },
+    /// Управление проектами и AST-сканированием кодовой базы
+    Project {
+        #[command(subcommand)]
+        command: ProjectCliCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AgentCommands {
+    /// Установить и настроить интеграцию для агента
+    Install {
+        /// Целевой агент (all|claude|cursor|windsurf|zcode|gemini|qwen|opencode|hermes)
+        #[arg(short, long, default_value = "all")]
+        agent: AgentTarget,
+        /// Кастомный путь к проекту (для локальной конфигурации .cursor / .zcode)
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+    /// Показать статус подключения агентов к OB2H
+    Status,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ProjectCliCommands {
+    /// Зарегистрировать новый проект
+    Init {
+        #[arg(short, long)]
+        id: String,
+        #[arg(short, long)]
+        name: String,
+        #[arg(short, long)]
+        path: String,
+        #[arg(short, long)]
+        description: Option<String>,
+    },
+    /// Сканировать кодовую базу проекта через AST
+    Scan {
+        #[arg(short, long)]
+        id: String,
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+    /// Список зарегистрированных проектов
+    List,
+    /// Сгенерировать архитектурный дайджест проекта
+    Report {
+        #[arg(short, long)]
+        id: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

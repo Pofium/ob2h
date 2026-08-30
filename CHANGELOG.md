@@ -3,6 +3,25 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [1.0.0] — 2026-08-30
+
+### Added
+- **Проектная память и детерминированный AST-граф кода** (Фазы 10-13, вдохновлено Graphify):
+  - Таблица `projects` в SQLite (миграция M3) с поддержкой изоляции памяти и сущностей по `project_id`.
+  - Высокопроизводительный статический AST-парсер (`AstCodeExtractor`) для Rust, Python, TypeScript/JavaScript, Go, SQL. Извлекает классы, структуры, интерфейсы, трейты, функции, таблицы и связи (`DEFINES`, `IMPORTS`, `INHERITS`, `FOREIGN_KEY_TO`) со 100% точностью (`provenance: 'ast'`, `confidence: 1.0`) без расхода токенов LLM.
+  - Графовая аналитика и выявление центральных узлов («God Nodes») по Degree & In-degree Centrality.
+  - Сжатые архитектурные дайджесты (`project_report`) и блок `<project_context>` для системного промпта агента.
+- **5 новых MCP-инструментов** (всего 24 инструмента):
+  - `project_init` — регистрация и настройка проекта.
+  - `project_scan` — детерминированное AST-сканирование кодовой базы и индексация в граф.
+  - `project_context` — генерация архитектурного контекста с God Nodes для промпта агента.
+  - `project_graph_search` — фильтрованный поиск по графу кода с указанием файлов и строк.
+  - `project_report` — подробный Markdown-дайджест кодовой базы.
+- **Мультиагентный установщик и CLI-менеджер (`ob2h agent`)**:
+  - Поддержка подключения в 1 клик для всех популярных AI-ассистентов: Claude Code, Cursor, Windsurf, ZCode, Gemini CLI / Antigravity, Qwen Code, OpenCode, Hermes.
+  - Команды `ob2h agent install [--agent <name>|--all] [--path <project_dir>]` и `ob2h agent status`.
+  - Команды `ob2h project init/scan/list/report`.
+
 ## [0.9.0] — 2026-08-23
 
 ### Added

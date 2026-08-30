@@ -136,6 +136,47 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::SkillInstall) => {
             skill_install()?;
         }
+        Some(Commands::Agent { command }) => match command {
+            ob2h::cli::AgentCommands::Install { agent, path } => {
+                ob2h::cli::AgentManager::install(agent, path.as_deref())?;
+            }
+            ob2h::cli::AgentCommands::Status => {
+                ob2h::cli::AgentManager::status()?;
+            }
+        },
+        Some(Commands::Project { command }) => match command {
+            ob2h::cli::ProjectCliCommands::Init { id, name, path, description } => {
+                let p = ctx.project.register_project(&id, &name, &path, description.as_deref(), None)?;
+                println!("Проект зарегистрирован: id={} name='{}' root='{}'", p.id, p.name, p.root_path);
+            }
+            ob2h::cli::ProjectCliCommands::Scan { id, path } => {
+                let res = ctx.project.scan_project(&id, path.as_deref(), true)?;
+                let _ = ctx.db.with_conn(|conn| {
+                    let _ = ob2h::graph::GraphAnalytics::update_god_nodes(conn, &id);
+                    Ok(())
+                });
+                println!(
+                    "Сканирование '{}' завершено: файлов={}, узлов={}, связей={}, строк={}",
+                    id, res.files_scanned, res.nodes.len(), res.edges.len(), res.lines_total
+                );
+            }
+            ob2h::cli::ProjectCliCommands::List => {
+                let list = ctx.project.list_projects()?;
+                if list.is_empty() {
+                    println!("Зарегистрированных проектов нет. Используйте 'ob2h project init'");
+                } else {
+                    println!("Зарегистрированные проекты ({}):", list.len());
+                    for p in list {
+                        let last = p.last_scanned_at.as_deref().unwrap_or("никогда");
+                        println!("- [{}] '{}' ({}) | последний скан: {}", p.id, p.name, p.root_path, last);
+                    }
+                }
+            }
+            ob2h::cli::ProjectCliCommands::Report { id } => {
+                let report = ctx.db.with_conn(|conn| ob2h::graph::GraphAnalytics::generate_project_report(conn, &id))?;
+                println!("{}", report.markdown_summary);
+            }
+        },
     }
 
     Ok(())

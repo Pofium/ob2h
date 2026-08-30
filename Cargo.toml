@@ -1,8 +1,8 @@
 [package]
 name = "ob2h"
-version = "0.9.0"
+version = "1.0.0"
 edition = "2021"
-description = "Автономное MCP-хранилище знаний и долговременной памяти для агента Hermes на Rust"
+description = "Автономное MCP-хранилище знаний и долговременной памяти для AI-агентов на Rust"
 
 [dependencies]
 tokio = { version = "1.43", features = ["full"] }
