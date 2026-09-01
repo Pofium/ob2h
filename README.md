@@ -1,8 +1,10 @@
 <div align="center">
 
-# 🧠 OB2H (OmnesBot to Hermes)
+<img src="docs/assets/banner.jpg" alt="OB2M Banner" width="600" style="border-radius: 12px; margin-bottom: 16px;" />
 
-### Автономная долговременная память, граф знаний и дриминг для агента Hermes
+# 🧠 OB2M (OmnesBot to Memory)
+
+### Автономная долговременная память, граф знаний и AST-анализ для AI-агентов
 
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -25,7 +27,7 @@
 
 Обычные ИИ-ассистенты забывают контекст и архитектуру ваших репозиториев, как только закрывается чат.
 
-**OB2H** — это локальный «мозг», долговременная память и AST-граф кода для AI-агентов (**Hermes, Claude Code, Cursor, Windsurf, ZCode, Gemini CLI, Qwen Code, OpenCode**), полностью написанный на **Rust**.
+**OB2M (OmnesBot to Memory)** — это локальный «мозг», долговременная память и AST-граф кода для AI-агентов (**Hermes, Claude Code, Cursor, Windsurf, ZCode, Gemini CLI, Qwen Code, OpenCode**), полностью написанный на **Rust**.
 
 Он даёт агенту возможность:
 1. 🧠 **Помнить всё важное о вас и ваших проектах**: факты, предпочтения, стек технологий и архитектурные решения.
@@ -44,7 +46,7 @@
 
 ## ⚡ Почему именно версия на Rust?
 
-| Параметр | Обычные решения (Python) | OB2H на Rust 🦀 |
+| Параметр | Обычные решения (Python) | OB2M на Rust 🦀 |
 |---|---|---|
 | **Установка** | Нужен Python, pip, виртуальные окружения | **Один бинарник `ob2h.exe` (~15 МБ)** |
 | **Скорость запуска** | 1.5 – 3.0 секунды | **< 15 миллисекунд** ⚡ |
