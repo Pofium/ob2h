@@ -202,5 +202,45 @@ class TestOb2hProvider(unittest.TestCase):
         self.assertIn("ob2h", self.provider.system_prompt_block())
 
 
+class TestLlmChildEnv(unittest.TestCase):
+    """Автоподстановка ключа агента в окружение дочернего ob2h."""
+
+    def setUp(self):
+        self.plugin = load_plugin_module()
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.home, ignore_errors=True))
+
+    def test_agent_key_from_dotenv(self):
+        (Path(self.home) / ".env").write_text(
+            'DEEPSEEK_API_KEY=sk-agent-secret\nSOMETHING=else\n', encoding="utf-8"
+        )
+        env = self.plugin._llm_child_env(self.home, {})
+        self.assertEqual(env.get("OB2H_LLM_API_KEY"), "sk-agent-secret")
+        self.assertEqual(env.get("OB2H_LLM_MODEL"), "deepseek-v4-flash")
+        self.assertEqual(env.get("OB2H_LLM_BASE_URL"), "https://api.deepseek.com/v1")
+
+    def test_explicit_ob2h_key_wins_over_agent_key(self):
+        (Path(self.home) / ".env").write_text(
+            'DEEPSEEK_API_KEY=sk-agent\nOB2H_LLM_API_KEY=sk-explicit\n'
+            'OB2H_LLM_MODEL=deepseek-chat\n', encoding="utf-8"
+        )
+        env = self.plugin._llm_child_env(self.home, {})
+        self.assertEqual(env.get("OB2H_LLM_API_KEY"), "sk-explicit")
+        self.assertEqual(env.get("OB2H_LLM_MODEL"), "deepseek-chat")
+
+    def test_cfg_json_wins_over_dotenv(self):
+        (Path(self.home) / ".env").write_text(
+            'DEEPSEEK_API_KEY=sk-agent\n', encoding="utf-8"
+        )
+        cfg = {"OB2H_LLM_API_KEY": "sk-json", "OB2H_LLM_MODEL": "m-json"}
+        env = self.plugin._llm_child_env(self.home, cfg)
+        self.assertEqual(env.get("OB2H_LLM_API_KEY"), "sk-json")
+        self.assertEqual(env.get("OB2H_LLM_MODEL"), "m-json")
+
+    def test_no_key_no_source_returns_empty(self):
+        env = self.plugin._llm_child_env(self.home, {})  # нет .env
+        self.assertNotIn("OB2H_LLM_API_KEY", env)
+
+
 if __name__ == "__main__":
     unittest.main()

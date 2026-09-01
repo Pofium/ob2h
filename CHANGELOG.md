@@ -3,7 +3,25 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [1.1.0] — 2026-09-01
+
+### Added
+- **Поддержка языков PHP, Dart и Java в AST-графе кода** (`src/project/ast.rs`):
+  - PHP (`.php`): парсинг `class`, `interface`, `trait`, функций/методов, `use`-импортов, `extends`, множественного `implements`.
+  - Dart / Flutter (`.dart`): парсинг `class`, `mixin`, функций/методов, `import`/`export`, `with`, `implements`.
+  - Java (`.java`): парсинг `package`, `import`, `class`, `interface`, `enum`, `record`, методов и связей наследования/реализации.
+  - Полный набор юнит-тестов для новых парсеров в `tests/test_ast_extractor.rs`.
+
 ## [1.0.0] — 2026-08-30
+
+### Fixed
+- **Плагин Hermes: автоподстановка ключа агента в `ob2h serve`** (`plugin/ob2h/__init__.py`).
+  Раньше плагин спавнил ob2h с `OB2H_DATA_DIR`, но без `OB2H_LLM_API_KEY` — процесс от
+  плагина оставался без ключа, и дриминг/LLM-инструменты падали с
+  `401 Authentication Fails (governor)`. Теперь плагин сам резолвит и прокидывает
+  `OB2H_LLM_API_KEY/OB2H_LLM_MODEL/OB2H_LLM_BASE_URL` в дочерний процесс: приоритет —
+  окружение Hermes > ob2h.json > `.env` агента ($HERMES_HOME/.env, ключ по конвенции
+  DEEPSEEK_API_KEY). Юнит-тесты: 4 новых на `_llm_child_env` (20 всего).
 
 ### Added
 - **Проектная память и детерминированный AST-граф кода** (Фазы 10-13, вдохновлено Graphify):

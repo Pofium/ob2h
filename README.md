@@ -6,7 +6,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.0.0-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
+[![Release](https://img.shields.io/badge/Release-v1.1.0-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](https://github.com/Pofium/ob2h)
 [![CloudTips](https://img.shields.io/badge/%F0%9F%92%B0%20%D0%A7%D0%B0%D0%B5%D0%B2%D1%8B%20%D0%B0%D0%B2%D1%82%D0%BE%D1%80%D1%83-CloudTips%20(РФ)-ff69b4.svg)](https://pay.cloudtips.ru/p/4e7f8019)
 
@@ -29,7 +29,7 @@
 
 Он даёт агенту возможность:
 1. 🧠 **Помнить всё важное о вас и ваших проектах**: факты, предпочтения, стек технологий и архитектурные решения.
-2. 🏛️ **Строить детерминированный AST-граф кода (вдохновлено Graphify)**: мгновенно сканирует кодовую базу (Rust, Python, TS/JS, Go, SQL), извлекает классы, функции, интерфейсы и связи со 100% точностью и без расхода токенов LLM.
+2. 🏛️ **Строить детерминированный AST-граф кода (вдохновлено Graphify)**: мгновенно сканирует кодовую базу (Rust, Python, TS/JS, Go, SQL, PHP, Dart, Java, C/C++), извлекает классы, функции, интерфейсы, трейты/миксины и связи со 100% точностью и без расхода токенов LLM.
 3. 👑 **Выявлять ключевые узлы архитектуры (God Nodes)**: автоматически рассчитывает связность и передает агенту компактный архитектурный дайджест.
 4. 🌙 **«Видеть сны» (Дриминг)**: пока вы отдыхаете, агент ночью в фоне анализирует историю дня, удаляет устаревшие данные, обновляет файлы памяти (`SOUL.md`, `USER.md`, `MEMORY.md`) и сохраняет версии в Git.
 5. ⚡ **Работать молниеносно и локально**: встроенная мультиязычная модель эмбеддингов работает прямо на процессоре без необходимости настраивать сторонние сервисы.

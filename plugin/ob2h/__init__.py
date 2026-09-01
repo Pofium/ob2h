@@ -72,6 +72,57 @@ def _binary_candidates(cfg: Dict[str, str]) -> List[str]:
     return out
 
 
+def _read_dotenv(path: Path) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return out
+
+
+def _llm_child_env(hermes_home: str, cfg: Dict[str, str]) -> Dict[str, str]:
+    """Собрать OB2H_LLM_* для дочернего процесса ``ob2h serve``.
+
+    Автоподстановка ключа агента, к которому подключён ob2h: если явных
+    OB2H_LLM_* нигде нет, берём ключ/модель/URL агента (его ``.env``
+    в $HERMES_HOME/.env, ключ по конвенции DEEPSEEK_API_KEY). Без этого
+    ob2h в режиме плагина остаётся без ключа и дриминг/извлечение падают
+    с 401. Приоритет источников: окружение Hermes > ob2h.json > .env Hermes."""
+    dot = _read_dotenv(Path(hermes_home) / ".env")
+
+    def pick(name, default=None):
+        for src in (os.environ, cfg, dot):
+            v = src.get(name)
+            if v:
+                return v
+        return default
+
+    key = pick("OB2H_LLM_API_KEY")
+    if not key:
+        agent_key = os.environ.get("DEEPSEEK_API_KEY") or dot.get(
+            "DEEPSEEK_API_KEY"
+        )
+        if agent_key:
+            key = agent_key  # резолвленный литерал — индирекция не нужна
+
+    out: Dict[str, str] = {}
+    if key:
+        out["OB2H_LLM_API_KEY"] = key
+    model = pick("OB2H_LLM_MODEL", "deepseek-v4-flash")
+    if model:
+        out["OB2H_LLM_MODEL"] = model
+    base = pick("OB2H_LLM_BASE_URL", "https://api.deepseek.com/v1")
+    if base:
+        out["OB2H_LLM_BASE_URL"] = base
+    return out
+
+
 class Ob2hProvider(MemoryProvider):
     """MemoryProvider поверх ``ob2h serve``."""
 
@@ -168,6 +219,9 @@ class Ob2hProvider(MemoryProvider):
 
         self._data_dir = self._cfg.get("data_dir") or os.environ.get("OB2H_DATA_DIR", "")
         env = {"OB2H_DATA_DIR": self._data_dir} if self._data_dir else {}
+        # Автоподстановка ключа агента (Hermes), чтобы ob2h-плагин не оставался
+        # без ключа: иначе дриминг/LLM-инструменты падают с 401.
+        env.update(_llm_child_env(self._hermes_home, self._cfg))
         self._rpc = Ob2hRpc([self._binary, "serve"], env=env)
 
         try:

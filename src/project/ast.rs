@@ -63,6 +63,23 @@ pub struct AstCodeExtractor {
 
     sql_table_re: Regex,
     sql_fk_re: Regex,
+
+    php_use_re: Regex,
+    php_class_re: Regex,
+    php_interface_re: Regex,
+    php_trait_re: Regex,
+    php_fn_re: Regex,
+
+    dart_import_re: Regex,
+    dart_class_re: Regex,
+    dart_mixin_re: Regex,
+    dart_fn_re: Regex,
+
+    java_package_re: Regex,
+    java_import_re: Regex,
+    java_class_re: Regex,
+    java_interface_re: Regex,
+    java_fn_re: Regex,
 }
 
 impl Default for AstCodeExtractor {
@@ -100,6 +117,26 @@ impl AstCodeExtractor {
             // SQL patterns
             sql_table_re: Regex::new(r"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z0-9_`\[\]]+)").unwrap(),
             sql_fk_re: Regex::new(r"(?i)REFERENCES\s+([a-zA-Z0-9_`\[\]]+)\s*\(([a-zA-Z0-9_`\[\]]+)\)").unwrap(),
+
+            // PHP patterns
+            php_use_re: Regex::new(r"(?m)^\s*use\s+(?:function\s+|const\s+)?([a-zA-Z0-9_\\]+)(?:\s+as\s+([a-zA-Z0-9_]+))?;").unwrap(),
+            php_class_re: Regex::new(r"(?m)^\s*(?:(?:final|abstract|readonly)\s+)*class\s+([a-zA-Z0-9_]+)(?:\s+extends\s+([a-zA-Z0-9_\\]+))?(?:\s+implements\s+([a-zA-Z0-9_\\,\s]+))?").unwrap(),
+            php_interface_re: Regex::new(r"(?m)^\s*interface\s+([a-zA-Z0-9_]+)(?:\s+extends\s+([a-zA-Z0-9_\\,\s]+))?").unwrap(),
+            php_trait_re: Regex::new(r"(?m)^\s*trait\s+([a-zA-Z0-9_]+)").unwrap(),
+            php_fn_re: Regex::new(r"(?m)^\s*(?:(?:public|protected|private|static|final|abstract)\s+)*function\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)").unwrap(),
+
+            // Dart patterns
+            dart_import_re: Regex::new(r#"(?m)^\s*(?:import|export)\s+['"]([^'"]+)['"](?:\s+as\s+([a-zA-Z0-9_]+))?"#).unwrap(),
+            dart_class_re: Regex::new(r"(?m)^\s*(?:(?:abstract|base|final|interface|sealed)\s+)*class\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s+extends\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?)?(?:\s+with\s+([a-zA-Z0-9_,\s]+))?(?:\s+implements\s+([a-zA-Z0-9_,\s]+))?").unwrap(),
+            dart_mixin_re: Regex::new(r"(?m)^\s*mixin\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s+on\s+([a-zA-Z0-9_,\s]+))?").unwrap(),
+            dart_fn_re: Regex::new(r"(?m)^\s*(?:(?:static|async|void|[a-zA-Z0-9_<>?]+)\s+)+([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*(?:async\*?|=>|\{)").unwrap(),
+
+            // Java patterns
+            java_package_re: Regex::new(r"(?m)^\s*package\s+([a-zA-Z0-9_.]+);").unwrap(),
+            java_import_re: Regex::new(r"(?m)^\s*import\s+(?:static\s+)?([a-zA-Z0-9_.*]+);").unwrap(),
+            java_class_re: Regex::new(r"(?m)^\s*(?:(?:public|protected|private|static|final|abstract|sealed|non-sealed)\s+)*(?:class|enum|record)\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s+extends\s+([a-zA-Z0-9_.]+)(?:<[^>]+>)?)?(?:\s+implements\s+([a-zA-Z0-9_.,\s]+))?").unwrap(),
+            java_interface_re: Regex::new(r"(?m)^\s*(?:(?:public|protected|private|static|sealed|non-sealed)\s+)*interface\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s+extends\s+([a-zA-Z0-9_.,\s]+))?").unwrap(),
+            java_fn_re: Regex::new(r"(?m)^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|default)\s+)+(?:<[^>]+>\s+)?([a-zA-Z0-9_<>\[\]]+)\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)").unwrap(),
         }
     }
 
@@ -164,7 +201,7 @@ impl AstCodeExtractor {
                 if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
                     let ext_lower = ext.to_lowercase();
                     if matches!(ext_lower.as_str(), 
-                        "rs" | "py" | "ts" | "tsx" | "js" | "jsx" | "go" | "sql" | "c" | "cpp" | "h" | "hpp"
+                        "rs" | "py" | "ts" | "tsx" | "js" | "jsx" | "go" | "sql" | "c" | "cpp" | "h" | "hpp" | "php" | "dart" | "java"
                     ) {
                         if let Ok(rel) = path.strip_prefix(root) {
                             let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -199,6 +236,9 @@ impl AstCodeExtractor {
             "ts" | "tsx" | "js" | "jsx" => self.parse_ts_js(rel_path, &file_node_id, content, out),
             "go" => self.parse_go(rel_path, &file_node_id, content, out),
             "sql" => self.parse_sql(rel_path, &file_node_id, content, out),
+            "php" => self.parse_php(rel_path, &file_node_id, content, out),
+            "dart" => self.parse_dart(rel_path, &file_node_id, content, out),
+            "java" => self.parse_java(rel_path, &file_node_id, content, out),
             _ => {}
         }
     }
@@ -572,6 +612,456 @@ impl AstCodeExtractor {
                         label: "FOREIGN_KEY_TO".to_string(),
                         weight: 1.0,
                         context: format!("REFERENCES {}", fk_target),
+                    });
+                }
+            }
+        }
+    }
+
+    fn parse_php(&self, rel_path: &str, file_node_id: &str, content: &str, out: &mut AstScanResult) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. Imports (use)
+        for cap in self.php_use_re.captures_iter(content) {
+            if let Some(target) = cap.get(1) {
+                let target_str = target.as_str().trim();
+                if !target_str.is_empty() {
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: format!("module:{}", target_str),
+                        label: "IMPORTS".to_string(),
+                        weight: 1.0,
+                        context: format!("use {};", target_str),
+                    });
+                }
+            }
+        }
+
+        // 2. Classes, Interfaces, Traits
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.php_class_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let class_name = name_match.as_str();
+                    let node_id = format!("class:{}:{}", rel_path, class_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: class_name.to_string(),
+                        node_type: "Class".to_string(),
+                        description: format!("PHP класс `{}` в {}", class_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                    });
+
+                    // Extends
+                    if let Some(ext_match) = cap.get(2) {
+                        let base = ext_match.as_str().trim();
+                        if !base.is_empty() {
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: format!("class:{}", base),
+                                label: "INHERITS".to_string(),
+                                weight: 1.0,
+                                context: format!("extends {}", base),
+                            });
+                        }
+                    }
+
+                    // Implements
+                    if let Some(impl_match) = cap.get(3) {
+                        for iface in impl_match.as_str().split(',') {
+                            let iface_clean = iface.trim();
+                            if !iface_clean.is_empty() {
+                                out.edges.push(AstEdge {
+                                    source_node_id: node_id.clone(),
+                                    target_node_id: format!("interface:{}", iface_clean),
+                                    label: "IMPLEMENTS".to_string(),
+                                    weight: 1.0,
+                                    context: format!("implements {}", iface_clean),
+                                });
+                            }
+                        }
+                    }
+                }
+            } else if let Some(cap) = self.php_interface_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let iface_name = name_match.as_str();
+                    let node_id = format!("interface:{}:{}", rel_path, iface_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: iface_name.to_string(),
+                        node_type: "Interface".to_string(),
+                        description: format!("PHP интерфейс `{}` в {}", iface_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                    });
+
+                    if let Some(ext_match) = cap.get(2) {
+                        for base in ext_match.as_str().split(',') {
+                            let base_clean = base.trim();
+                            if !base_clean.is_empty() {
+                                out.edges.push(AstEdge {
+                                    source_node_id: node_id.clone(),
+                                    target_node_id: format!("interface:{}", base_clean),
+                                    label: "INHERITS".to_string(),
+                                    weight: 1.0,
+                                    context: format!("extends {}", base_clean),
+                                });
+                            }
+                        }
+                    }
+                }
+            } else if let Some(cap) = self.php_trait_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let trait_name = name_match.as_str();
+                    let node_id = format!("trait:{}:{}", rel_path, trait_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: trait_name.to_string(),
+                        node_type: "Trait".to_string(),
+                        description: format!("PHP трейт `{}` в {}", trait_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                    });
+                }
+            }
+        }
+
+        // 3. Functions & Methods
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.php_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(1) {
+                    let fn_name = fn_match.as_str();
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("PHP функция/метод `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn parse_dart(&self, rel_path: &str, file_node_id: &str, content: &str, out: &mut AstScanResult) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. Imports
+        for cap in self.dart_import_re.captures_iter(content) {
+            if let Some(mod_src) = cap.get(1) {
+                let mod_name = mod_src.as_str();
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", mod_name),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("import '{}';", mod_name),
+                });
+            }
+        }
+
+        // 2. Classes & Mixins
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.dart_class_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let class_name = name_match.as_str();
+                    let node_id = format!("class:{}:{}", rel_path, class_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: class_name.to_string(),
+                        node_type: "Class".to_string(),
+                        description: format!("Dart класс `{}` в {}", class_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                    });
+
+                    // Extends
+                    if let Some(ext_match) = cap.get(2) {
+                        let base = ext_match.as_str().trim();
+                        if !base.is_empty() {
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: format!("class:{}", base),
+                                label: "INHERITS".to_string(),
+                                weight: 1.0,
+                                context: format!("extends {}", base),
+                            });
+                        }
+                    }
+
+                    // With mixins
+                    if let Some(with_match) = cap.get(3) {
+                        for mixin in with_match.as_str().split(',') {
+                            let mixin_clean = mixin.trim();
+                            if !mixin_clean.is_empty() {
+                                out.edges.push(AstEdge {
+                                    source_node_id: node_id.clone(),
+                                    target_node_id: format!("trait:{}", mixin_clean),
+                                    label: "IMPLEMENTS".to_string(),
+                                    weight: 1.0,
+                                    context: format!("with {}", mixin_clean),
+                                });
+                            }
+                        }
+                    }
+
+                    // Implements
+                    if let Some(impl_match) = cap.get(4) {
+                        for iface in impl_match.as_str().split(',') {
+                            let iface_clean = iface.trim();
+                            if !iface_clean.is_empty() {
+                                out.edges.push(AstEdge {
+                                    source_node_id: node_id.clone(),
+                                    target_node_id: format!("interface:{}", iface_clean),
+                                    label: "IMPLEMENTS".to_string(),
+                                    weight: 1.0,
+                                    context: format!("implements {}", iface_clean),
+                                });
+                            }
+                        }
+                    }
+                }
+            } else if let Some(cap) = self.dart_mixin_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let mixin_name = name_match.as_str();
+                    let node_id = format!("trait:{}:{}", rel_path, mixin_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: mixin_name.to_string(),
+                        node_type: "Trait".to_string(),
+                        description: format!("Dart миксин `{}` в {}", mixin_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                    });
+                }
+            }
+        }
+
+        // 3. Functions & Methods
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.dart_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(1) {
+                    let fn_name = fn_match.as_str();
+                    if matches!(fn_name, "if" | "for" | "while" | "switch" | "catch") {
+                        continue;
+                    }
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("Dart функция/метод `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn parse_java(&self, rel_path: &str, file_node_id: &str, content: &str, out: &mut AstScanResult) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. Package & Imports
+        for cap in self.java_package_re.captures_iter(content) {
+            if let Some(pkg) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", pkg.as_str()),
+                    label: "DEFINES".to_string(),
+                    weight: 1.0,
+                    context: format!("package {};", pkg.as_str()),
+                });
+            }
+        }
+
+        for cap in self.java_import_re.captures_iter(content) {
+            if let Some(imp) = cap.get(1) {
+                let imp_str = imp.as_str();
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", imp_str),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("import {};", imp_str),
+                });
+            }
+        }
+
+        // 2. Classes, Interfaces, Enums, Records
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.java_class_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let class_name = name_match.as_str();
+                    let node_id = format!("class:{}:{}", rel_path, class_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: class_name.to_string(),
+                        node_type: "Class".to_string(),
+                        description: format!("Java класс/тип `{}` в {}", class_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                    });
+
+                    // Extends
+                    if let Some(ext_match) = cap.get(2) {
+                        let base = ext_match.as_str().trim();
+                        if !base.is_empty() {
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: format!("class:{}", base),
+                                label: "INHERITS".to_string(),
+                                weight: 1.0,
+                                context: format!("extends {}", base),
+                            });
+                        }
+                    }
+
+                    // Implements
+                    if let Some(impl_match) = cap.get(3) {
+                        for iface in impl_match.as_str().split(',') {
+                            let iface_clean = iface.trim();
+                            if !iface_clean.is_empty() {
+                                out.edges.push(AstEdge {
+                                    source_node_id: node_id.clone(),
+                                    target_node_id: format!("interface:{}", iface_clean),
+                                    label: "IMPLEMENTS".to_string(),
+                                    weight: 1.0,
+                                    context: format!("implements {}", iface_clean),
+                                });
+                            }
+                        }
+                    }
+                }
+            } else if let Some(cap) = self.java_interface_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let iface_name = name_match.as_str();
+                    let node_id = format!("interface:{}:{}", rel_path, iface_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: iface_name.to_string(),
+                        node_type: "Interface".to_string(),
+                        description: format!("Java интерфейс `{}` в {}", iface_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                    });
+
+                    if let Some(ext_match) = cap.get(2) {
+                        for base in ext_match.as_str().split(',') {
+                            let base_clean = base.trim();
+                            if !base_clean.is_empty() {
+                                out.edges.push(AstEdge {
+                                    source_node_id: node_id.clone(),
+                                    target_node_id: format!("interface:{}", base_clean),
+                                    label: "INHERITS".to_string(),
+                                    weight: 1.0,
+                                    context: format!("extends {}", base_clean),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Methods
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.java_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(2) {
+                    let fn_name = fn_match.as_str();
+                    if matches!(fn_name, "if" | "for" | "while" | "switch" | "catch") {
+                        continue;
+                    }
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("Java метод `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
                     });
                 }
             }
