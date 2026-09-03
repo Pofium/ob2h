@@ -66,6 +66,8 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         backup.clone(),
     ));
     let dream_lock = Arc::new(Mutex::new(()));
+    let active_workspace = Arc::new(tokio::sync::RwLock::new(None));
+    let active_project_id = Arc::new(tokio::sync::RwLock::new(None));
 
     Ok(Arc::new(AppContext {
         settings,
@@ -83,6 +85,8 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         backup,
         sync,
         dream_lock,
+        active_workspace,
+        active_project_id,
     }))
 }
 

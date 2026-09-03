@@ -1,6 +1,6 @@
 [package]
 name = "ob2h"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 description = "Автономное MCP-хранилище знаний и долговременной памяти для AI-агентов на Rust"
 
@@ -30,6 +30,7 @@ candle-nn = "0.8"
 candle-transformers = "0.8"
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 hf-hub = "0.4"
+ignore = "0.4"
 
 [dev-dependencies]
 tempfile = "3.17"

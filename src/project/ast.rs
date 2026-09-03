@@ -37,6 +37,7 @@ pub struct AstScanResult {
     pub nodes: Vec<AstNode>,
     pub edges: Vec<AstEdge>,
     pub file_hashes: HashMap<String, String>,
+    pub file_meta: HashMap<String, (usize, usize)>, // rel_path -> (file_size, lines_count)
 }
 
 /// AST-экстрактор для проектов.
@@ -152,11 +153,12 @@ impl AstCodeExtractor {
         let mut result = AstScanResult::default();
         let mut files_to_scan = Vec::new();
 
-        self.collect_files(root, root, &mut files_to_scan);
+        self.collect_files(root, &mut files_to_scan);
 
         for (rel_path, abs_path) in files_to_scan {
             if let Ok(bytes) = fs::read(&abs_path) {
                 let hash = Self::file_sha256(&bytes);
+                let file_size = bytes.len();
                 result.file_hashes.insert(rel_path.clone(), hash.clone());
 
                 if let Some(known) = known_hashes {
@@ -168,8 +170,10 @@ impl AstCodeExtractor {
                 }
 
                 if let Ok(content) = String::from_utf8(bytes) {
+                    let lines_count = content.lines().count();
                     result.files_scanned += 1;
-                    result.lines_total += content.lines().count();
+                    result.lines_total += lines_count;
+                    result.file_meta.insert(rel_path.clone(), (file_size, lines_count));
                     self.parse_file(&rel_path, &content, &mut result);
                 }
             }
@@ -178,26 +182,29 @@ impl AstCodeExtractor {
         result
     }
 
-    fn collect_files(&self, root: &Path, current: &Path, out: &mut Vec<(String, PathBuf)>) {
-        let entries = match fs::read_dir(current) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
+    fn collect_files(&self, root: &Path, out: &mut Vec<(String, PathBuf)>) {
+        let mut builder = ignore::WalkBuilder::new(root);
+        builder
+            .hidden(true)
+            .parents(true)
+            .ignore(true)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .add_custom_ignore_filename(".gitignore");
 
-        for entry in entries.flatten() {
+        for entry in builder.build().flatten() {
             let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
+            let name = entry.file_name().to_string_lossy();
 
-            // Пропускаем служебные и игнорируемые каталоги
-            if name.starts_with('.') || name == "target" || name == "node_modules" 
-                || name == "dist" || name == "build" || name == "venv" 
+            // Пропускаем служебные и тяжёлые каталоги сборки/зависимостей
+            if name == "target" || name == "node_modules" || name == "dist" 
+                || name == "build" || name == "venv" || name == ".venv" 
                 || name == "__pycache__" || name == "vendor" || name == "data" {
                 continue;
             }
 
-            if path.is_dir() {
-                self.collect_files(root, &path, out);
-            } else if path.is_file() {
+            if entry.file_type().is_some_and(|ft| ft.is_file()) {
                 if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
                     let ext_lower = ext.to_lowercase();
                     if matches!(ext_lower.as_str(), 
@@ -205,7 +212,12 @@ impl AstCodeExtractor {
                     ) {
                         if let Ok(rel) = path.strip_prefix(root) {
                             let rel_str = rel.to_string_lossy().replace('\\', "/");
-                            out.push((rel_str, path));
+                            // Дополнительная проверка, чтобы не попасть в поддиректории исключений
+                            if !rel_str.contains("/target/") && !rel_str.contains("/node_modules/") 
+                                && !rel_str.contains("/venv/") && !rel_str.contains("/.venv/") 
+                                && !rel_str.contains("/vendor/") && !rel_str.contains("/data/") {
+                                out.push((rel_str, path.to_path_buf()));
+                            }
                         }
                     }
                 }

@@ -39,10 +39,47 @@ pub struct AppContext {
     pub backup: Arc<BackupManager>,
     pub sync: Arc<crate::sync::SyncManager>,
     pub dream_lock: Arc<Mutex<()>>,
+    pub active_workspace: Arc<tokio::sync::RwLock<Option<std::path::PathBuf>>>,
+    pub active_project_id: Arc<tokio::sync::RwLock<Option<String>>>,
 }
 
 pub struct McpServer {
     ctx: Arc<AppContext>,
+}
+
+fn parse_file_uri(uri: &str) -> Option<std::path::PathBuf> {
+    let s = uri.trim();
+    let stripped = if let Some(p) = s.strip_prefix("file:///") {
+        p
+    } else {
+        s.strip_prefix("file://")?
+    };
+
+    let mut res = String::new();
+    let mut chars = stripped.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(c1), Some(c2)) = (h1, h2) {
+                let hex_str = format!("{}{}", c1, c2);
+                if let Ok(b) = u8::from_str_radix(&hex_str, 16) {
+                    res.push(b as char);
+                    continue;
+                }
+                res.push('%');
+                res.push(c1);
+                res.push(c2);
+            } else {
+                res.push('%');
+                if let Some(c1) = h1 { res.push(c1); }
+            }
+        } else {
+            res.push(c);
+        }
+    }
+
+    Some(std::path::PathBuf::from(res))
 }
 
 impl McpServer {
@@ -127,10 +164,53 @@ impl McpServer {
         Ok(())
     }
 
-    async fn handle_request(&self, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
+    pub async fn handle_request(&self, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
         let id = req.id.clone();
         match req.method.as_str() {
             "initialize" => {
+                // Автоматическое определение рабочей директории сессии агента
+                let mut detected_path: Option<std::path::PathBuf> = None;
+
+                if let Some(params) = &req.params {
+                    // 1. Проверяем workspaceFolders
+                    if let Some(folders) = params.get("workspaceFolders").and_then(|v| v.as_array()) {
+                        for f in folders {
+                            if let Some(uri) = f.get("uri").and_then(|u| u.as_str()) {
+                                if let Some(p) = parse_file_uri(uri) {
+                                    detected_path = Some(p);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. Проверяем rootUri
+                    if detected_path.is_none() {
+                        if let Some(uri) = params.get("rootUri").and_then(|u| u.as_str()) {
+                            detected_path = parse_file_uri(uri);
+                        }
+                    }
+
+                    // 3. Проверяем rootPath
+                    if detected_path.is_none() {
+                        if let Some(path_str) = params.get("rootPath").and_then(|p| p.as_str()) {
+                            detected_path = Some(std::path::PathBuf::from(path_str));
+                        }
+                    }
+                }
+
+                // 4. Fallback на std::env::current_dir()
+                let target_dir = detected_path.unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                });
+
+                // Zero-Config: автодетект и регистрация проекта
+                if let Ok(project) = self.ctx.project.auto_register_or_detect(&target_dir) {
+                    *self.ctx.active_workspace.write().await = Some(std::path::PathBuf::from(&project.root_path));
+                    *self.ctx.active_project_id.write().await = Some(project.id.clone());
+                    info!("Zero-Config: MCP-сессия привязана к проекту '{}' ({})", project.name, project.id);
+                }
+
                 let result = serde_json::json!({
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
@@ -168,7 +248,34 @@ impl McpServer {
             "tools/call" => {
                 let params = req.params.unwrap_or(serde_json::json!({}));
                 let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                let mut args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+
+                // Автоматическая подстановка active_project_id, если аргумент не передан
+                if let Some(active_id) = self.ctx.active_project_id.read().await.as_ref() {
+                    if let Some(obj) = args.as_object_mut() {
+                        let needs_project_id = match tool_name {
+                            "memory_save" | "memory_search" | "memory_update" | "memory_context"
+                            | "session_log" | "session_ingest"
+                            | "knowledge_extract" | "graph_search" | "graph_reason" | "graph_stats"
+                            | "project_context" | "project_graph_search" | "project_report" => true,
+                            "project_scan" => !obj.contains_key("id"),
+                            _ => false,
+                        };
+
+                        if needs_project_id {
+                            let empty = obj.get("project_id").and_then(|v| v.as_str()).is_none_or(|s| s.is_empty());
+                            if empty {
+                                obj.insert("project_id".to_string(), serde_json::Value::String(active_id.clone()));
+                            }
+                            if tool_name == "project_scan" || tool_name == "project_context" || tool_name == "project_graph_search" || tool_name == "project_report" {
+                                let id_empty = obj.get("id").and_then(|v| v.as_str()).is_none_or(|s| s.is_empty());
+                                if id_empty {
+                                    obj.insert("id".to_string(), serde_json::Value::String(active_id.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
 
                 let output = self.call_tool(tool_name, args).await;
                 let truncated_output = self.truncate(&output);
@@ -213,8 +320,9 @@ impl McpServer {
                 let category = args.get("category").and_then(|v| v.as_str()).unwrap_or("general");
                 let importance = args.get("importance").and_then(|v| v.as_f64()).unwrap_or(0.5);
                 let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("chat");
+                let project_id = args.get("project_id").and_then(|v| v.as_str());
 
-                match self.ctx.memory.save(content, key, category, importance, source, None).await {
+                match self.ctx.memory.save_with_project(content, key, category, importance, source, None, project_id).await {
                     Ok(k) => format!("saved key={k}"),
                     Err(e) => format!("[Error] {e}"),
                 }

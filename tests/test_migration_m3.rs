@@ -9,7 +9,6 @@ fn test_fresh_db_m3_migration() -> anyhow::Result<()> {
     migrate(&conn)?;
 
     assert_eq!(schema_version(&conn), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 3);
 
     // Проверяем существование таблицы projects
     let project_count: i64 = conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))?;
@@ -92,10 +91,10 @@ fn test_upgrade_from_m2_to_m3() -> anyhow::Result<()> {
         [],
     )?;
 
-    // Запускаем migrate — должен автоматически применить M3
+    // Запускаем migrate — должен автоматически применить M3 и последующие миграции
     migrate(&conn)?;
 
-    assert_eq!(schema_version(&conn), 3);
+    assert_eq!(schema_version(&conn), SCHEMA_VERSION);
 
     // Проверяем, что старая запись на месте и project_id равен NULL
     let (content, proj_id): (String, Option<String>) = conn.query_row(

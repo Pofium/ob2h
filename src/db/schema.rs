@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -64,6 +64,20 @@ ALTER TABLE graph_edges ADD COLUMN project_id TEXT;
 ALTER TABLE graph_edges ADD COLUMN provenance TEXT NOT NULL DEFAULT 'manual';
 ALTER TABLE graph_edges ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0;
 CREATE INDEX IF NOT EXISTS idx_graph_edges_project ON graph_edges(project_id);
+"#;
+
+/// M4 (v1.2+): project_files для честного инкрементального AST-сканирования.
+pub const MIGRATION_V4: &str = r#"
+CREATE TABLE IF NOT EXISTS project_files (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  rel_path TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  lines_count INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, rel_path)
+);
+CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files(project_id);
 "#;
 
 /// Текущая версия схемы БД (0 — свежая, ещё без таблиц).
@@ -210,12 +224,16 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V1)?;
         conn.execute_batch(MIGRATION_V2)?;
         conn.execute_batch(MIGRATION_V3)?;
+        conn.execute_batch(MIGRATION_V4)?;
     } else {
         if current_version < 2 {
             conn.execute_batch(MIGRATION_V2)?;
         }
         if current_version < 3 {
             conn.execute_batch(MIGRATION_V3)?;
+        }
+        if current_version < 4 {
+            conn.execute_batch(MIGRATION_V4)?;
         }
     }
 
