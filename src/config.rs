@@ -36,6 +36,12 @@ pub struct Settings {
     // --- Ретеншн ---
     pub retention_days: i64,
 
+    // --- Реактивная автоматизация (Фаза 18) ---
+    pub watcher_enabled: bool,
+    pub watcher_debounce_ms: u64,
+    pub autosync_enabled: bool,
+    pub autosync_interval_minutes: u64,
+
     // --- Служебное ---
     pub log_level: String,
     pub max_tool_output_chars: usize,
@@ -121,6 +127,20 @@ impl Settings {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(20000);
+        let watcher_enabled = env::var("OB2H_WATCHER_ENABLED")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
+        let watcher_debounce_ms = env::var("OB2H_WATCHER_DEBOUNCE_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2500);
+        let autosync_enabled = env::var("OB2H_AUTOSYNC_ENABLED")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
+        let autosync_interval_minutes = env::var("OB2H_SYNC_INTERVAL_MINUTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(120);
 
         Self {
             data_dir,
@@ -142,6 +162,10 @@ impl Settings {
             dream_batch,
             dream_extract_enabled,
             retention_days,
+            watcher_enabled,
+            watcher_debounce_ms,
+            autosync_enabled,
+            autosync_interval_minutes,
             log_level,
             max_tool_output_chars,
         }

@@ -1,6 +1,8 @@
 pub mod agent;
+pub mod doctor;
 
 pub use agent::{AgentManager, AgentTarget};
+pub use doctor::{Doctor, DoctorItem, DoctorStatus};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -14,6 +16,12 @@ pub struct Cli {
 pub enum Commands {
     /// Запустить MCP stdio сервер (поведение по умолчанию)
     Serve,
+    /// Диагностика окружения, баз данных, моделей и AI-агентов
+    Doctor {
+        /// Автоматически исправить отсутствующие конфигурации агентов и Git-хуков
+        #[arg(short, long)]
+        fix: bool,
+    },
     /// Управление процессом дриминга памяти
     Dream {
         #[command(subcommand)]
@@ -92,6 +100,15 @@ pub enum ProjectCliCommands {
     Report {
         #[arg(short, long)]
         id: String,
+    },
+    /// Установить Git-хуки для автоматического инкрементального сканирования
+    HookInstall {
+        /// Путь к репозиторию (по умолчанию текущая директория)
+        #[arg(short, long)]
+        path: Option<String>,
+        /// Идентификатор проекта (если опущен, определяется автоматически)
+        #[arg(short, long)]
+        id: Option<String>,
     },
 }
 

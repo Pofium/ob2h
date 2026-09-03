@@ -68,6 +68,10 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
     let dream_lock = Arc::new(Mutex::new(()));
     let active_workspace = Arc::new(tokio::sync::RwLock::new(None));
     let active_project_id = Arc::new(tokio::sync::RwLock::new(None));
+    let watcher = Arc::new(crate::project::ProjectWatcher::new(
+        project.clone(),
+        settings.watcher_debounce_ms,
+    ));
 
     Ok(Arc::new(AppContext {
         settings,
@@ -87,10 +91,11 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         dream_lock,
         active_workspace,
         active_project_id,
+        watcher,
     }))
 }
 
-/// Запуск фоновых воркеров (AutoDream)
+/// Запуск фоновых воркеров (AutoDream, AutoSync)
 pub fn start_background_workers(ctx: Arc<AppContext>) {
     if ctx.settings.autodream_enabled {
         let worker = Arc::new(AutoDreamWorker::new(
@@ -101,5 +106,14 @@ pub fn start_background_workers(ctx: Arc<AppContext>) {
             Some(ctx.sync.clone()),
         ));
         worker.start();
+    }
+
+    if ctx.settings.autosync_enabled {
+        let sync_worker = Arc::new(crate::sync::AutoSyncWorker::new(
+            ctx.sync.clone(),
+            ctx.settings.autosync_interval_minutes,
+            ctx.settings.autosync_enabled,
+        ));
+        sync_worker.start();
     }
 }

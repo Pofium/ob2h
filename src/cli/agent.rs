@@ -100,7 +100,7 @@ impl AgentManager {
 
     // --- Индивидуальные установщики ---
 
-    fn install_claude(exe: &str) -> anyhow::Result<()> {
+    pub fn install_claude(exe: &str) -> anyhow::Result<()> {
         let home = Self::home_dir();
         let skill_dir = home.join(".claude").join("skills").join("ob2h");
         fs::create_dir_all(&skill_dir)?;
@@ -139,7 +139,7 @@ description: "Долговременная память, AST-граф кода �
         Ok(())
     }
 
-    fn install_cursor(exe: &str, custom_path: Option<&str>) -> anyhow::Result<()> {
+    pub fn install_cursor(exe: &str, custom_path: Option<&str>) -> anyhow::Result<()> {
         let target_file = if let Some(p) = custom_path {
             PathBuf::from(p).join(".cursor").join("mcp.json")
         } else {
@@ -155,7 +155,7 @@ description: "Долговременная память, AST-граф кода �
         Ok(())
     }
 
-    fn install_windsurf(exe: &str) -> anyhow::Result<()> {
+    pub fn install_windsurf(exe: &str) -> anyhow::Result<()> {
         let target_file = Self::home_dir().join(".codeium").join("windsurf").join("mcp_config.json");
         if let Some(parent) = target_file.parent() {
             fs::create_dir_all(parent)?;
@@ -166,7 +166,7 @@ description: "Долговременная память, AST-граф кода �
         Ok(())
     }
 
-    fn install_zcode(exe: &str, custom_path: Option<&str>) -> anyhow::Result<()> {
+    pub fn install_zcode(exe: &str, custom_path: Option<&str>) -> anyhow::Result<()> {
         let target_file = if let Some(p) = custom_path {
             PathBuf::from(p).join(".zcode").join("mcp.json")
         } else {
@@ -182,18 +182,26 @@ description: "Долговременная память, AST-граф кода �
         Ok(())
     }
 
-    fn install_gemini(exe: &str) -> anyhow::Result<()> {
-        let target_file = Self::home_dir().join(".gemini").join("antigravity-ide").join("mcp_config.json");
-        if let Some(parent) = target_file.parent() {
+    pub fn install_gemini(exe: &str) -> anyhow::Result<()> {
+        let home = Self::home_dir();
+        let target_file1 = home.join(".gemini").join("antigravity-ide").join("mcp_config.json");
+        let target_file2 = home.join(".gemini").join("antigravity").join("mcp_config.json");
+
+        if let Some(parent) = target_file1.parent() {
             fs::create_dir_all(parent)?;
         }
+        Self::upsert_mcp_json(&target_file1, "ob2h", exe, &["serve"])?;
 
-        Self::upsert_mcp_json(&target_file, "ob2h", exe, &["serve"])?;
-        println!("✅ Gemini / Antigravity: MCP зарегистрирован в {}", target_file.display());
+        if let Some(parent) = target_file2.parent() {
+            let _ = fs::create_dir_all(parent);
+            let _ = Self::upsert_mcp_json(&target_file2, "ob2h", exe, &["serve"]);
+        }
+
+        println!("✅ Gemini / Antigravity: MCP зарегистрирован в {}", target_file1.display());
         Ok(())
     }
 
-    fn install_qwen(exe: &str) -> anyhow::Result<()> {
+    pub fn install_qwen(exe: &str) -> anyhow::Result<()> {
         let target_file = Self::home_dir().join(".qwen").join("mcp.json");
         if let Some(parent) = target_file.parent() {
             fs::create_dir_all(parent)?;
@@ -204,7 +212,7 @@ description: "Долговременная память, AST-граф кода �
         Ok(())
     }
 
-    fn install_opencode(exe: &str) -> anyhow::Result<()> {
+    pub fn install_opencode(exe: &str) -> anyhow::Result<()> {
         let target_file = Self::home_dir().join(".opencode").join("mcp.json");
         if let Some(parent) = target_file.parent() {
             fs::create_dir_all(parent)?;
@@ -216,7 +224,7 @@ description: "Долговременная память, AST-граф кода �
     }
 
     /// Вспомогательный метод для обновления JSON файла конфигурации MCP.
-    fn upsert_mcp_json(file_path: &Path, server_name: &str, command: &str, args: &[&str]) -> anyhow::Result<()> {
+    pub fn upsert_mcp_json(file_path: &Path, server_name: &str, command: &str, args: &[&str]) -> anyhow::Result<()> {
         let mut json_val: serde_json::Value = if file_path.exists() {
             let content = fs::read_to_string(file_path).unwrap_or_else(|_| "{}".to_string());
             serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))

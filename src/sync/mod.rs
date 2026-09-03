@@ -25,6 +25,9 @@ use crate::db::{utcnow, Database};
 use crate::embedding::EmbeddingProvider;
 use crate::vector::serialize as vec_serialize;
 
+pub mod worker;
+pub use worker::AutoSyncWorker;
+
 // -- Конфиг пирингов (data/sync/peers.json) -----------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

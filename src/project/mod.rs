@@ -1,6 +1,8 @@
 //! Сервис управления проектами и проектной памятью (Фаза 10, Фаза 11).
 
 pub mod ast;
+pub mod hooks;
+pub mod watcher;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -10,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 pub use ast::{AstCodeExtractor, AstScanResult};
+pub use hooks::install_git_hooks;
+pub use watcher::ProjectWatcher;
 use crate::db::models::ProjectRecord;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

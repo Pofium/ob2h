@@ -45,6 +45,10 @@ async fn main() -> anyhow::Result<()> {
             let server = Arc::new(McpServer::new(ctx));
             server.run_stdio().await?;
         }
+        Some(Commands::Doctor { fix }) => {
+            let doctor = ob2h::cli::Doctor::new(ctx.settings.clone(), fix);
+            doctor.run()?;
+        }
         Some(Commands::Dream { command }) => match command {
             DreamCommands::Run { background } => {
                 let output = McpServer::new(ctx)
@@ -175,6 +179,22 @@ async fn main() -> anyhow::Result<()> {
             ob2h::cli::ProjectCliCommands::Report { id } => {
                 let report = ctx.db.with_conn(|conn| ob2h::graph::GraphAnalytics::generate_project_report(conn, &id))?;
                 println!("{}", report.markdown_summary);
+            }
+            ob2h::cli::ProjectCliCommands::HookInstall { path, id } => {
+                let target_path = if let Some(p) = path {
+                    std::path::PathBuf::from(p)
+                } else {
+                    std::env::current_dir()?
+                };
+                let project_root = ob2h::project::find_project_root(&target_path);
+                let project_id = if let Some(i) = id {
+                    i
+                } else {
+                    let p = ctx.project.auto_register_or_detect(&project_root)?;
+                    p.id
+                };
+                let installed = ob2h::project::install_git_hooks(&project_root, &project_id)?;
+                println!("Установлены Git-хуки для проекта '{}' в {}: {:?}", project_id, project_root.display(), installed);
             }
         },
     }

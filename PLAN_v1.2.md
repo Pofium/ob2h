@@ -150,7 +150,7 @@ ALTER TABLE graph_nodes ADD COLUMN embedding BLOB;
 
 Цель: Граф всегда актуален в реальном времени, фоновая репликация между машинами.
 
-- [ ] **18.1** Фоновый File Watcher (`notify` crate):
+- [x] **18.1** Фоновый File Watcher (`notify` crate):
   - Подключить `notify` и `notify-debouncer-mini` в `Cargo.toml`.
   - Создать модуль `src/project/watcher.rs`.
   - При запуске `ob2h serve` поднимать фоновую задачу tokio для активного проекта:
@@ -158,12 +158,12 @@ ALTER TABLE graph_nodes ADD COLUMN embedding BLOB;
     - Debounce 2.5 секунды (чтобы дождаться окончания серии правок от IDE или агента).
     - Автоматический инкрементальный до-скан изменённых файлов без блокировки основного потока MCP.
     - Включение/отключение через конфиг `OB2H_WATCHER_ENABLED=true|false` (по умолчанию `true`).
-- [ ] **18.2** Git Lifecycle Hooks (`ob2h project hook install`):
+- [x] **18.2** Git Lifecycle Hooks (`ob2h project hook install`):
   - CLI подкоманда `ob2h project hook install [--path <repo>]`:
     - Создаёт `.git/hooks/post-commit` и `.git/hooks/post-merge`.
     - Скрипт хука: быстрый вызов `ob2h project scan --id <id> --incremental` (тихий запуск).
   - При смене веток (`post-checkout`) обновлять поле `active_branch` в таблице `projects`.
-- [ ] **18.3** Фоновый AutoSync Worker (PC $\leftrightarrow$ VPS):
+- [x] **18.3** Фоновый AutoSync Worker (PC $\leftrightarrow$ VPS):
   - Модуль `src/sync/worker.rs` (`AutoSyncWorker`):
     - Фоновый поток в `ob2h serve`, проверяющий статус раз в 30 минут.
     - Гейты запуска:
@@ -172,7 +172,7 @@ ALTER TABLE graph_nodes ADD COLUMN embedding BLOB;
       3. Были локальные изменения (новые воспоминания / сессии / правки графа) ИЛИ событие `after_dream`.
     - Вызов `SyncManager::push` и `SyncManager::pull` через системный SSH без всплывающих окон.
     - Защита от падений: сетевые ошибки логируются как warning, процесс сервера не прерывается.
-- [ ] **18.4** CLI-команда диагностики `ob2h doctor`:
+- [x] **18.4** CLI-команда диагностики `ob2h doctor`:
   - Проверка и цветной вывод статуса:
     - Доступность SQLite, статус WAL, размер базы, свободное место на диске.
     - FTS5 trigram и статус векторных расширений/моделей Candle.
@@ -184,7 +184,7 @@ ALTER TABLE graph_nodes ADD COLUMN embedding BLOB;
       - Проверка Qwen, OpenCode, Hermes.
     - Статус Git-хуков и пирингов синхронизации.
     - Интерактивное предложение починить расхождения (автоматический фикс путей).
-- [ ] **18.5** Тесты:
+- [x] **18.5** Тесты:
   - Эмуляция файловых изменений и проверка реакции watcher'а через каналы `tokio::sync::mpsc`.
   - Тест генерации файлов Git-хуков.
   - Тест вывода `ob2h doctor`.

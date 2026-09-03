@@ -41,6 +41,7 @@ pub struct AppContext {
     pub dream_lock: Arc<Mutex<()>>,
     pub active_workspace: Arc<tokio::sync::RwLock<Option<std::path::PathBuf>>>,
     pub active_project_id: Arc<tokio::sync::RwLock<Option<String>>>,
+    pub watcher: Arc<crate::project::ProjectWatcher>,
 }
 
 pub struct McpServer {
@@ -209,6 +210,17 @@ impl McpServer {
                     *self.ctx.active_workspace.write().await = Some(std::path::PathBuf::from(&project.root_path));
                     *self.ctx.active_project_id.write().await = Some(project.id.clone());
                     info!("Zero-Config: MCP-сессия привязана к проекту '{}' ({})", project.name, project.id);
+
+                    if self.ctx.settings.watcher_enabled {
+                        let watcher = self.ctx.watcher.clone();
+                        let pid = project.id.clone();
+                        let proot = std::path::PathBuf::from(&project.root_path);
+                        tokio::spawn(async move {
+                            if let Err(e) = watcher.switch_project(&pid, &proot).await {
+                                tracing::warn!("FileWatcher: не удалось активировать для {}: {e}", pid);
+                            }
+                        });
+                    }
                 }
 
                 let result = serde_json::json!({
