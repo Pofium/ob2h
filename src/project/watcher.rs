@@ -132,8 +132,10 @@ impl ProjectWatcher {
                                 info!("FileWatcher: обнаружены изменения в {} файлах проекта '{}', запуск инкрементального сканирования", paths.len(), p_id_async);
                                 let svc = service.clone();
                                 let pid = p_id_async.clone();
+                                let svc_for_scan = svc.clone();
+                                let pid_for_scan = pid.clone();
                                 let _ = tokio::task::spawn_blocking(move || {
-                                    match svc.scan_project(&pid, None, true) {
+                                    match svc_for_scan.scan_project(&pid_for_scan, None, true) {
                                         Ok(res) => {
                                             info!("FileWatcher: инкрементальное сканирование завершено: scanned={}, nodes={}, edges={}",
                                                 res.files_scanned, res.nodes.len(), res.edges.len());
@@ -143,6 +145,8 @@ impl ProjectWatcher {
                                         }
                                     }
                                 }).await;
+
+                                let _ = svc.embed_unembedded_nodes(&pid).await;
                             }
                             None => break,
                         }

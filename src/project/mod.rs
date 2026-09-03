@@ -32,14 +32,106 @@ pub struct ProjectStats {
 pub struct ProjectService {
     conn: Arc<Mutex<Connection>>,
     ast_extractor: Arc<AstCodeExtractor>,
+    embedder: Option<Arc<dyn crate::embedding::EmbeddingProvider>>,
 }
+
+type RawNodeTuple = (i64, String, String, Option<String>, Option<String>);
 
 impl ProjectService {
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
+        Self::new_with_embedder(conn, None)
+    }
+
+    pub fn new_with_embedder(
+        conn: Arc<Mutex<Connection>>,
+        embedder: Option<Arc<dyn crate::embedding::EmbeddingProvider>>,
+    ) -> Self {
         Self {
             conn,
             ast_extractor: Arc::new(AstCodeExtractor::new()),
+            embedder,
         }
+    }
+
+    pub fn with_embedder(mut self, embedder: Arc<dyn crate::embedding::EmbeddingProvider>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    /// Батчевая генерация эмбеддингов для узлов графа проекта без векторов
+    pub async fn embed_unembedded_nodes(&self, project_id: &str) -> anyhow::Result<usize> {
+        let embedder = match &self.embedder {
+            Some(e) => e.clone(),
+            None => return Ok(0),
+        };
+
+        let nodes: Vec<RawNodeTuple> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                r#"
+                SELECT id, node_type, label, file_path, description
+                FROM graph_nodes
+                WHERE project_id = ?1
+                  AND embedding IS NULL
+                  AND (deleted_at IS NULL OR deleted_at = '')
+                LIMIT 500
+                "#,
+            )?;
+            let rows = stmt.query_map(params![project_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                ))
+            })?;
+            let mut res = Vec::new();
+            for r in rows {
+                res.push(r?);
+            }
+            res
+        };
+
+        if nodes.is_empty() {
+            return Ok(0);
+        }
+
+        let mut total_embedded = 0;
+        for chunk in nodes.chunks(32) {
+            let texts: Vec<String> = chunk
+                .iter()
+                .map(|(_, ntype, label, fpath, desc)| {
+                    let loc = fpath.as_deref().unwrap_or("-");
+                    let d = desc.as_deref().unwrap_or("");
+                    if d.is_empty() {
+                        format!("{ntype} {label} in {loc}")
+                    } else {
+                        format!("{ntype} {label} in {loc}: {d}")
+                    }
+                })
+                .collect();
+
+            let vecs = embedder.embed(&texts).await?;
+            {
+                let mut conn = self.conn.lock().unwrap();
+                let tx = conn.transaction()?;
+                for ((pk, _, _, _, _), vec) in chunk.iter().zip(vecs.iter()) {
+                    let blob = crate::vector::similarity::serialize(vec);
+                    tx.execute(
+                        "UPDATE graph_nodes SET embedding = ?1 WHERE id = ?2",
+                        params![blob, pk],
+                    )?;
+                }
+                tx.commit()?;
+            }
+            total_embedded += chunk.len();
+        }
+
+        if total_embedded > 0 {
+            info!("ProjectService: векторизовано {} узлов кода проекта '{}'", total_embedded, project_id);
+        }
+        Ok(total_embedded)
     }
 
     /// Регистрирует новый проект или обновляет существующий.

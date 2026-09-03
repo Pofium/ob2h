@@ -299,14 +299,15 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 23. project_graph_search
         McpToolDef {
             name: "project_graph_search".to_string(),
-            description: "Поиск по кодовому графу связей и зависимостей проекта (IMPORTS, CALLS, DEFINES, IMPLEMENTS).".to_string(),
+            description: "Гибридный семантический поиск по кодовому графу и символам проекта (естественным языком или точными именами функций/структур).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "id": { "type": "string", "description": "Идентификатор проекта" },
-                    "query": { "type": "string", "description": "Поисковый запрос (имя структуры, функции или модуля)" },
+                    "query": { "type": "string", "description": "Поисковый запрос (имя структуры/функции или описание естественным языком)" },
                     "limit": { "type": "integer", "description": "Лимит результатов (дефолт: 15)" },
-                    "provenance": { "type": "string", "enum": ["ast", "llm", "all"], "description": "Фильтр источника связей (дефолт: all)" }
+                    "provenance": { "type": "string", "enum": ["ast", "llm", "all"], "description": "Фильтр источника связей (дефолт: all)" },
+                    "mode": { "type": "string", "enum": ["hybrid", "text", "vector"], "description": "Режим поиска: hybrid (дефолт, RRF k=60), text (лексический), vector (семантический)" }
                 },
                 "required": ["id", "query"]
             }),

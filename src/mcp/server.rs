@@ -1,7 +1,6 @@
 //! MCP-сервер (stdio transport). Обработка JSON-RPC запросов и вызов инструментов.
 
 use std::sync::Arc;
-use rusqlite::params;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tracing::info;
@@ -226,7 +225,9 @@ impl McpServer {
                 let result = serde_json::json!({
                     "protocolVersion": "2024-11-05",
                     "capabilities": {
-                        "tools": { "listChanged": false }
+                        "tools": { "listChanged": false },
+                        "resources": { "subscribe": false, "listChanged": false },
+                        "prompts": { "listChanged": false }
                     },
                     "serverInfo": {
                         "name": "ob2h",
@@ -254,6 +255,113 @@ impl McpServer {
                     jsonrpc: "2.0".to_string(),
                     id,
                     result: Some(result),
+                    error: None,
+                })
+            }
+            "resources/list" => {
+                let resources = serde_json::json!({
+                    "resources": [
+                        {
+                            "uri": "project://current/overview",
+                            "name": "Архитектурный дайджест активного проекта",
+                            "description": "Сводный отчет о стеке, метриках кодовой базы и ключевых хабах связности",
+                            "mimeType": "text/markdown"
+                        },
+                        {
+                            "uri": "project://current/god-nodes",
+                            "name": "Ключевые узлы связности (God Nodes)",
+                            "description": "Список наиболее связных структур, классов и модулей текущего проекта",
+                            "mimeType": "text/markdown"
+                        },
+                        {
+                            "uri": "project://current/schema",
+                            "name": "Схема данных проекта (Таблицы и DDL)",
+                            "description": "Таблицы БД, поля и связи, извлеченные из SQL-миграций и моделей",
+                            "mimeType": "text/markdown"
+                        },
+                        {
+                            "uri": "memory://context",
+                            "name": "Долговременный контекст и профиль пользователя",
+                            "description": "Ключевые системные знания агента, предпочтения разработчика и важные факты",
+                            "mimeType": "text/markdown"
+                        }
+                    ]
+                });
+                Some(JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    result: Some(resources),
+                    error: None,
+                })
+            }
+            "resources/read" => {
+                let params = req.params.unwrap_or(serde_json::json!({}));
+                let uri = params.get("uri").and_then(|v| v.as_str()).unwrap_or("");
+                let active_proj = self.ctx.active_project_id.read().await.clone();
+                let (text, mime_type) = self.read_resource(uri, active_proj.as_deref()).await;
+
+                let result = serde_json::json!({
+                    "contents": [
+                        {
+                            "uri": uri,
+                            "mimeType": mime_type,
+                            "text": text
+                        }
+                    ]
+                });
+                Some(JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    result: Some(result),
+                    error: None,
+                })
+            }
+            "prompts/list" => {
+                let prompts = serde_json::json!({
+                    "prompts": [
+                        {
+                            "name": "explain_component",
+                            "description": "Построить детальное контекстное объяснение компонента проекта с учетом входящих и исходящих связей",
+                            "arguments": [
+                                {
+                                    "name": "component_name",
+                                    "description": "Имя функции, структуры, класса или модуля проекта",
+                                    "required": true
+                                }
+                            ]
+                        },
+                        {
+                            "name": "plan_feature",
+                            "description": "Сгенерировать архитектурный план внедрения новой фичи с учетом техстека и ключевых хабов проекта",
+                            "arguments": [
+                                {
+                                    "name": "task_description",
+                                    "description": "Описание задачи или новой функциональности",
+                                    "required": true
+                                }
+                            ]
+                        }
+                    ]
+                });
+                Some(JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    result: Some(prompts),
+                    error: None,
+                })
+            }
+            "prompts/get" => {
+                let params = req.params.unwrap_or(serde_json::json!({}));
+                let prompt_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                let active_proj = self.ctx.active_project_id.read().await.clone();
+
+                let prompt_result = self.get_prompt(prompt_name, &args, active_proj.as_deref()).await;
+
+                Some(JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    result: Some(prompt_result),
                     error: None,
                 })
             }
@@ -817,6 +925,7 @@ impl McpServer {
                             let _ = crate::graph::GraphAnalytics::update_god_nodes(conn, id);
                             Ok(())
                         });
+                        let _ = self.ctx.project.embed_unembedded_nodes(id).await;
                         format!(
                             "project '{}' scanned: files={} nodes={} edges={} total_lines={}",
                             id, res.files_scanned, res.nodes.len(), res.edges.len(), res.lines_total
@@ -848,58 +957,29 @@ impl McpServer {
                 };
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
                 let provenance = args.get("provenance").and_then(|v| v.as_str()).unwrap_or("all");
+                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("hybrid");
 
-                let res = self.ctx.db.with_conn(|conn| {
-                    let mut stmt = conn.prepare(
-                        r#"
-                        SELECT id, node_id, label, node_type, file_path, line_start, provenance, is_god_node, description
-                        FROM graph_nodes
-                        WHERE project_id = ?1 
-                          AND (label LIKE ?2 OR description LIKE ?2 OR file_path LIKE ?2)
-                          AND (?3 = 'all' OR provenance = ?3)
-                          AND (deleted_at IS NULL OR deleted_at = '')
-                        LIMIT ?4
-                        "#,
-                    )?;
-                    let query_like = format!("%{}%", query);
-                    let rows = stmt.query_map(params![id, query_like, provenance, limit as i64], |r| {
-                        Ok((
-                            r.get::<_, i64>(0)?,
-                            r.get::<_, String>(1)?,
-                            r.get::<_, String>(2)?,
-                            r.get::<_, String>(3)?,
-                            r.get::<_, Option<String>>(4)?,
-                            r.get::<_, Option<i64>>(5)?,
-                            r.get::<_, Option<String>>(6)?,
-                            r.get::<_, Option<i64>>(7)?,
-                            r.get::<_, Option<String>>(8)?,
-                        ))
-                    })?;
-
-                    let mut nodes = Vec::new();
-                    for r in rows {
-                        let (_pk, _nid, lbl, ntype, fpath, lstart, prov, is_god, desc) = r?;
-                        let loc = if let (Some(f), Some(l)) = (fpath, lstart) {
-                            format!("{}:{}", f, l)
-                        } else {
-                            "-".to_string()
-                        };
-                        let god_mark = if is_god.unwrap_or(0) == 1 { " [👑 GodNode]" } else { "" };
-                        nodes.push(format!(
-                            "- `{}` [{}] ({}) prov={}{}: {}",
-                            lbl, ntype, loc, prov.unwrap_or_else(|| "manual".to_string()),
-                            god_mark, desc.unwrap_or_default()
-                        ));
-                    }
-                    Ok(nodes)
-                });
-
-                match res {
+                match self.ctx.graph.search_project_nodes_hybrid(id, query, mode, provenance, limit).await {
                     Ok(nodes) => {
                         if nodes.is_empty() {
                             "совпадений в графе проекта не найдено".to_string()
                         } else {
-                            nodes.join("\n")
+                            let mut lines = Vec::new();
+                            for n in nodes {
+                                let loc = if let (Some(f), Some(l)) = (&n.file_path, n.line_start) {
+                                    format!("{}:{}", f, l)
+                                } else {
+                                    "-".to_string()
+                                };
+                                let god_mark = if n.is_god_node { " [👑 GodNode]" } else { "" };
+                                lines.push(format!(
+                                    "- `{}` [{}] ({}) score={:.4} prov={}{}: {}",
+                                    n.label, n.node_type, loc, n.score,
+                                    n.provenance.as_deref().unwrap_or("ast"),
+                                    god_mark, n.description.as_deref().unwrap_or("")
+                                ));
+                            }
+                            lines.join("\n")
                         }
                     }
                     Err(e) => format!("[Error] {e}"),
@@ -917,6 +997,242 @@ impl McpServer {
                 }
             }
             other => format!("[Error] Unknown tool {other}"),
+        }
+    }
+
+    async fn read_resource(&self, uri: &str, active_proj: Option<&str>) -> (String, &'static str) {
+        match uri {
+            "project://current/overview" => {
+                if let Some(pid) = active_proj {
+                    match self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::generate_project_report(conn, pid)) {
+                        Ok(rep) => (rep.markdown_summary, "text/markdown"),
+                        Err(e) => (format!("Ошибка генерации отчета: {e}"), "text/markdown"),
+                    }
+                } else {
+                    ("Активный проект не привязан к сессии.".to_string(), "text/markdown")
+                }
+            }
+            "project://current/god-nodes" => {
+                if let Some(pid) = active_proj {
+                    let text = self.ctx.db.with_conn(|conn| {
+                        let mut stmt = conn.prepare(
+                            r#"
+                            SELECT label, node_type, file_path, line_start, description
+                            FROM graph_nodes
+                            WHERE project_id = ?1 AND is_god_node = 1 AND (deleted_at IS NULL OR deleted_at = '')
+                            "#,
+                        )?;
+                        let rows = stmt.query_map(rusqlite::params![pid], |r| {
+                            Ok((
+                                r.get::<_, String>(0)?,
+                                r.get::<_, String>(1)?,
+                                r.get::<_, Option<String>>(2)?,
+                                r.get::<_, Option<i64>>(3)?,
+                                r.get::<_, Option<String>>(4)?,
+                            ))
+                        })?;
+                        let mut lines = vec!["# Ключевые архитектурные хабы (God Nodes)\n".to_string()];
+                        for r in rows.flatten() {
+                            let (lbl, ntype, fpath, lstart, desc) = r;
+                            let loc = if let (Some(f), Some(l)) = (fpath, lstart) {
+                                format!("{}:{}", f, l)
+                            } else {
+                                "-".to_string()
+                            };
+                            lines.push(format!("- **`{lbl}`** (`{ntype}`) в `{loc}`: {}", desc.unwrap_or_default()));
+                        }
+                        Ok(lines.join("\n"))
+                    }).unwrap_or_else(|e| format!("Ошибка: {e}"));
+                    (text, "text/markdown")
+                } else {
+                    ("Активный проект не привязан к сессии.".to_string(), "text/markdown")
+                }
+            }
+            "project://current/schema" => {
+                if let Some(pid) = active_proj {
+                    let text = self.ctx.db.with_conn(|conn| {
+                        let mut stmt = conn.prepare(
+                            r#"
+                            SELECT label, file_path, description
+                            FROM graph_nodes
+                            WHERE project_id = ?1 AND node_type = 'Table' AND (deleted_at IS NULL OR deleted_at = '')
+                            "#,
+                        )?;
+                        let rows = stmt.query_map(rusqlite::params![pid], |r| {
+                            Ok((
+                                r.get::<_, String>(0)?,
+                                r.get::<_, Option<String>>(1)?,
+                                r.get::<_, Option<String>>(2)?,
+                            ))
+                        })?;
+                        let mut lines = vec!["# Схема данных и таблицы проекта\n".to_string()];
+                        for r in rows.flatten() {
+                            let (lbl, fpath, desc) = r;
+                            lines.push(format!("### Таблица `{lbl}` (файл: `{}`)", fpath.unwrap_or_default()));
+                            if let Some(d) = desc {
+                                lines.push(d);
+                            }
+                            lines.push("".to_string());
+                        }
+                        Ok(lines.join("\n"))
+                    }).unwrap_or_else(|e| format!("Ошибка: {e}"));
+                    (text, "text/markdown")
+                } else {
+                    ("Активный проект не привязан к сессии.".to_string(), "text/markdown")
+                }
+            }
+            "memory://context" => {
+                match self.ctx.memory.build_context(20, None) {
+                    Ok(ctx) => (ctx, "text/markdown"),
+                    Err(e) => (format!("Ошибка получения контекста памяти: {e}"), "text/markdown"),
+                }
+            }
+            _ => (format!("Ресурс не найден: {uri}"), "text/plain"),
+        }
+    }
+
+    async fn get_prompt(&self, name: &str, args: &serde_json::Value, active_proj: Option<&str>) -> serde_json::Value {
+        match name {
+            "explain_component" => {
+                let comp_name = args.get("component_name").and_then(|v| v.as_str()).unwrap_or("");
+                let pid = active_proj.unwrap_or("");
+
+                let mut context_lines = Vec::new();
+                let _ = self.ctx.db.with_conn(|conn| {
+                    let mut stmt = conn.prepare(
+                        r#"
+                        SELECT id, label, node_type, file_path, line_start, line_end, description, is_god_node
+                        FROM graph_nodes
+                        WHERE (project_id = ?1 OR ?1 = '')
+                          AND (label = ?2 OR label LIKE ?3)
+                          AND (deleted_at IS NULL OR deleted_at = '')
+                        LIMIT 1
+                        "#,
+                    )?;
+                    if let Ok(node) = stmt.query_row(rusqlite::params![pid, comp_name, format!("%{comp_name}%")], |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, Option<String>>(3)?,
+                            r.get::<_, Option<i64>>(4)?,
+                            r.get::<_, Option<i64>>(5)?,
+                            r.get::<_, Option<String>>(6)?,
+                            r.get::<_, i64>(7).unwrap_or(0) == 1,
+                        ))
+                    }) {
+                        let (nid, lbl, ntype, fpath, lstart, lend, desc, is_god) = node;
+                        context_lines.push(format!("Компонент: `{lbl}` [{ntype}]"));
+                        if let (Some(f), Some(ls), Some(le)) = (fpath, lstart, lend) {
+                            context_lines.push(format!("Расположение: {}:{}-{}", f, ls, le));
+                        }
+                        if is_god {
+                            context_lines.push("Статус: 👑 Ключевой хаб архитектуры (God Node)".to_string());
+                        }
+                        if let Some(d) = desc {
+                            context_lines.push(format!("Описание: {d}"));
+                        }
+
+                        // Кто вызывает
+                        let mut in_stmt = conn.prepare(
+                            r#"
+                            SELECT s.label, s.node_type, e.label
+                            FROM graph_edges e
+                            JOIN graph_nodes s ON s.id = e.source_id
+                            WHERE e.target_id = ?1 AND (e.deleted_at IS NULL OR e.deleted_at = '')
+                            LIMIT 10
+                            "#,
+                        )?;
+                        let in_rows = in_stmt.query_map(rusqlite::params![nid], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                        })?;
+                        let mut callers = Vec::new();
+                        for r in in_rows.flatten() {
+                            callers.push(format!("`{}` [{}] через {}", r.0, r.1, r.2));
+                        }
+                        if !callers.is_empty() {
+                            context_lines.push(format!("Вызывается из: {}", callers.join(", ")));
+                        }
+
+                        // Кого вызывает
+                        let mut out_stmt = conn.prepare(
+                            r#"
+                            SELECT t.label, t.node_type, e.label
+                            FROM graph_edges e
+                            JOIN graph_nodes t ON t.id = e.target_id
+                            WHERE e.source_id = ?1 AND (e.deleted_at IS NULL OR e.deleted_at = '')
+                            LIMIT 10
+                            "#,
+                        )?;
+                        let out_rows = out_stmt.query_map(rusqlite::params![nid], |r| {
+                            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                        })?;
+                        let mut callees = Vec::new();
+                        for r in out_rows.flatten() {
+                            callees.push(format!("`{}` [{}] через {}", r.0, r.1, r.2));
+                        }
+                        if !callees.is_empty() {
+                            context_lines.push(format!("Зависит от: {}", callees.join(", ")));
+                        }
+                    }
+                    Ok(())
+                });
+
+                let ctx_str = if context_lines.is_empty() {
+                    format!("Компонент `{comp_name}` в графе проекта не найден.")
+                } else {
+                    context_lines.join("\n")
+                };
+
+                serde_json::json!({
+                    "description": format!("Контекстное объяснение компонента {comp_name}"),
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": {
+                                "type": "text",
+                                "text": format!(
+                                    "Изучи контекст компонента из графа проекта:\n\n{}\n\nОбъясни архитектурную роль компонента `{comp_name}`, его ответственность и возможные риски изменений.",
+                                    ctx_str
+                                )
+                            }
+                        }
+                    ]
+                })
+            }
+            "plan_feature" => {
+                let task = args.get("task_description").and_then(|v| v.as_str()).unwrap_or("");
+                let pid = active_proj.unwrap_or("");
+
+                let overview = if !pid.is_empty() {
+                    self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::generate_project_report(conn, pid))
+                        .map(|r| r.markdown_summary)
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+
+                serde_json::json!({
+                    "description": "Архитектурное планирование новой фичи на базе графа проекта",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": {
+                                "type": "text",
+                                "text": format!(
+                                    "Задача на реализацию:\n{}\n\nАрхитектурный контекст проекта:\n{}\n\nСоставь подробный план реализации фичи: определи затронутые модули, ключевые хабы связности и шаги тестирования без риска регрессии.",
+                                    task,
+                                    if overview.is_empty() { "Проект не выбран." } else { &overview }
+                                )
+                            }
+                        }
+                    ]
+                })
+            }
+            _ => serde_json::json!({
+                "description": "Неизвестный шаблон промпта",
+                "messages": []
+            }),
         }
     }
 }

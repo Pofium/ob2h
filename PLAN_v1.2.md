@@ -195,16 +195,16 @@ ALTER TABLE graph_nodes ADD COLUMN embedding BLOB;
 
 Цель: Поиск кода естественным языком, нативная поддержка ресурсов и промптов MCP.
 
-- [ ] **19.1** Семантическое векторное индексирование узлов кода:
+- [x] **19.1** Семантическое векторное индексирование узлов кода:
   - При добавлении ключевых узлов (`Struct`, `Class`, `Interface`, `Function`, `Table`) генерировать текст описания:  
     `"{node_type} {label} in {file_path}: {description}"`.
   - Батчевая генерация эмбеддингов через существующий `embedder` (Candle MiniLM 384d / API).
   - Запись векторов в поле `embedding` таблицы `graph_nodes`.
-- [ ] **19.2** Гибридный поиск по коду в `project_graph_search`:
+- [x] **19.2** Гибридный поиск по коду в `project_graph_search`:
   - Модернизация инструмента `project_graph_search`:
     - Режимы: `hybrid` (FTS5 + Cosine Vector через RRF k=60) | `text` | `ast`.
     - Агент может запрашивать концепции (*«где обработка ошибок сети?»*, *«функция шифрования паролей»*) и получать релевантный код даже без совпадения точных имён символов.
-- [ ] **19.3** Реализация MCP Resources (`resources/list` и `resources/read`):
+- [x] **19.3** Реализация MCP Resources (`resources/list` и `resources/read`):
   - Регистрация capabilities: `"resources": { "subscribe": false, "listChanged": false }`.
   - Динамические ресурсы:
     - `project://current/overview` — архитектурный дайджест активного проекта.
@@ -212,12 +212,12 @@ ALTER TABLE graph_nodes ADD COLUMN embedding BLOB;
     - `project://current/schema` — схемы БД и DDL таблиц (извлечённые из SQL-файлов).
     - `memory://context` — текущие системные знания и профиль пользователя.
   - Агенты получают доступ к архитектуре без расхода шагов вызовов инструментов.
-- [ ] **19.4** Реализация MCP Prompts (`prompts/list` и `prompts/get`):
+- [x] **19.4** Реализация MCP Prompts (`prompts/list` и `prompts/get`):
   - Регистрация capabilities: `"prompts": { "listChanged": false }`.
   - Шаблоны:
     - `explain_component(component_name)` — генерация контекстного промпта с подтягиванием графа зависимостей компонента.
     - `plan_feature(task_description)` — промпт архитектурного планирования фичи на базе графа проекта.
-- [ ] **19.5** Тесты:
+- [x] **19.5** Тесты:
   - JSON-RPC вызовы `resources/list`, `resources/read`, `prompts/list`, `prompts/get`.
   - Сравнение качества выдачи `project_graph_search` (семантический vs текстовый).
 

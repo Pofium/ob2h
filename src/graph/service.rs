@@ -455,4 +455,210 @@ impl GraphService {
             })
         })
     }
+
+    /// Гибридный поиск узлов в графе проекта (FTS/LIKE + Vector Cosine через RRF k=60)
+    pub async fn search_project_nodes_hybrid(
+        &self,
+        project_id: &str,
+        query: &str,
+        mode: &str,
+        provenance: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<ScoredProjectNode>> {
+        let is_text_enabled = mode == "hybrid" || mode == "text";
+        let is_vector_enabled = mode == "hybrid" || mode == "vector";
+
+        // 1. Лексический поиск (по совпадению ключевых слов и подстрок)
+        let mut text_ranks: HashMap<i64, usize> = HashMap::new();
+        if is_text_enabled {
+            let words: Vec<String> = query
+                .split_whitespace()
+                .filter(|w| w.chars().count() >= 2)
+                .map(|w| w.to_lowercase())
+                .collect();
+
+            let candidates = self.db.with_conn(|conn| {
+                let mut stmt = conn.prepare(
+                    r#"
+                    SELECT id, label, description, file_path
+                    FROM graph_nodes
+                    WHERE project_id = ?1
+                      AND (?2 = 'all' OR provenance = ?2)
+                      AND (deleted_at IS NULL OR deleted_at = '')
+                    "#,
+                )?;
+                let rows = stmt.query_map(params![project_id, provenance], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                })?;
+                let mut list = Vec::new();
+                for r in rows.flatten() {
+                    list.push(r);
+                }
+                Ok(list)
+            })?;
+
+            let mut scored_text: Vec<(i64, f64)> = Vec::new();
+            let query_lower = query.to_lowercase();
+            for (id, label, desc_opt, fpath_opt) in candidates {
+                let lbl = label.to_lowercase();
+                let desc = desc_opt.unwrap_or_default().to_lowercase();
+                let fpath = fpath_opt.unwrap_or_default().to_lowercase();
+
+                let mut score = 0.0;
+                if lbl == query_lower {
+                    score += 50.0;
+                } else if lbl.contains(&query_lower) {
+                    score += 25.0;
+                } else if desc.contains(&query_lower) || fpath.contains(&query_lower) {
+                    score += 15.0;
+                }
+
+                for w in &words {
+                    if lbl.contains(w) {
+                        score += 8.0;
+                    }
+                    if desc.contains(w) {
+                        score += 3.0;
+                    }
+                    if fpath.contains(w) {
+                        score += 2.0;
+                    }
+                }
+
+                if score > 0.0 {
+                    scored_text.push((id, score));
+                }
+            }
+
+            scored_text.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            for (rank, (id, _)) in scored_text.into_iter().enumerate() {
+                text_ranks.insert(id, rank);
+            }
+        }
+
+        // 2. Векторный семантический поиск
+        let mut vector_ranks: HashMap<i64, usize> = HashMap::new();
+        if is_vector_enabled {
+            if let Ok(q_embs) = self.embedder.embed(&[query.to_string()]).await {
+                if let Some(q_vec) = q_embs.first() {
+                    let candidates = self.db.with_conn(|conn| {
+                        let mut stmt = conn.prepare(
+                            r#"
+                            SELECT id, embedding
+                            FROM graph_nodes
+                            WHERE project_id = ?1
+                              AND embedding IS NOT NULL
+                              AND (?2 = 'all' OR provenance = ?2)
+                              AND (deleted_at IS NULL OR deleted_at = '')
+                            "#,
+                        )?;
+                        let rows = stmt.query_map(params![project_id, provenance], |r| {
+                            Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+                        })?;
+                        let mut list = Vec::new();
+                        for r in rows.flatten() {
+                            list.push(r);
+                        }
+                        Ok(list)
+                    })?;
+
+                    let cand_refs: Vec<(i64, Option<&[u8]>)> = candidates
+                        .iter()
+                        .map(|(id, b)| (*id, Some(b.as_slice())))
+                        .collect();
+
+                    let scored_vec = top_k(q_vec, &cand_refs, limit * 3, 0.0);
+                    for (rank, (id, _)) in scored_vec.into_iter().enumerate() {
+                        vector_ranks.insert(id, rank);
+                    }
+                }
+            }
+        }
+
+        // 3. Слияние через RRF (k = 60)
+        let k = 60.0;
+        let mut all_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        all_ids.extend(text_ranks.keys());
+        all_ids.extend(vector_ranks.keys());
+
+        let mut final_scores: Vec<(i64, f64)> = Vec::new();
+        for &id in &all_ids {
+            let score = match mode {
+                "text" => {
+                    let r = text_ranks.get(&id).copied().unwrap_or(9999);
+                    1.0 / (k + r as f64)
+                }
+                "vector" => {
+                    let r = vector_ranks.get(&id).copied().unwrap_or(9999);
+                    1.0 / (k + r as f64)
+                }
+                _ => {
+                    let text_score = text_ranks.get(&id).map(|&r| 1.0 / (k + r as f64)).unwrap_or(0.0);
+                    let vec_score = vector_ranks.get(&id).map(|&r| 1.0 / (k + r as f64)).unwrap_or(0.0);
+                    text_score + vec_score
+                }
+            };
+            final_scores.push((id, score));
+        }
+
+        final_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let top_ids: Vec<(i64, f64)> = final_scores.into_iter().take(limit).collect();
+
+        if top_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 4. Подгрузка полной информации по узлам
+        let mut results = Vec::new();
+
+        self.db.with_conn(|conn| {
+            for (id, score) in &top_ids {
+                let mut stmt = conn.prepare(
+                    r#"
+                    SELECT id, node_id, label, node_type, file_path, line_start, provenance, is_god_node, description
+                    FROM graph_nodes
+                    WHERE id = ?1
+                    "#,
+                )?;
+                if let Ok(node) = stmt.query_row(params![id], |r| {
+                    Ok(ScoredProjectNode {
+                        id: r.get(0)?,
+                        node_id: r.get(1)?,
+                        label: r.get(2)?,
+                        node_type: r.get(3)?,
+                        file_path: r.get(4)?,
+                        line_start: r.get(5)?,
+                        provenance: r.get(6)?,
+                        is_god_node: r.get::<_, i64>(7).unwrap_or(0) == 1,
+                        description: r.get(8)?,
+                        score: *score,
+                    })
+                }) {
+                    results.push(node);
+                }
+            }
+            Ok(())
+        })?;
+
+        Ok(results)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoredProjectNode {
+    pub id: i64,
+    pub node_id: String,
+    pub label: String,
+    pub node_type: String,
+    pub file_path: Option<String>,
+    pub line_start: Option<i64>,
+    pub provenance: Option<String>,
+    pub is_god_node: bool,
+    pub description: Option<String>,
+    pub score: f64,
 }

@@ -49,7 +49,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
     let consolidator = Arc::new(Consolidator::new(workspace.clone(), llm.clone(), settings.clone()));
     let pending_session = Arc::new(Mutex::new(PendingSession::new()));
     let graph = Arc::new(GraphService::new(db.clone(), embedder.clone()));
-    let project = Arc::new(ProjectService::new(db.conn_arc()));
+    let project = Arc::new(ProjectService::new_with_embedder(db.conn_arc(), Some(embedder.clone())));
     let dream = Arc::new(Dream::new(
         workspace.clone(),
         gitstore.clone(),
