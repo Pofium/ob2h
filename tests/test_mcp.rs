@@ -34,8 +34,10 @@ fn test_tools_list_contract_snapshot() {
         "project_context",
         "project_graph_search",
         "project_report",
+        // v1.2: Анализ радиуса изменений (Blast Radius)
+        "project_impact",
     ];
-    assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.0.md");
+    assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.2.md");
 }
 
 #[tokio::test]

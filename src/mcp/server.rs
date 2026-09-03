@@ -986,13 +986,31 @@ impl McpServer {
                 }
             }
             "project_report" => {
-                let id = match args.get("id").and_then(|v| v.as_str()) {
+                let active_proj = self.ctx.active_project_id.read().await.clone();
+                let id = match args.get("id").and_then(|v| v.as_str()).or(active_proj.as_deref()) {
                     Some(i) => i,
                     None => return "[Error] id is required".to_string(),
                 };
 
                 match self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::generate_project_report(conn, id)) {
                     Ok(rep) => rep.markdown_summary,
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "project_impact" => {
+                let symbol_or_path = match args.get("symbol_or_path").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return "[Error] symbol_or_path is required".to_string(),
+                };
+                let active_proj = self.ctx.active_project_id.read().await.clone();
+                let id = match args.get("id").and_then(|v| v.as_str()).or(active_proj.as_deref()) {
+                    Some(i) => i,
+                    None => return "[Error] id is required (no active project)".to_string(),
+                };
+                let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+
+                match self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::analyze_impact(conn, id, symbol_or_path, depth)) {
+                    Ok(imp) => imp.markdown_summary,
                     Err(e) => format!("[Error] {e}"),
                 }
             }

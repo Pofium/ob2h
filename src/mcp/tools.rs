@@ -324,5 +324,19 @@ pub fn list_tools() -> Vec<McpToolDef> {
                 "required": ["id"]
             }),
         },
+        // 25. project_impact
+        McpToolDef {
+            name: "project_impact".to_string(),
+            description: "Анализ радиуса изменений (Blast Radius): находит все функции, структуры, классы и файлы, зависящие от целевого символа или файла, и оценивает риск рефакторинга.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "symbol_or_path": { "type": "string", "description": "Имя функции, структуры, класса, интерфейса или путь к файлу проекта" },
+                    "id": { "type": "string", "description": "Идентификатор проекта (опционально, по умолчанию активный проект)" },
+                    "depth": { "type": "integer", "description": "Глубина обхода обратных зависимостей (дефолт: 3, от 1 до 10)" }
+                },
+                "required": ["symbol_or_path"]
+            }),
+        },
     ]
 }
