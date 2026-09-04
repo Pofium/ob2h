@@ -144,6 +144,28 @@ CREATE TABLE sync_state (
   applied_bundles TEXT NOT NULL DEFAULT '[]'
 );
 
+-- M3 (v1.0-v1.2): Проектная изоляция и AST-индексация кода
+CREATE TABLE projects (
+  id TEXT PRIMARY KEY,                 -- project_id (slug)
+  name TEXT NOT NULL,                  -- читаемое название проекта
+  path TEXT NOT NULL,                  -- абсолютный путь к корню кодовой базы
+  description TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE project_files (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,                  -- относительный путь к файлу внутри проекта
+  sha256 TEXT NOT NULL,                -- хэш содержимого для инкрементального AST-скана
+  mtime INTEGER NOT NULL,              -- unix timestamp изменения файла
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, path)
+);
+
+-- В таблицы memories, graph_nodes, graph_edges добавлена колонка:
+-- project_id TEXT DEFAULT NULL (индексирована)
+
 -- Полнотекстовый индекс: русский через trigram
 CREATE VIRTUAL TABLE memories_fts USING fts5(
   content, content='memories', content_rowid='id', tokenize='trigram'
@@ -154,8 +176,8 @@ CREATE VIRTUAL TABLE chunks_fts USING fts5(
 -- + триггеры INSERT/UPDATE/DELETE
 ```
 
-Индексы: `memories(category, importance DESC)`, `graph_nodes(label)`,
-`graph_nodes(node_type)`, `graph_edges(source_id)`, `graph_edges(target_id)`.
+Индексы: `memories(category, importance DESC)`, `memories(project_id)`, `graph_nodes(label)`,
+`graph_nodes(node_type)`, `graph_nodes(project_id)`, `graph_edges(source_id)`, `graph_edges(target_id)`.
 
 ## 3. Файловый workspace (`data/workspace/`)
 
@@ -177,7 +199,7 @@ workspace/
 Workspace и daily-логи **не синхронизируются** — это локальные представления;
 после мержа БД дрим каждой машины перегенерирует свои MD из общей памяти.
 
-## 4. Контракт MCP-инструментов (19)
+## 4. Контракт MCP-инструментов (25), Ресурсов и Промптов
 
 Имена — snake_case с префиксом домена. Ответы компактные (лимит Hermes 50 000 байт;
 длинное обрезается с `…[truncated]`). Ошибки — строка `[Error] …`, не исключение.
@@ -186,27 +208,47 @@ Workspace и daily-логи **не синхронизируются** — это
 
 | Инструмент | Аргументы | Возвращает |
 |---|---|---|
-| `memory_save` | `content, key?, category?, importance?, source?` | ключ, статус |
-| `memory_search` | `query, limit?, mode?` (hybrid/fts/vector) | топ-записи с score |
+| **Память** | | |
+| `memory_save` | `content, key?, category?, importance?, source?, project_id?` | ключ, статус |
+| `memory_search` | `query, limit?, mode?, project_id?` (hybrid/fts/vector) | топ-записи с score |
 | `memory_update` | `key, content?, importance?, category?` | статус |
 | `memory_forget` | `key` | статус (tombstone) |
-| `memory_context` | `query?, max_tokens?` | блок `<agent_memory>` |
+| `memory_context` | `query?, max_tokens?, project_id?` | блок `<agent_memory>` |
+| **Воркспейс** | | |
 | `workspace_read` | `file` (memory/soul/user/history) | содержимое |
 | `workspace_write` | `file, content, commit_message?` | статус (+git-коммит) |
 | `session_log` | `user_text, assistant_text, source?` | статус + консолидация |
 | `session_ingest` | `messages[{role,content}], source?, session_id?` | пары + дедуп по позиции |
-| `knowledge_extract` | `text \| file_path, max_chunks?` | сущности/отношения/чанки |
-| `graph_search` | `query, limit?` | узлы+рёбра со скорингом |
-| `graph_reason` | `query` | `{answer, confidence, used_entities, steps}` |
-| `graph_stats` | — | счётчики графа |
+| **Граф знаний** | | |
+| `knowledge_extract` | `text \| file_path, max_chunks?, project_id?` | сущности/отношения/чанки |
+| `graph_search` | `query, limit?, project_id?` | узлы+рёбра со скорингом |
+| `graph_reason` | `query, project_id?` | `{answer, confidence, used_entities, steps}` |
+| `graph_stats` | `project_id?` | счётчики графа |
+| **Проектный AST-граф** | | |
+| `project_init` | `id, name, path, description?` | регистрация проекта |
+| `project_scan` | `id?, path?, force?` | инкрементальный AST-скан |
+| `project_context` | `id?` | компактный контекст для системного промпта |
+| `project_report` | `id?` | архитектурный дайджест + God Nodes |
+| `project_graph_search` | `query, id?, mode?, limit?` | гибридный поиск по коду (hybrid/text/vector) |
+| `project_impact` | `target, id?, max_depth?` | анализ радиуса изменений (Blast Radius), SCC, риск |
+| **Дриминг** | | |
 | `dream_run` | `background?` | id запуска |
 | `dream_status` | — | состояние, гейты |
 | `dream_log` | `limit?` | история dream-коммитов |
 | `dream_restore` | `commit` | статус отката |
+| **Сервис** | | |
 | `omnes_stats` | — | счётчики хранилищ |
 | `omnes_backup` | — | путь к бэкапу |
 
-## 5. Потоки данных
+### Нативные MCP Resources:
+- `project://current/overview` — архитектурный дайджест активного проекта.
+- `project://current/god-nodes` — ключевые архитектурные узлы и точки сцепления.
+- `project://current/schema` — схема базы данных проекта (SQL DDL).
+- `memory://context` — выжимка долговременной памяти `MEMORY.md`.
+
+### Нативные MCP Prompts:
+- `explain_component` — детальный разбор класса/компонента по AST-графу.
+- `plan_feature` — генерация архитектурного плана с оценкой Blast Radius.
 
 **Память (автоматическая, Mode A):** каждый ход — плагин `sync_turn` →
 `session_ingest` (полный префикс сессии; сервер пишет только хвост по дедупу) →
