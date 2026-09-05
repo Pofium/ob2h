@@ -1,4 +1,4 @@
-//! OB2H (OmnesBot to Hermes) на Rust.
+//! OB2H (OmnesBot to Harness) на Rust.
 //! Локальное персональное MCP-хранилище знаний для агента Hermes.
 
 pub mod backup;

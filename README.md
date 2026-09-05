@@ -2,7 +2,7 @@
 
 <img src="docs/assets/banner.jpg" alt="OB2H Banner" width="600" style="border-radius: 12px; margin-bottom: 16px;" />
 
-# 🧠 OB2H (OmnesBot to Hermes)
+# 🧠 OB2H (OmnesBot to Harness)
 
 ### Автономная долговременная память, граф знаний и AST-анализ для AI-агентов
 
@@ -27,7 +27,7 @@
 
 Обычные ИИ-ассистенты забывают контекст и архитектуру ваших репозиториев, как только закрывается чат.
 
-**OB2H (OmnesBot to Hermes)** — это локальный «мозг», долговременная память и AST-граф кода для AI-агентов (**Hermes, Claude Code, Cursor, Windsurf, ZCode, Gemini CLI, Qwen Code, OpenCode**), полностью написанный на **Rust**.
+**OB2H (OmnesBot to Harness)** — это локальный «мозг», долговременная память и AST-граф кода для AI-агентов (**Hermes, Claude Code, Cursor, Windsurf, ZCode, Gemini CLI, Qwen Code, OpenCode**), полностью написанный на **Rust**.
 
 Он даёт агенту возможность:
 1. 🧠 **Помнить всё важное о вас и ваших проектах**: факты, предпочтения, стек технологий и архитектурные решения.
