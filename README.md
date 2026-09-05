@@ -223,8 +223,21 @@ ob2h project report --id <project_id>
 
 ---
 
-## 🤝 Обратная связь и Issues
+## 📦 Навыки для агентов и IDE (`skills/`)
 
+Проект поставляет готовые навыки (SKILL.md) для всех поддерживаемых агентов/IDE/harness —
+файлы лежат в `skills/<агент>/SKILL.md` и описывают: как подключён OB2H в этом агенте на
+конкретной машине (путь MCP-конфига, версия, команда `ob2h agent install`), ключевые команды
+и питфоллы. Покрыты: `claude-code`, `codegraph`, `codex`, `cursor`, `deepx`, `gemini-cli`,
+`hermes-agent`, `kilo-code`, `kimi-code`, `mimo-code`, `opencode`, `qoder`, `qwen-code`,
+`trae`, `windsurf`, `zcode` (плюс каноничный `ob2h`).
+
+Канал установки скилла в Hermes: `ob2h skill install`; мультиагентное подключение —
+`ob2h agent install --agent all` и `ob2h doctor --fix`.
+
+---
+
+## 🤝 Обратная связь и Issues
 Проект активно развивается! Если у вас:
 - 💡 Есть идея новой фичи или предложения по улучшению;
 - 🐛 Возникла ошибка или проблема с установкой;
