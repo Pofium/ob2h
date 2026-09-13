@@ -36,6 +36,7 @@ pub struct Settings {
     pub autodream_min_events: usize,
     pub dream_batch: usize,
     pub dream_extract_enabled: bool,
+    pub dream_memory_revision: bool,
 
     // --- Ретеншн ---
     pub retention_days: i64,
@@ -127,6 +128,10 @@ impl Settings {
         let dream_extract_enabled = env::var("OB2H_DREAM_EXTRACT_ENABLED")
             .map(|v| v != "0" && v.to_lowercase() != "false")
             .unwrap_or(true);
+        // Ф23.2: dream-ревизия памяти (trust-вердикты); дельты фиксированы, без автоудалений.
+        let dream_memory_revision = env::var("OB2H_DREAM_MEMORY_REVISION")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
 
         let retention_days = env::var("OB2H_RETENTION_DAYS")
             .ok()
@@ -175,6 +180,7 @@ impl Settings {
             autodream_min_events,
             dream_batch,
             dream_extract_enabled,
+            dream_memory_revision,
             retention_days,
             watcher_enabled,
             watcher_debounce_ms,

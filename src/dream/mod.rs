@@ -36,7 +36,15 @@ MD-файлы памяти по анализу. За один шаг — РОВ�
 или {\"action\": \"read\", \"file\": \"memory|soul|user\"} — перечитать файл,
 или {\"action\": \"done\", \"summary\": \"что изменено overall\"}.
 Правки минимальные: не переписывай файлы целиком, old должен совпадать буквально. \
+Если правило или факт уже хранится в долгосрочной памяти ob2h — НЕ дублируй его в \
+builtin MEMORY.md, предлагай только новое или изменившееся (дедуп сторов). \
 Если править нечего — сразу done.";
+
+pub const REVISION_SYSTEM: &str = "\
+Ты — ревизор памяти личного агента. Тебе дают записи с минимальным доверием \
+и свежую историю диалогов. Оцени каждую запись: confirmed — по-прежнему верна; \
+outdated — устарела (есть более свежая информация); contradicted — противоречит \
+фактам из истории. Не выдумывай ключи. Верни СТРОГО JSON-массив.";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DreamStats {
@@ -49,6 +57,8 @@ pub struct DreamStats {
     pub graph_entities: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub graph_edges: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_revision: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,6 +75,12 @@ struct Phase2Action {
     summary: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct RevisionVerdict {
+    key: String,
+    verdict: String,
+}
+
 pub struct Dream {
     workspace: Arc<Workspace>,
     gitstore: Arc<GitStore>,
@@ -72,6 +88,7 @@ pub struct Dream {
     settings: Settings,
     db: Database,
     graph: Option<Arc<GraphService>>,
+    memory: Option<Arc<crate::memory::MemoryService>>,
 }
 
 impl Dream {
@@ -82,6 +99,7 @@ impl Dream {
         settings: Settings,
         db: Database,
         graph: Option<Arc<GraphService>>,
+        memory: Option<Arc<crate::memory::MemoryService>>,
     ) -> Self {
         Self {
             workspace,
@@ -90,6 +108,7 @@ impl Dream {
             settings,
             db,
             graph,
+            memory,
         }
     }
 
@@ -118,6 +137,7 @@ impl Dream {
                     commit: None,
                     graph_entities: None,
                     graph_edges: None,
+                    memory_revision: None,
                     note: None,
                     error: Some(e.to_string()),
                 };
@@ -153,6 +173,7 @@ impl Dream {
                 commit: None,
                 graph_entities: None,
                 graph_edges: None,
+                memory_revision: None,
                 note: Some("нет новых записей с прошлого дрима".to_string()),
                 error: None,
             });
@@ -167,12 +188,26 @@ impl Dream {
         // Извлечение сессионных фактов в общий граф (Dream Extract)
         let (graph_entities, graph_edges) = self.extract_to_graph(&new_records).await?;
 
+        // Ф23.2: ревизия памяти — trust-вердикты по записям с минимальным доверием
+        let revisions = self.revise_memory().await.unwrap_or_else(|e| {
+            warn!("Dream-ревизия памяти не удалась: {e}");
+            Vec::new()
+        });
+
         let new_cursor = new_records.iter().map(|r| r.cursor).max().unwrap_or(dream_cursor);
         self.workspace.set_dream_cursor(new_cursor)?;
         let _ = self.workspace.compact_history(1000);
 
         let now_str = Utc::now().format("%Y-%m-%d %H:%M").to_string();
-        let commit_msg = format!("dream: {now_str} (+{} правок)", edits.len());
+        let commit_msg = if revisions.is_empty() {
+            format!("dream: {now_str} (+{} правок)", edits.len())
+        } else {
+            format!(
+                "dream: {now_str} (+{} правок, {} ревизий trust)",
+                edits.len(),
+                revisions.len()
+            )
+        };
         let commit = self.gitstore.auto_commit(&commit_msg);
 
         Ok(DreamStats {
@@ -183,6 +218,7 @@ impl Dream {
             commit,
             graph_entities: Some(graph_entities),
             graph_edges: Some(graph_edges),
+            memory_revision: if revisions.is_empty() { None } else { Some(revisions) },
             note: None,
             error: None,
         })
@@ -314,6 +350,52 @@ impl Dream {
             }
         }
         Ok((0, 0))
+    }
+
+    /// Ф23.2: dream-ревизия памяти — LLM-вердикты по записям с минимальным trust.
+    /// Никаких автоудалений: только bounded сдвиги trust (кламп [0,1]).
+    async fn revise_memory(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        if !self.settings.dream_memory_revision {
+            return Ok(Vec::new());
+        }
+        let Some(ref memory) = self.memory else {
+            return Ok(Vec::new());
+        };
+        let low = memory.lowest_trust(10)?;
+        if low.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let list = low
+            .iter()
+            .map(|(r, t)| {
+                let preview: String = r.content.chars().take(200).collect();
+                format!("- key={} trust={t:.2}: {preview}", r.key)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = format!(
+            "Записи памяти с минимальным доверием:\n{list}\n\n\
+             Для каждой записи верни JSON-массив объектов \
+             {{\"key\": \"...\", \"verdict\": \"confirmed|outdated|contradicted\"}}."
+        );
+        let verdicts: Vec<RevisionVerdict> = self
+            .llm
+            .ask_json(&prompt, Some(REVISION_SYSTEM))
+            .await
+            .unwrap_or_default();
+
+        let mut applied = Vec::new();
+        for v in verdicts {
+            match memory.revise_trust_by_key(&v.key, &v.verdict) {
+                Ok(Some(trust)) => applied.push(
+                    serde_json::json!({ "key": v.key, "verdict": v.verdict, "trust": trust }),
+                ),
+                Ok(None) => {}
+                Err(e) => warn!("Ревизия {}: {e}", v.key),
+            }
+        }
+        Ok(applied)
     }
 
     pub fn last_status(&self) -> anyhow::Result<Option<serde_json::Value>> {

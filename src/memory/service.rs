@@ -98,6 +98,12 @@ impl MemoryService {
             Ok(())
         })?;
 
+        // Ф23.5: детерминированные автосвязи (same_project/category) после сохранения.
+        let row_id: i64 = self.db.with_conn(|conn| {
+            conn.query_row("SELECT id FROM memories WHERE key = ?1", params![k], |r| r.get(0))
+        })?;
+        self.link_after_save(row_id, category, project_id)?;
+
         Ok(k)
     }
 
@@ -181,6 +187,13 @@ impl MemoryService {
                 params![now, key],
             )?;
             if count > 0 {
+                // Ф23.5: каскад — tombstone записи рвут автосвязи (физически,
+                // связи не синхронизируются и восстановимы пересохранением).
+                conn.execute(
+                    "DELETE FROM memory_links WHERE from_id IN (SELECT id FROM memories WHERE key = ?1) \
+                     OR to_id IN (SELECT id FROM memories WHERE key = ?1)",
+                    params![key],
+                )?;
                 return Ok(true);
             }
             // уже в tombstone или отсутствует: ключ мог быть удалён ранее
@@ -379,8 +392,10 @@ impl MemoryService {
         let now = utcnow();
         self.db.with_conn(|conn| {
             for id in ids {
+                // Ф23.1: использование подтверждает запись — trust +0.02 (кламп 1.0).
                 conn.execute(
-                    "UPDATE memories SET access_count = access_count + 1, last_accessed = ?1 WHERE id = ?2",
+                    "UPDATE memories SET access_count = access_count + 1, last_accessed = ?1, \
+                     trust = MIN(1.0, trust + 0.02), last_feedback_at = ?1 WHERE id = ?2",
                     params![now, id],
                 )?;
             }
@@ -388,16 +403,248 @@ impl MemoryService {
         })
     }
 
-    /// Затухание важности воспоминаний (decay).
+    /// Ф23.4: feedback агента. helpful +0.15 | unhelpful −0.2 | outdated −0.3.
+    /// Пишет в meta.feedback (последние 20), возвращает новый trust (None — нет ключа).
+    pub fn record_feedback(
+        &self,
+        key: &str,
+        verdict: &str,
+        note: Option<&str>,
+    ) -> anyhow::Result<Option<f64>> {
+        let delta = match verdict {
+            "helpful" => 0.15,
+            "unhelpful" => -0.2,
+            "outdated" => -0.3,
+            other => anyhow::bail!(
+                "verdict должен быть helpful|unhelpful|outdated, получено: {other}"
+            ),
+        };
+        let id = match self.get(key)? {
+            Some(r) => r.id,
+            None => return Ok(None),
+        };
+
+        let entry = serde_json::json!({ "verdict": verdict, "note": note, "at": utcnow() });
+        self.db.with_conn(|conn| {
+            // meta колонка nullable — читаем сразу в Option<String>
+            let meta: Option<String> = conn.query_row(
+                "SELECT meta FROM memories WHERE id = ?1",
+                params![id],
+                |r| r.get::<_, Option<String>>(0),
+            )?;
+            let mut obj: serde_json::Map<String, serde_json::Value> = meta
+                .as_deref()
+                .and_then(|m| serde_json::from_str(m).ok())
+                .unwrap_or_default();
+            let mut feedback: Vec<serde_json::Value> = obj
+                .get("feedback")
+                .and_then(|v| v.as_array().cloned())
+                .unwrap_or_default();
+            feedback.push(entry);
+            let start = feedback.len().saturating_sub(20);
+            obj.insert(
+                "feedback".to_string(),
+                serde_json::Value::from(feedback[start..].to_vec()),
+            );
+            let meta_str = serde_json::to_string(&obj)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            conn.execute(
+                "UPDATE memories SET meta = ?1 WHERE id = ?2",
+                params![meta_str, id],
+            )?;
+            Ok(())
+        })?;
+
+        let trust = self.apply_trust(id, delta)?;
+        self.mark_forget_candidates()?;
+        Ok(trust)
+    }
+
+    /// Ф23.2: вердикт dream-ревизии. confirmed +0.1 | outdated −0.4 | contradicted −0.5.
+    pub fn revise_trust_by_key(&self, key: &str, verdict: &str) -> anyhow::Result<Option<f64>> {
+        let delta = match verdict {
+            "confirmed" => 0.1,
+            "outdated" => -0.4,
+            "contradicted" => -0.5,
+            other => anyhow::bail!(
+                "verdict должен быть confirmed|outdated|contradicted, получено: {other}"
+            ),
+        };
+        let id = match self.get(key)? {
+            Some(r) => r.id,
+            None => return Ok(None),
+        };
+        let trust = self.apply_trust(id, delta)?;
+        self.mark_forget_candidates()?;
+        Ok(trust)
+    }
+
+    /// Кандидаты на dream-ревизию: минимальный trust, затем самые давние по feedback.
+    pub fn lowest_trust(&self, n: usize) -> anyhow::Result<Vec<(MemoryRecord, f64)>> {
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, key, content, category, importance, source, meta, embedding, \
+                        created_at, updated_at, access_count, last_accessed, project_id, trust \
+                 FROM memories WHERE deleted_at IS NULL \
+                 ORDER BY trust ASC, (last_feedback_at IS NULL) DESC, last_feedback_at ASC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![n as i64], |row| {
+                let rec = MemoryRecord {
+                    id: row.get(0)?,
+                    key: row.get(1)?,
+                    content: row.get(2)?,
+                    category: row.get(3)?,
+                    importance: row.get(4)?,
+                    source: row.get(5)?,
+                    meta: row.get(6)?,
+                    embedding: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                    access_count: row.get(10)?,
+                    last_accessed: row.get(11)?,
+                    project_id: row.get(12)?,
+                };
+                Ok((rec, row.get::<_, f64>(13)?))
+            })?;
+            Ok(rows.flatten().collect())
+        })
+    }
+
+    /// Сдвиг trust с клампом [0,1]; last_feedback_at = now. Возвращает новый trust.
+    fn apply_trust(&self, id: i64, delta: f64) -> anyhow::Result<Option<f64>> {
+        let now = utcnow();
+        self.db.with_conn(|conn| {
+            conn.execute(
+                "UPDATE memories SET trust = MAX(0.0, MIN(1.0, trust + ?1)), last_feedback_at = ?2 \
+                 WHERE id = ?3",
+                params![delta, now, id],
+            )?;
+            let t: Option<f64> = conn
+                .query_row("SELECT trust FROM memories WHERE id = ?1", params![id], |r| r.get(0))
+                .optional()?;
+            Ok(t)
+        })
+    }
+
+    /// Ф23.3: trust < 0.15 → meta.candidate_for_forget=1. Никаких автоудалений —
+    /// только явный memory_forget.
+    fn mark_forget_candidates(&self) -> anyhow::Result<usize> {
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, meta FROM memories WHERE trust < 0.15 AND deleted_at IS NULL",
+            )?;
+            let rows: Vec<(i64, Option<String>)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .flatten()
+                .collect();
+            let mut marked = 0;
+            for (id, meta) in rows {
+                let mut obj: serde_json::Map<String, serde_json::Value> = meta
+                    .as_deref()
+                    .and_then(|m| serde_json::from_str(m).ok())
+                    .unwrap_or_default();
+                if obj.get("candidate_for_forget").and_then(|v| v.as_i64()) == Some(1) {
+                    continue;
+                }
+                obj.insert("candidate_for_forget".to_string(), serde_json::Value::from(1));
+                let meta_str = serde_json::to_string(&obj)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                conn.execute(
+                    "UPDATE memories SET meta = ?1 WHERE id = ?2",
+                    params![meta_str, id],
+                )?;
+                marked += 1;
+            }
+            Ok(marked)
+        })
+    }
+
+    /// Ф23.5: автосвязи при save — same_project + category (до 5 самых свежих).
+    /// Дедуп по PK (from_id, to_id, kind); kind=entity — резерв под экстрактор.
+    fn link_after_save(&self, id: i64, category: &str, project_id: Option<&str>) -> anyhow::Result<()> {
+        let now = utcnow();
+        self.db.with_conn(|conn| {
+            if let Some(pid) = project_id {
+                conn.execute(
+                    "INSERT OR IGNORE INTO memory_links (from_id, to_id, kind, created_at)
+                     SELECT ?1, id, 'same_project', ?2 FROM memories
+                     WHERE project_id = ?3 AND id != ?1 AND deleted_at IS NULL
+                     ORDER BY updated_at DESC LIMIT 5",
+                    params![id, now, pid],
+                )?;
+            }
+            conn.execute(
+                "INSERT OR IGNORE INTO memory_links (from_id, to_id, kind, created_at)
+                 SELECT ?1, id, 'category', ?2 FROM memories
+                 WHERE category = ?3 AND id != ?1 AND deleted_at IS NULL
+                 ORDER BY updated_at DESC LIMIT 5",
+                params![id, now, category],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// 1-hop соседи по memory_links (оба направления), без tombstone, до limit.
+    pub fn related_records(&self, ids: &[i64], limit: usize) -> anyhow::Result<Vec<MemoryRecord>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.db.with_conn(|conn| {
+            let mut out: Vec<MemoryRecord> = Vec::new();
+            let mut seen: HashSet<i64> = ids.iter().copied().collect();
+            for &id in ids {
+                let mut stmt = conn.prepare(
+                    "SELECT m.id, m.key, m.content, m.category, m.importance, m.source, m.meta, \
+                            m.embedding, m.created_at, m.updated_at, m.access_count, m.last_accessed, m.project_id \
+                     FROM memory_links l JOIN memories m ON m.id = l.to_id \
+                     WHERE l.from_id = ?1 AND m.deleted_at IS NULL \
+                     UNION ALL \
+                     SELECT m.id, m.key, m.content, m.category, m.importance, m.source, m.meta, \
+                            m.embedding, m.created_at, m.updated_at, m.access_count, m.last_accessed, m.project_id \
+                     FROM memory_links l JOIN memories m ON m.id = l.from_id \
+                     WHERE l.to_id = ?1 AND m.deleted_at IS NULL \
+                     LIMIT ?2",
+                )?;
+                let rows = stmt.query_map(params![id, (limit * 2) as i64], |row| {
+                    Ok(MemoryRecord {
+                        id: row.get(0)?,
+                        key: row.get(1)?,
+                        content: row.get(2)?,
+                        category: row.get(3)?,
+                        importance: row.get(4)?,
+                        source: row.get(5)?,
+                        meta: row.get(6)?,
+                        embedding: row.get(7)?,
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
+                        access_count: row.get(10)?,
+                        last_accessed: row.get(11)?,
+                        project_id: row.get(12)?,
+                    })
+                })?;
+                for r in rows.flatten() {
+                    if seen.insert(r.id) && out.len() < limit {
+                        out.push(r);
+                    }
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    /// Затухание важности воспоминаний (decay). Ф23.1: trust гаснет тем же фактором.
     pub fn decay_importance(&self, rate: f64) -> anyhow::Result<usize> {
         let factor = 1.0 - rate.clamp(0.0, 1.0);
-        self.db.with_conn(|conn| {
+        let count = self.db.with_conn(|conn| {
             let count = conn.execute(
-                "UPDATE memories SET importance = MAX(0.01, importance * ?1)",
+                "UPDATE memories SET importance = MAX(0.01, importance * ?1), \
+                 trust = MAX(0.0, trust * ?1)",
                 params![factor],
             )?;
             Ok(count)
-        })
+        })?;
+        self.mark_forget_candidates()?;
+        Ok(count)
     }
 
     /// Очистка слабых воспоминаний (tombstone, реплицируется синком).

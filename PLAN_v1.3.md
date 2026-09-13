@@ -145,27 +145,29 @@ Ralph-миграция из спеки (названа там «M4», что у�
 
 Цель: память учится на использовании; устаревшее гаснет управляемо, без автоудалений.
 
-- [ ] **23.1** `touch_access` → `trust = min(1.0, trust + 0.02)`, `last_feedback_at`;
+- [x] **23.1** `touch_access` → `trust = min(1.0, trust + 0.02)`, `last_feedback_at`;
   `decay_importance(rate)` в autodream → также `trust *= (1 - rate)`.
-- [ ] **23.2** Dream-ревизия: в промпт дрима добавлять блок «ревизия памяти» — N записей
+- [x] **23.2** Dream-ревизия: в промпт дрима добавлять блок «ревизия памяти» — N записей
   с наименьшим `trust`/давним `last_feedback_at`; LLM-вердикт `confirmed | outdated | contradicted`
   → `trust +0.1 / −0.4 / −0.5`; вердикты — в dream-отчёт и git-коммит workspace.
-- [ ] **23.3** Никаких автоудалений (правило №1 пользователя): при `trust < 0.15` запись получает
+- [x] **23.3** Никаких автоудалений (правило №1 пользователя): при `trust < 0.15` запись получает
   `meta.candidate_for_forget=1`, видна в `dream_status`/дрим-отчёте; удаление — только явный
   `memory_forget`.
-- [ ] **23.4** Новый MCP-инструмент **`memory_feedback` (№26)**:
+- [x] **23.4** Новый MCP-инструмент **`memory_feedback` (№26)**:
   `memory_feedback(key, verdict: helpful|unhelpful|outdated, note?)` → trust `+0.15/−0.2/−0.3`,
   запись в `meta.feedback`; регистрируется в плагине Hermes (agentic feedback из чата).
-- [ ] **23.5** Автосвязи `memory_links`: при `memory_save` — связи `same_project`/`category` +
+- [x] **23.5** Автосвязи `memory_links`: при `memory_save` — связи `same_project`/`category` +
   пересечение сущностей (существующий OneKE-lite-экстрактор); `memory_search` mode=hybrid
   опционально (`related=true`) добавляет 1-hop соседей отдельным блоком `[related]`,
   не смешивая с основными хитами. Набор `kind` расширяемый без ломки API: в v1.3 —
   `same_project|entity|category|manual`; зарезервировать `contradicts|causes|supersedes`
   для dream-ревизии (23.2; belief-derivation — бэклог, см. mcp-memory-service в §8).
-- [ ] **23.6** Дедуп со builtin-памятью Hermes: в промпт дрима — правило «если правило уже есть
+  *Отступление (записано в PLAN.md §6): entity-связи в v1.3 детерминированных kinds нет —
+  LLM-экстрактор на каждом save давал бы токены на каждый ход; kind=entity зарезервирован.*
+- [x] **23.6** Дедуп со builtin-памятью Hermes: в промпт дрима — правило «если правило уже есть
   в ob2h, не предлагать его в builtin MEMORY.md» (сейчас часть правил живёт в обоих сторах
   и попадает в контекст дважды).
-- [ ] **Тесты:** детерминированные вердикты FakeLLM; trust-клампы 0..1; `candidate_for_forget`
+- [x] **Тесты:** детерминированные вердикты FakeLLM; trust-клампы 0..1; `candidate_for_forget`
   не удаляет запись; memory_links не дублируются, каскад при forget.
 
 ### Фаза 24 — Лёгкая база: квантование и бэкапы (Оценка: 1.5 дня)

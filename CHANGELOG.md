@@ -6,6 +6,19 @@
 ## [Не выпущено]
 
 ### Added
+- **Trust и feedback-петля (Фаза 23 PLAN_v1.3, миграция M5 → схема v6)**: колонки
+  `memories.trust` (дефолт 0.5) и `last_feedback_at`; таблица `memory_links`
+  (kind: same_project|entity|category|manual; contradicts|causes|supersedes — резерв).
+  touch/search/prefetch подтверждает записи (trust +0.02, кламп 1.0); decay гасит trust
+  тем же фактором; при trust < 0.15 запись помечается `meta.candidate_for_forget=1`
+  (никаких автоудалений). Dream-ревизия: 10 записей с минимальным trust → LLM-вердикты
+  confirmed +0.1 / outdated −0.4 / contradicted −0.5 (флаг `OB2H_DREAM_MEMORY_REVISION`,
+  дефолт on; дедуп-правило builtin в промпте дрима). Автосвязи при `memory_save`
+  (до 5 свежих same_project + category), каскадное удаление связей при forget.
+- **MCP-инструмент `memory_feedback` (№26)**: `memory_feedback(key, verdict:
+  helpful|unhelpful|outdated, note?)` → trust +0.15/−0.2/−0.3, лог в `meta.feedback`.
+- **`memory_search` + параметр `related`**: 1-hop соседи по memory_links отдельным
+  блоком `[related]` (аддитивно, дефолт off).
 - **CLI `ob2h bench`** (Фаза 21 PLAN_v1.3): регрессионный контур retrieval — golden set
   (`data/bench/golden.jsonl`, 36 кейсов), метрики recall@k / MRR / доля пустых / p50-p95
   латентности, режимы `search` (гибридный memory_search) и `context` (build_context),

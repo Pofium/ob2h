@@ -487,7 +487,8 @@ impl McpServer {
                     return "ничего не найдено".to_string();
                 }
 
-                hits.iter()
+                let mut out = hits
+                    .iter()
                     .enumerate()
                     .map(|(i, h)| {
                         let preview: String = h.record.content.chars().take(200).collect();
@@ -501,7 +502,26 @@ impl McpServer {
                         )
                     })
                     .collect::<Vec<_>>()
-                    .join("\n")
+                    .join("\n");
+
+                // Ф23.5: related=true — 1-hop соседи по memory_links отдельным блоком.
+                if args.get("related").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    let ids: Vec<i64> = hits.iter().map(|h| h.record.id).collect();
+                    if let Ok(related) = self.ctx.memory.related_records(&ids, 5) {
+                        let rel_lines = related
+                            .iter()
+                            .map(|r| {
+                                let preview: String = r.content.chars().take(120).collect();
+                                format!("- key={} cat={} | {preview}", r.key, r.category)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !rel_lines.is_empty() {
+                            out = format!("{out}\n[related]\n{rel_lines}");
+                        }
+                    }
+                }
+                out
             }
             "memory_update" => {
                 let key = match args.get("key").and_then(|v| v.as_str()) {
@@ -526,6 +546,22 @@ impl McpServer {
                 match self.ctx.memory.forget(key) {
                     Ok(true) => format!("forgotten key={key}"),
                     Ok(false) => format!("not found key={key}"),
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "memory_feedback" => {
+                let key = match args.get("key").and_then(|v| v.as_str()) {
+                    Some(k) => k,
+                    None => return "[Error] key is required".to_string(),
+                };
+                let verdict = match args.get("verdict").and_then(|v| v.as_str()) {
+                    Some(v) => v,
+                    None => return "[Error] verdict is required (helpful|unhelpful|outdated)".to_string(),
+                };
+                let note = args.get("note").and_then(|v| v.as_str());
+                match self.ctx.memory.record_feedback(key, verdict, note) {
+                    Ok(Some(trust)) => format!("feedback recorded key={key} trust={trust:.2}"),
+                    Ok(None) => format!("not found key={key}"),
                     Err(e) => format!("[Error] {e}"),
                 }
             }

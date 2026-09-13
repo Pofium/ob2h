@@ -4,7 +4,7 @@ use ob2h::mcp::McpServer;
 use ob2h::mcp::tools::list_tools;
 use tempfile::tempdir;
 
-/// Снапшот контракта: 24 инструмента (19 базовых + 5 проектных v1.0).
+/// Снапшот контракта: 26 инструментов (25 базовых v1.2 + memory_feedback v1.3).
 #[test]
 fn test_tools_list_contract_snapshot() {
     let names: Vec<String> = list_tools().into_iter().map(|t| t.name).collect();
@@ -36,8 +36,10 @@ fn test_tools_list_contract_snapshot() {
         "project_report",
         // v1.2: Анализ радиуса изменений (Blast Radius)
         "project_impact",
+        // v1.3: Trust и feedback-петля (Фаза 23)
+        "memory_feedback",
     ];
-    assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.2.md");
+    assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.3.md");
 }
 
 #[tokio::test]

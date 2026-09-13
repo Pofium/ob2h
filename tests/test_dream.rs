@@ -29,7 +29,7 @@ async fn test_dream_2_phase_cycle() {
     settings.data_dir = tmp.path().to_path_buf();
     settings.dream_extract_enabled = false;
 
-    let dream = Dream::new(ws.clone(), git.clone(), fake_llm, settings, db, None);
+    let dream = Dream::new(ws.clone(), git.clone(), fake_llm, settings, db, None, None);
     let stats = dream.run("manual").await.expect("dream run");
 
     assert_eq!(stats.status, "ok");

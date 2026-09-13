@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -78,6 +78,27 @@ CREATE TABLE IF NOT EXISTS project_files (
   PRIMARY KEY (project_id, rel_path)
 );
 CREATE INDEX IF NOT EXISTS idx_project_files_project ON project_files(project_id);
+"#;
+
+/// M5 (v1.3, Фаза 23): trust и связи памяти. trust — машинный сигнал подтверждённости
+/// (использование/ревизия), отделён от авторского importance; memory_links —
+/// детерминированные автосвязи (kind: same_project|entity|category|manual;
+/// contradicts|causes|supersedes — резерв под dream-ревизию, PLAN_v1.3 §23.5).
+pub const MIGRATION_V5: &str = r#"
+ALTER TABLE memories ADD COLUMN trust REAL NOT NULL DEFAULT 0.5;
+ALTER TABLE memories ADD COLUMN last_feedback_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_memories_trust ON memories(trust);
+
+CREATE TABLE IF NOT EXISTS memory_links (
+  from_id INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  to_id   INTEGER NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  kind    TEXT NOT NULL,
+  weight  REAL NOT NULL DEFAULT 1.0,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (from_id, to_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_memlink_from ON memory_links(from_id);
+CREATE INDEX IF NOT EXISTS idx_memlink_to   ON memory_links(to_id);
 "#;
 
 /// Текущая версия схемы БД (0 — свежая, ещё без таблиц).
@@ -225,6 +246,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V2)?;
         conn.execute_batch(MIGRATION_V3)?;
         conn.execute_batch(MIGRATION_V4)?;
+        conn.execute_batch(MIGRATION_V5)?;
     } else {
         if current_version < 2 {
             conn.execute_batch(MIGRATION_V2)?;
@@ -234,6 +256,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         }
         if current_version < 4 {
             conn.execute_batch(MIGRATION_V4)?;
+        }
+        if current_version < 5 {
+            conn.execute_batch(MIGRATION_V5)?;
         }
     }
 

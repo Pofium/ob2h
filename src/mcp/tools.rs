@@ -1,4 +1,4 @@
-//! 24 инструмента MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты).
+//! 26 инструментов MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты).
 
 use super::protocol::McpToolDef;
 
@@ -24,14 +24,15 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 2. memory_search
         McpToolDef {
             name: "memory_search".to_string(),
-            description: "Поиск по памяти: hybrid (по умолчанию, FTS+вектор RRF) | fts | vector. project_id фильтрует по проекту.".to_string(),
+            description: "Поиск по памяти: hybrid (по умолчанию, FTS+вектор RRF) | fts | vector. project_id фильтрует по проекту. related=true добавляет 1-hop соседей по автосвязям отдельным блоком [related].".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Поисковый запрос" },
                     "limit": { "type": "integer", "description": "Количество результатов (дефолт: 5)" },
                     "mode": { "type": "string", "enum": ["hybrid", "fts", "vector"], "description": "Режим поиска" },
-                    "project_id": { "type": "string", "description": "Идентификатор проекта для фильтрации (опционально)" }
+                    "project_id": { "type": "string", "description": "Идентификатор проекта для фильтрации (опционально)" },
+                    "related": { "type": "boolean", "description": "Добавить связанные записи (1-hop по memory_links), дефолт: false" }
                 },
                 "required": ["query"]
             }),
@@ -336,6 +337,20 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "depth": { "type": "integer", "description": "Глубина обхода обратных зависимостей (дефолт: 3, от 1 до 10)" }
                 },
                 "required": ["symbol_or_path"]
+            }),
+        },
+        // 26. memory_feedback (v1.3, Фаза 23)
+        McpToolDef {
+            name: "memory_feedback".to_string(),
+            description: "Фидбек по записи памяти: корректирует trust (доверие). helpful +0.15 | unhelpful −0.2 | outdated −0.3. Записи с trust < 0.15 помечаются candidate_for_forget (не удаляются автоматически).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "key": { "type": "string", "description": "Ключ воспоминания" },
+                    "verdict": { "type": "string", "enum": ["helpful", "unhelpful", "outdated"], "description": "Вердикт агента по полезности записи" },
+                    "note": { "type": "string", "description": "Комментарий (опционально)" }
+                },
+                "required": ["key", "verdict"]
             }),
         },
     ]
