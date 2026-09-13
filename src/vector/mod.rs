@@ -4,4 +4,4 @@ pub mod rrf;
 pub mod similarity;
 
 pub use rrf::{rrf_merge, RankedItem};
-pub use similarity::{cosine, deserialize, normalize, serialize, top_k};
+pub use similarity::{cosine, deserialize, deserialize_f32, deserialize_q, normalize, serialize, serialize_q, top_k};

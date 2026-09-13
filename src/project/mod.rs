@@ -117,7 +117,7 @@ impl ProjectService {
                 let mut conn = self.conn.lock().unwrap();
                 let tx = conn.transaction()?;
                 for ((pk, _, _, _, _), vec) in chunk.iter().zip(vecs.iter()) {
-                    let blob = crate::vector::similarity::serialize(vec);
+                    let blob = crate::vector::similarity::serialize_q(vec);
                     tx.execute(
                         "UPDATE graph_nodes SET embedding = ?1 WHERE id = ?2",
                         params![blob, pk],

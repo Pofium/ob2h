@@ -6,6 +6,13 @@
 ## [Не выпущено]
 
 ### Added
+- **Лёгкая база и бэкапы (Фаза 24 PLAN_v1.3)**: int8-квантование эмбеддингов v2
+  (`[0x01][scale f32][i8 × dim]`, ~4× компактнее f32; dual-read по magic-байту, все
+  писатели пишут v2); CLI `ob2h db quantize-embeddings [--dry-run]` (пре-бэкап + VACUUM;
+  на копии живой БД: 963 → 619 МБ, recall без деградации); `ob2h backup --scope quick`
+  (память+связи+kv+воркспейс, ~десятки МБ) и `ob2h backup verify <path>`
+  (integrity_check + сверка счётчиков с живой БД); раздельная ротация
+  `OB2H_BACKUP_KEEP_FULL=3` / `OB2H_BACKUP_KEEP_QUICK=14`.
 - **Trust и feedback-петля (Фаза 23 PLAN_v1.3, миграция M5 → схема v6)**: колонки
   `memories.trust` (дефолт 0.5) и `last_feedback_at`; таблица `memory_links`
   (kind: same_project|entity|category|manual; contradicts|causes|supersedes — резерв).

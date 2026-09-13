@@ -59,7 +59,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         Some(graph.clone()),
         Some(memory.clone()),
     ));
-    let backup = Arc::new(BackupManager::new(settings.clone(), db.clone(), 14));
+    let backup = Arc::new(BackupManager::new(settings.clone(), db.clone()));
     let sync = Arc::new(SyncManager::new(
         settings.clone(),
         db.clone(),

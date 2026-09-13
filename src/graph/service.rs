@@ -11,7 +11,7 @@ use crate::db::{utcnow, Database};
 use crate::embedding::EmbeddingProvider;
 use crate::extractor::ExtractionResult;
 use crate::llm::{LLMClient, LLMClientExt};
-use crate::vector::{serialize, top_k};
+use crate::vector::{serialize_q, top_k};
 
 pub const REASON_SYSTEM_PROMPT: &str = "\
 Ты отвечаешь на вопрос по графу знаний личного агента. Опирайся ТОЛЬКО на \
@@ -210,7 +210,7 @@ impl GraphService {
         }
         if let Ok(embs) = self.embedder.embed(&[text.to_string()]).await {
             if let Some(v) = embs.first() {
-                let blob = serialize(v);
+                let blob = serialize_q(v);
                 let _ = self.db.with_conn(|conn| {
                     conn.execute(
                         "UPDATE graph_nodes SET embedding = ?1 WHERE id = ?2",

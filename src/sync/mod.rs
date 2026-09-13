@@ -23,7 +23,7 @@ use crate::backup::BackupManager;
 use crate::config::Settings;
 use crate::db::{utcnow, Database};
 use crate::embedding::EmbeddingProvider;
-use crate::vector::serialize as vec_serialize;
+use crate::vector::serialize_q as vec_serialize;
 
 pub mod worker;
 pub use worker::AutoSyncWorker;

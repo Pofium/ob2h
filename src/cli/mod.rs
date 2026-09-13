@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod bench;
+pub mod db;
 pub mod doctor;
 
 pub use agent::{AgentManager, AgentTarget};
@@ -28,8 +29,20 @@ pub enum Commands {
         #[command(subcommand)]
         command: DreamCommands,
     },
-    /// Создать атомарный бэкап БД и workspace
-    Backup,
+    /// Создать бэкап (full|quick) или проверить существующий (backup verify <path>)
+    Backup {
+        /// Скоуп создания: full (вся БД) | quick (память+воркспейс, Ф24)
+        #[arg(short, long, default_value = "full")]
+        scope: String,
+        /// Проверить существующий бэкап (каталог бэкапа или файл БД) вместо создания
+        #[arg(long)]
+        verify: Option<String>,
+    },
+    /// Служебные операции с БД
+    Db {
+        #[command(subcommand)]
+        command: DbCommands,
+    },
     /// Вывести статистику хранилища
     Stats,
     /// Установить и зарегистрировать OB2H в Hermes (config.yaml)
@@ -75,6 +88,16 @@ pub enum Commands {
         /// Сохранить агрегаты как baseline в docs/bench_baseline.md
         #[arg(long)]
         save_baseline: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DbCommands {
+    /// Разовое int8-квантование эмбеддингов (f32 → v2, ~4× компактнее)
+    QuantizeEmbeddings {
+        /// Только показать, что будет сделано
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

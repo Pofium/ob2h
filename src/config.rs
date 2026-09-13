@@ -40,6 +40,10 @@ pub struct Settings {
 
     // --- Ретеншн ---
     pub retention_days: i64,
+    /// Ротация полных бэкапов (Ф24).
+    pub backup_keep_full: usize,
+    /// Ротация быстрых бэкапов памяти (Ф24).
+    pub backup_keep_quick: usize,
 
     // --- Реактивная автоматизация (Фаза 18) ---
     pub watcher_enabled: bool,
@@ -137,6 +141,14 @@ impl Settings {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(30);
+        let backup_keep_full = env::var("OB2H_BACKUP_KEEP_FULL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3);
+        let backup_keep_quick = env::var("OB2H_BACKUP_KEEP_QUICK")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(14);
 
         let log_level = env::var("OB2H_LOG_LEVEL")
             .unwrap_or_else(|_| "INFO".to_string());
@@ -182,6 +194,8 @@ impl Settings {
             dream_extract_enabled,
             dream_memory_revision,
             retention_days,
+            backup_keep_full,
+            backup_keep_quick,
             watcher_enabled,
             watcher_debounce_ms,
             autosync_enabled,

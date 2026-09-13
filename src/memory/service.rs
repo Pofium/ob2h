@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::db::{models::MemoryRecord, utcnow, Database};
 use crate::embedding::EmbeddingProvider;
-use crate::vector::{rrf_merge, serialize, top_k};
+use crate::vector::{rrf_merge, serialize_q, top_k};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryHit {
@@ -71,7 +71,7 @@ impl MemoryService {
 
         // Получаем векторное представление
         let embeddings = self.embedder.embed(&[content.to_string()]).await?;
-        let emb_blob = embeddings.first().map(|v| serialize(v));
+        let emb_blob = embeddings.first().map(|v| serialize_q(v));
 
         let now = utcnow();
 
@@ -154,7 +154,7 @@ impl MemoryService {
 
         let emb_blob = if content.is_some() {
             let embs = self.embedder.embed(&[new_content.to_string()]).await?;
-            embs.first().map(|v| serialize(v))
+            embs.first().map(|v| serialize_q(v))
         } else {
             existing.embedding
         };

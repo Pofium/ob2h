@@ -19,7 +19,7 @@ use crate::ingest::read_document;
 use crate::llm::LLMClient;
 use crate::memory::MemoryService;
 use crate::project::ProjectService;
-use crate::vector::serialize;
+use crate::vector::serialize_q;
 use crate::workspace::{GitStore, Workspace};
 
 pub struct AppContext {
@@ -784,7 +784,7 @@ impl McpServer {
 
                 let _ = self.ctx.db.with_conn(|conn| {
                     for (ord, (chunk, vec)) in limited_chunks.iter().zip(chunk_vecs.iter()).enumerate() {
-                        let blob = serialize(vec);
+                        let blob = serialize_q(vec);
                         let _ = conn.execute(
                             "INSERT INTO chunks (doc_id, ordinal, text, embedding, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                             rusqlite::params![doc_id, ord as i64, chunk, blob, now],

@@ -1,14 +1,34 @@
-//! Сериализация BLOB float32 и косинусный поиск перебором (ADR-2).
+//! Сериализация BLOB (f32 legacy + int8 v2), косинусный поиск перебором (ADR-2).
 
 use bytemuck::{cast_slice, try_cast_slice};
 
-/// Сериализация вектора f32 в бинарный BLOB (little-endian).
+/// Магический байт формата v2: [0x01][scale f32 LE][i8 × dim] (Ф24 PLAN_v1.3).
+/// Длина v2 = dim+5 — никогда не кратна 4 для реальных размерностей (384→389),
+/// но различаем по magic, а не только по длине.
+pub const Q_MAGIC: u8 = 0x01;
+
+/// Сериализация вектора f32 в бинарный BLOB (little-endian). Легаси-формат;
+/// новые записи должны использовать serialize_q (int8, ~4× компактнее).
 pub fn serialize(vec: &[f32]) -> Vec<u8> {
     cast_slice(vec).to_vec()
 }
 
-/// Десериализация бинарного BLOB в вектор f32.
-pub fn deserialize(blob: &[u8]) -> Option<Vec<f32>> {
+/// Квантование int8 per-vector scale: scale = max|v|/127, i8 = round(v/scale).
+pub fn serialize_q(vec: &[f32]) -> Vec<u8> {
+    let max_abs = vec.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let scale = if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 };
+    let mut out = Vec::with_capacity(vec.len() + 5);
+    out.push(Q_MAGIC);
+    out.extend_from_slice(&scale.to_le_bytes());
+    for v in vec {
+        let q = (v / scale).round().clamp(-127.0, 127.0) as i8;
+        out.push(q as u8);
+    }
+    out
+}
+
+/// Десериализация легаси f32 BLOB.
+pub fn deserialize_f32(blob: &[u8]) -> Option<Vec<f32>> {
     if blob.is_empty() || blob.len() % std::mem::size_of::<f32>() != 0 {
         return None;
     }
@@ -22,6 +42,24 @@ pub fn deserialize(blob: &[u8]) -> Option<Vec<f32>> {
                 .collect();
             Some(floats)
         }
+    }
+}
+
+/// Десериализация v2 (int8 + scale).
+pub fn deserialize_q(blob: &[u8]) -> Option<Vec<f32>> {
+    if blob.len() < 5 || blob[0] != Q_MAGIC {
+        return None;
+    }
+    let scale = f32::from_le_bytes(blob[1..5].try_into().ok()?);
+    Some(blob[5..].iter().map(|&b| (b as i8) as f32 * scale).collect())
+}
+
+/// Dual-read: v2 по magic-байту, иначе легаси f32.
+pub fn deserialize(blob: &[u8]) -> Option<Vec<f32>> {
+    if blob.first() == Some(&Q_MAGIC) {
+        deserialize_q(blob)
+    } else {
+        deserialize_f32(blob)
     }
 }
 
@@ -98,6 +136,38 @@ mod tests {
         assert_eq!(bytes.len(), 16);
         let restored = deserialize(&bytes).expect("must deserialize");
         assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn test_quantize_roundtrip_distortion() {
+        // Ф24: искажение косинуса при int8-квантовании ≤ 0.01
+        let a: Vec<f32> = (0..384).map(|i| ((i % 7) as f32 - 3.0).sin()).collect();
+        let b: Vec<f32> = (0..384).map(|i| ((i % 5) as f32 - 2.0).cos()).collect();
+        let qa = deserialize_q(&serialize_q(&a)).expect("dequant a");
+        let qb = deserialize_q(&serialize_q(&b)).expect("dequant b");
+        assert_eq!(serialize_q(&a).len(), 384 + 5, "v2 = dim + 5 байт");
+        let dist = (cosine(&a, &qa) - 1.0).abs();
+        assert!(dist < 0.01, "косинусное искажение self {dist}");
+        let cross = (cosine(&a, &b) - cosine(&qa, &qb)).abs();
+        assert!(cross < 0.01, "искажение перекрёстного косинуса {cross}");
+    }
+
+    #[test]
+    fn test_dual_read() {
+        let v = vec![0.5f32, -1.0, 2.0, 3.5];
+        // легаси читается (без потерь)
+        assert_eq!(deserialize(&serialize(&v)), Some(v.clone()));
+        // v2 читается dual-read'ом (квантование lossy — сравнение с допуском)
+        let restored = deserialize(&serialize_q(&v)).expect("v2 must deserialize");
+        assert_eq!(v.len(), restored.len());
+        let max_err = v
+            .iter()
+            .zip(restored.iter())
+            .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(max_err < 0.03, "ошибка квантования {max_err}");
+        // v2 не путается с легаси по размеру
+        assert_eq!(serialize_q(&v).len(), 9);
+        assert_eq!(serialize(&v).len(), 16);
     }
 
     #[test]

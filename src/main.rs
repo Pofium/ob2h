@@ -4,7 +4,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use ob2h::cli::{Cli, Commands, DreamCommands, PluginCommands, SyncCommands};
+use ob2h::cli::{Cli, Commands, DbCommands, DreamCommands, PluginCommands, SyncCommands};
 use ob2h::config::Settings;
 use ob2h::mcp::McpServer;
 use ob2h::{init_app, start_background_workers};
@@ -86,12 +86,24 @@ async fn main() -> anyhow::Result<()> {
                 println!("{output}");
             }
         },
-        Some(Commands::Backup) => {
-            let output = McpServer::new(ctx)
-                .call_tool("omnes_backup", serde_json::json!({}))
-                .await;
-            println!("{output}");
+        Some(Commands::Backup { scope, verify }) => {
+            if let Some(path) = verify {
+                let report = ctx.backup.verify(std::path::Path::new(&path))?;
+                println!("{report}");
+            } else {
+                let target = match scope.as_str() {
+                    "quick" => ctx.backup.create_quick()?,
+                    "full" => ctx.backup.create()?,
+                    other => anyhow::bail!("scope должен быть full|quick, получено: {other}"),
+                };
+                println!("Бэкап создан: {}", target.display());
+            }
         }
+        Some(Commands::Db { command }) => match command {
+            DbCommands::QuantizeEmbeddings { dry_run } => {
+                ob2h::cli::db::run_quantize(&ctx, dry_run)?;
+            }
+        },
         Some(Commands::Stats) => {
             let output = McpServer::new(ctx)
                 .call_tool("omnes_stats", serde_json::json!({}))
