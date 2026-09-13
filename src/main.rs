@@ -45,6 +45,17 @@ async fn main() -> anyhow::Result<()> {
             let server = Arc::new(McpServer::new(ctx));
             server.run_stdio().await?;
         }
+        Some(Commands::Bench { mode, k, golden, json, save_baseline }) => {
+            ob2h::cli::bench::cli_run(
+                &ctx,
+                &mode,
+                &k,
+                golden.as_deref(),
+                json,
+                save_baseline,
+            )
+            .await?;
+        }
         Some(Commands::Doctor { fix }) => {
             let doctor = ob2h::cli::Doctor::new(ctx.settings.clone(), fix);
             doctor.run()?;

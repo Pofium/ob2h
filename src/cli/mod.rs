@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod bench;
 pub mod doctor;
 
 pub use agent::{AgentManager, AgentTarget};
@@ -56,6 +57,24 @@ pub enum Commands {
     Project {
         #[command(subcommand)]
         command: ProjectCliCommands,
+    },
+    /// Регрессионный bench retrieval: golden set, recall@k, MRR, латентность (Фаза 21)
+    Bench {
+        /// Режим: search (memory_search hybrid) | context (memory_context / build_context)
+        #[arg(short, long, default_value = "search")]
+        mode: String,
+        /// Уровни k для recall@k, через запятую
+        #[arg(long, default_value = "5,10")]
+        k: String,
+        /// Путь к golden-набору (по умолчанию data/bench/golden.jsonl)
+        #[arg(long)]
+        golden: Option<String>,
+        /// Машиночитаемый JSON-вывод
+        #[arg(long)]
+        json: bool,
+        /// Сохранить агрегаты как baseline в docs/bench_baseline.md
+        #[arg(long)]
+        save_baseline: bool,
     },
 }
 
