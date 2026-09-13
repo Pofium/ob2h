@@ -241,13 +241,26 @@ async fn merge_records_explicit_canonical_and_links() {
     let stale: i64 = db
         .with_conn(|conn| {
             Ok(conn.query_row(
-                "SELECT COUNT(*) FROM memory_links l JOIN memories t ON t.id = l.to_id WHERE t.key = 'm-b'",
+                "SELECT COUNT(*) FROM memory_links l JOIN memories t ON t.id = l.to_id \
+                 WHERE t.key = 'm-b' AND l.deleted_at IS NULL",
                 [],
                 |r| r.get(0),
             )?)
         })
         .unwrap();
-    assert_eq!(stale, 0, "ссылок на поглощённую нет");
+    assert_eq!(stale, 0, "живых ссылок на поглощённую нет");
+    // M7 (Ф32.4): tombstone рёбер остался — не жёсткое удаление
+    let tombstones: i64 = db
+        .with_conn(|conn| {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM memory_links l JOIN memories t ON t.id = l.to_id \
+                 WHERE t.key = 'm-b' AND l.deleted_at IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert!(tombstones >= 1, "рёбра на поглощённую soft-deleted (M7)");
     let redirected: i64 = db
         .with_conn(|conn| {
             Ok(conn.query_row(
@@ -337,13 +350,13 @@ async fn merge_absorbs_updates_canonical_and_redirects_links() {
         .with_conn(|conn| {
             Ok(conn.query_row(
                 "SELECT COUNT(*) FROM memory_links l JOIN memories t ON t.id = l.to_id \
-                 WHERE t.key = 'k-b'",
+                 WHERE t.key = 'k-b' AND l.deleted_at IS NULL",
                 [],
                 |r| r.get(0),
             )?)
         })
         .expect("links");
-    assert_eq!(stale, 0, "ссылок на поглощённую запись не осталось");
+    assert_eq!(stale, 0, "живых ссылок на поглощённую запись не осталось (M7: tombstone)");
 }
 
 #[tokio::test]

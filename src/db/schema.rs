@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -99,6 +99,13 @@ CREATE TABLE IF NOT EXISTS memory_links (
 );
 CREATE INDEX IF NOT EXISTS idx_memlink_from ON memory_links(from_id);
 CREATE INDEX IF NOT EXISTS idx_memlink_to   ON memory_links(to_id);
+"#;
+
+/// M7 (v1.4, Фаза 32): soft-delete рёбер памяти — забытая сторона ребра получает
+/// tombstone (deleted_at), ребро реплицируется синком v2 (Ф34), как tombstones записей.
+pub const MIGRATION_V7: &str = r#"
+ALTER TABLE memory_links ADD COLUMN deleted_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_memlink_deleted ON memory_links(deleted_at);
 "#;
 
 /// M6 (v1.3, Фазы 26–27): Ralph Knowledge Layer — циклы разработки.
@@ -328,6 +335,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V4)?;
         conn.execute_batch(MIGRATION_V5)?;
         conn.execute_batch(MIGRATION_V6)?;
+        conn.execute_batch(MIGRATION_V7)?;
     } else {
         if current_version < 2 {
             conn.execute_batch(MIGRATION_V2)?;
@@ -343,6 +351,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         }
         if current_version < 6 {
             conn.execute_batch(MIGRATION_V6)?;
+        }
+        if current_version < 7 {
+            conn.execute_batch(MIGRATION_V7)?;
         }
     }
 

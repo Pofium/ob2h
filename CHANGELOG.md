@@ -6,6 +6,16 @@
 ## [Не выпущено]
 
 ### Added
+- **Typed edges в dream-ревизии (Фаза 32 PLAN_v1.4, миграция M7 — схема 6→7)**:
+  вердикты ревизора становятся рёбрами — `contradicted`+related_key → `contradicts`,
+  `outdated`+related_key → `supersedes` (направление от новой записи к старой, upsert
+  без дублей на повторных дримах); `confirmed` — как раньше, только trust-bump.
+  **Conflict-разметка**: в `memory_search` блок `[conflicts]` показывает спор целиком —
+  обе стороны с trust и датой вердикта. **Belief-derivation lite**: LLM предлагает пары
+  `causes` (флаг `OB2H_DREAM_BELIEF`, дефолт off — предложения только в дрим-отчёте).
+  **Миграция V7**: `memory_links.deleted_at` — forget/merge рвут связи soft-delete'ом
+  (tombstone реплицируется синком v2 в Ф34), чтения фильтруют удалённые, upsert
+  оживляет. +7 тестов (`tests/test_typed_edges.rs`).
 - **Ralph Knowledge Layer — ядро и окружение (Фазы 26–28 PLAN_v1.3, миграция M6 → схема v7)**:
   таблицы `ralph_runs`/`ralph_iterations`/`ralph_findings`/`ast_changes` (аддитивно,
   graph_nodes не пересоздавался — confidence сохранена, тест схемы). MCP-инструменты

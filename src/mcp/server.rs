@@ -562,6 +562,24 @@ impl McpServer {
                         out = format!("{out}\n[{label}]\n{rel_lines}");
                     }
                 }
+
+                // Ф32.2: conflict-разметка — если среди хитов есть пара, связанная
+                // kind=contradicts, показать спор целиком с trust обеих сторон.
+                {
+                    let ids: Vec<i64> = hits.iter().map(|h| h.record.id).collect();
+                    if let Ok(conflicts) = self.ctx.memory.conflicts_among(&ids) {
+                        let conflict_lines = conflicts
+                            .iter()
+                            .map(|(ka, ta, kb, tb, ts)| {
+                                format!("[conflict] {ka} (trust {ta:.2}) ↔ {kb} (trust {tb:.2}): вердикт дрима {ts}")
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !conflict_lines.is_empty() {
+                            out = format!("{out}\n[conflicts]\n{conflict_lines}");
+                        }
+                    }
+                }
                 // Ф25.1: деградация эмбеддингов не молчит
                 if crate::embedding::active_backend() == "fake"
                     && self.ctx.settings.embed_provider != "fake"

@@ -174,22 +174,41 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 Цель: вердикты 23.2 становятся рёбрами; противоречащие записи перестают обе выдаваться молча.
 
-- [ ] **32.1** Вердикт `contradicted` → ребро kind=`contradicts` между старой и новой записью;
+- [x] **32.1** Вердикт `contradicted` → ребро kind=`contradicts` между старой и новой записью;
   `outdated` → kind=`supersedes` (новая supersede старую); `confirmed` → только trust-bump
   (как 23.2). Резерв 23.5 начинает работать, API kind не меняется.
-- [ ] **32.2** Conflict-разметка в выдаче: если среди хитов есть пара, связанная
+  *(Промпт ревизии дополнен списком свежих записей; вердикт несёт `related_key` —
+  «новую» сторону; ребро ставится upsert'ом с оживлением (M7) от новой к старой —
+  повторный дрим не дублирует. Без related_key — только trust-дельта (инвариант 23.2
+  «без автоудалений» сохранён).)*
+- [x] **32.2** Conflict-разметка в выдаче: если среди хитов есть пара, связанная
   `contradicts`, — под блоком показываются **обе** записи с их trust:
   `[conflict] key_a (trust 0.8) ↔ key_b (trust 0.3): вердикт дрима <ts>` — агент видит
   спор целиком, а не только «победителя».
-- [ ] **32.3** Belief-derivation lite (бэклог §8 v1.3, mcp-memory-service): в дриме LLM может
+  *(`MemoryService::conflicts_among` + блок `[conflicts]` в memory_search; оба конца
+  должны быть в хитах, tombstone-рёбра и записи не показываются.)*
+- [x] **32.3** Belief-derivation lite (бэклог §8 v1.3, mcp-memory-service): в дриме LLM может
   предлагать kind=`causes` между записями; флаг `OB2H_DREAM_BELIEF=false` (дефолт off);
   предложения — только в дрим-отчёт до включения флага.
-- [ ] **32.4** Forget стороны ребра → soft-delete ребра (M7: `deleted_at`), не жёсткое
+  *(Ревизия памяти делает второй LLM-запрос: пары {from_key,to_key,why}; при off — в
+  `memory_revision` stats с пометкой «ребро не создано», при on — upsert kind=causes
+  с весом 0.8.)*
+- [x] **32.4** Forget стороны ребра → soft-delete ребра (M7: `deleted_at`), не жёсткое
   удаление — удаление реплицируется синком v2, как tombstones записей.
+  *(Миграция V7: `memory_links.deleted_at` + индекс; forget и рёбра поглощённой в merge
+  — tombstone вместо DELETE; все чтения рёбер (1-hop, PPR, conflicts, redirect) фильтруют
+  deleted_at IS NULL; upsert оживляет tombstone; purge_tombstones чистит старые tombstone
+  рёбра тем же окном 2×retention.)*
 - [ ] **32.5** `memory_links` входят в синк-бандл v2 (Ф34) — typed edges реплицируются.
-- [ ] **Тесты:** вердикты FakeLLM → ожидаемые рёбра; повторный дрим не дублирует рёбра;
+  *(Выполняется в Ф34 вместе с v2-бандлом: текущий v1-экспорт memory_links не возит —
+  это и есть одна из целей Ф34; M7-колонка готова.)*
+- [x] **Тесты:** вердикты FakeLLM → ожидаемые рёбра; повторный дрим не дублирует рёбра;
   forget стороны → ребро soft-deleted, sync v2 возит; conflict-разметка показывает обе
   стороны с trust; флаг off — рёбра `causes` не создаются.
+  *(tests/test_typed_edges.rs — 7 тестов: contradicted/outdated → рёбра + trust-дельта,
+  идемпотентность повторного дрима, belief off/on, forget → tombstone ребра + 1-hop
+  без него, conflict-разметка через MCP. «sync v2 возит» — в тестах Ф34; в Ф31-тестах
+  merge-ассерты переведены на семантику M7.)*
 
 ### Фаза 33 — PPR по памяти: multi-hop reasoning на `memory_links` (Оценка: 1.5–2 дня)
 

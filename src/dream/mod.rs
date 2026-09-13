@@ -87,6 +87,18 @@ struct Phase2Action {
 struct RevisionVerdict {
     key: String,
     verdict: String,
+    /// Ф32.1: ключ более новой записи (для outdated/contradicted) — сторона ребра.
+    #[serde(default)]
+    related_key: Option<String>,
+}
+
+/// Ф32.3: belief-derivation lite — предложение причинно-следственной связи.
+#[derive(Deserialize)]
+struct BeliefProposal {
+    from_key: String,
+    to_key: String,
+    #[serde(default)]
+    why: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -425,10 +437,26 @@ impl Dream {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        // Ф32.1: LLM выбирает «новую» сторону ребра из свежих записей
+        let recent = memory.recent_records(10).unwrap_or_default();
+        let recent_list = recent
+            .iter()
+            .filter(|r| !low.iter().any(|(lr, _)| lr.key == r.key))
+            .map(|r| {
+                let preview: String = r.content.chars().take(120).collect();
+                format!("- key={}: {preview}", r.key)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         let prompt = format!(
             "Записи памяти с минимальным доверием:\n{list}\n\n\
+             Свежие записи (возможная «новая» сторона):\n{recent_list}\n\n\
              Для каждой записи верни JSON-массив объектов \
-             {{\"key\": \"...\", \"verdict\": \"confirmed|outdated|contradicted\"}}."
+             {{\"key\": \"...\", \"verdict\": \"confirmed|outdated|contradicted\", \
+             \"related_key\": \"...\"}}. related_key — ключ более новой записи из списка \
+             «свежих», которая содержит более свежую информацию (для outdated) или \
+             противоречит записи (для contradicted); для confirmed не указывай. \
+             Если подходящей записи нет — верни вердикт без related_key."
         );
         let verdicts: Vec<RevisionVerdict> = self
             .llm
@@ -439,12 +467,77 @@ impl Dream {
         let mut applied = Vec::new();
         for v in verdicts {
             match memory.revise_trust_by_key(&v.key, &v.verdict) {
-                Ok(Some(trust)) => applied.push(
-                    serde_json::json!({ "key": v.key, "verdict": v.verdict, "trust": trust }),
-                ),
+                Ok(Some(trust)) => {
+                    let mut entry =
+                        serde_json::json!({ "key": v.key, "verdict": v.verdict, "trust": trust });
+                    // Ф32.1: вердикты становятся типизированными рёбрами (резерв 23.5).
+                    // confirmed — только trust-bump; направление — от новой к старой.
+                    if let Some(ref rel) = v.related_key {
+                        if *rel != v.key {
+                            let edge_kind = match v.verdict.as_str() {
+                                "contradicted" => Some("contradicts"),
+                                "outdated" => Some("supersedes"),
+                                _ => None,
+                            };
+                            if let Some(kind) = edge_kind {
+                                match (memory.get(rel), memory.get(&v.key)) {
+                                    (Ok(Some(newer)), Ok(Some(older))) => {
+                                        match memory.upsert_link(newer.id, older.id, kind, 1.0) {
+                                            Ok(()) => {
+                                                entry["edge"] = serde_json::json!(kind);
+                                                entry["related"] = serde_json::json!(rel);
+                                            }
+                                            Err(e) => warn!("Ребро {kind} {}: {e}", v.key),
+                                        }
+                                    }
+                                    _ => warn!("Ревизия {}: related_key {rel} не найден", v.key),
+                                }
+                            }
+                        }
+                    }
+                    applied.push(entry);
+                }
                 Ok(None) => {}
                 Err(e) => warn!("Ревизия {}: {e}", v.key),
             }
+        }
+
+        // Ф32.3: belief-derivation lite. Предложения всегда попадают в дрим-отчёт;
+        // рёбра kind=causes создаются только при OB2H_DREAM_BELIEF=1.
+        let belief_prompt = format!(
+            "Записи памяти:\n{list}\n{recent_list}\n\n\
+             Между какими парами записей есть причинно-следственная связь \
+             (одна запись — причина другой)? Верни JSON-массив \
+             {{\"from_key\": \"...\", \"to_key\": \"...\", \"why\": \"кратко\"}} — \
+             from_key влечёт to_key. Если связей нет, верни []."
+        );
+        let proposals: Vec<BeliefProposal> = self
+            .llm
+            .ask_json(&belief_prompt, Some(REVISION_SYSTEM))
+            .await
+            .unwrap_or_default();
+        for b in proposals {
+            let mut entry = serde_json::json!({
+                "belief": { "from": b.from_key, "to": b.to_key, "why": b.why }
+            });
+            if !self.settings.dream_belief {
+                entry["status"] =
+                    serde_json::json!("предложение (OB2H_DREAM_BELIEF=0 — ребро не создано)");
+            } else {
+                match (memory.get(&b.from_key), memory.get(&b.to_key)) {
+                    (Ok(Some(from)), Ok(Some(to))) if from.id != to.id => {
+                        match memory.upsert_link(from.id, to.id, "causes", 0.8) {
+                            Ok(()) => entry["status"] = serde_json::json!("created"),
+                            Err(e) => {
+                                entry["status"] = serde_json::json!("error");
+                                warn!("Belief {}→{}: {e}", b.from_key, b.to_key);
+                            }
+                        }
+                    }
+                    _ => entry["status"] = serde_json::json!("ключ не найден"),
+                }
+            }
+            applied.push(entry);
         }
         Ok(applied)
     }

@@ -338,10 +338,11 @@ impl MemoryService {
     /// Возвращает число перенесённых рёбер.
     fn redirect_links(&self, absorbed_id: i64, canonical_id: i64) -> anyhow::Result<usize> {
         self.db.with_conn(|conn| {
+            // M7: живые рёбра только — tombstoned не перепривязываются
             let links: Vec<(i64, i64, String, f64, String)> = {
                 let mut stmt = conn.prepare(
                     "SELECT from_id, to_id, kind, weight, created_at FROM memory_links \
-                     WHERE from_id = ?1 OR to_id = ?1",
+                     WHERE (from_id = ?1 OR to_id = ?1) AND deleted_at IS NULL",
                 )?;
                 let rows = stmt.query_map(params![absorbed_id], |r| {
                     Ok((
@@ -361,16 +362,21 @@ impl MemoryService {
                 if new_from == new_to {
                     continue;
                 }
+                // upsert с оживлением: цель могла быть soft-deleted раньше (M7)
                 conn.execute(
-                    "INSERT OR IGNORE INTO memory_links (from_id, to_id, kind, weight, created_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO memory_links (from_id, to_id, kind, weight, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5) \
+                     ON CONFLICT(from_id, to_id, kind) DO UPDATE SET \
+                     deleted_at = NULL, weight = excluded.weight",
                     params![new_from, new_to, kind, weight, created],
                 )?;
                 moved += 1;
             }
+            // M7: рёбра поглощённой записи — tombstone, не жёсткое удаление
             conn.execute(
-                "DELETE FROM memory_links WHERE from_id = ?1 OR to_id = ?1",
-                params![absorbed_id],
+                "UPDATE memory_links SET deleted_at = ?2 \
+                 WHERE (from_id = ?1 OR to_id = ?1) AND deleted_at IS NULL",
+                params![absorbed_id, utcnow()],
             )?;
             Ok(moved)
         })
@@ -456,12 +462,14 @@ impl MemoryService {
                 params![now, key],
             )?;
             if count > 0 {
-                // Ф23.5: каскад — tombstone записи рвут автосвязи (физически,
-                // связи не синхронизируются и восстановимы пересохранением).
+                // Ф23.5 + M7 (Ф32.4): tombstone записи рвут связи soft-delete'ом —
+                // рёбра реплицируются синком v2, как tombstones записей.
                 conn.execute(
-                    "DELETE FROM memory_links WHERE from_id IN (SELECT id FROM memories WHERE key = ?1) \
-                     OR to_id IN (SELECT id FROM memories WHERE key = ?1)",
-                    params![key],
+                    "UPDATE memory_links SET deleted_at = ?2 \
+                     WHERE (from_id IN (SELECT id FROM memories WHERE key = ?1) \
+                        OR to_id IN (SELECT id FROM memories WHERE key = ?1)) \
+                       AND deleted_at IS NULL",
+                    params![key, now],
                 )?;
                 return Ok(true);
             }
@@ -866,12 +874,12 @@ impl MemoryService {
                     "SELECT m.id, m.key, m.content, m.category, m.importance, m.source, m.meta, \
                             m.embedding, m.created_at, m.updated_at, m.access_count, m.last_accessed, m.project_id \
                      FROM memory_links l JOIN memories m ON m.id = l.to_id \
-                     WHERE l.from_id = ?1 AND m.deleted_at IS NULL \
+                     WHERE l.from_id = ?1 AND m.deleted_at IS NULL AND l.deleted_at IS NULL \
                      UNION ALL \
                      SELECT m.id, m.key, m.content, m.category, m.importance, m.source, m.meta, \
                             m.embedding, m.created_at, m.updated_at, m.access_count, m.last_accessed, m.project_id \
                      FROM memory_links l JOIN memories m ON m.id = l.from_id \
-                     WHERE l.to_id = ?1 AND m.deleted_at IS NULL \
+                     WHERE l.to_id = ?1 AND m.deleted_at IS NULL AND l.deleted_at IS NULL \
                      LIMIT ?2",
                 )?;
                 let rows = stmt.query_map(params![id, (limit * 2) as i64], |row| {
@@ -914,6 +922,94 @@ impl MemoryService {
         })?;
         self.mark_forget_candidates()?;
         Ok(count)
+    }
+
+    /// Ф32.1: typed edge с оживлением (M7) — идемпотентно: повторный дрим не дублирует.
+    /// Направление семантичное: `from` — более новая запись (supersedes/causes/contradicts
+    /// идут от новой к старой).
+    pub fn upsert_link(&self, from_id: i64, to_id: i64, kind: &str, weight: f64) -> anyhow::Result<()> {
+        let now = utcnow();
+        self.db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO memory_links (from_id, to_id, kind, weight, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(from_id, to_id, kind) DO UPDATE SET \
+                 deleted_at = NULL, weight = excluded.weight, created_at = excluded.created_at",
+                params![from_id, to_id, kind, weight, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Ф32.2: пары записей среди `ids`, связанные живым ребром kind=`contradicts`
+    /// (оба конца в выборке — спор показывается целиком). Возвращает
+    /// `(key_a, trust_a, key_b, trust_b, ts)` в порядке (from, to).
+    pub fn conflicts_among(&self, ids: &[i64]) -> anyhow::Result<Vec<(String, f64, String, f64, String)>> {
+        if ids.len() < 2 {
+            return Ok(Vec::new());
+        }
+        let ph: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let placeholders = ph.join(",");
+        let sql = format!(
+            "SELECT ka.key, ka.trust, kb.key, kb.trust, l.created_at \
+             FROM memory_links l \
+             JOIN memories ka ON ka.id = l.from_id AND ka.deleted_at IS NULL \
+             JOIN memories kb ON kb.id = l.to_id AND kb.deleted_at IS NULL \
+             WHERE l.kind = 'contradicts' AND l.deleted_at IS NULL \
+               AND l.from_id IN ({placeholders}) AND l.to_id IN ({placeholders})",
+            placeholders = placeholders
+        );
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(&sql)?;
+            let mut all: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(ids.len() * 2);
+            for id in ids {
+                all.push(Box::new(*id));
+            }
+            for id in ids {
+                all.push(Box::new(*id));
+            }
+            let rows = stmt.query_map(rusqlite::params_from_iter(all.iter()), |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, f64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, f64>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
+            })?;
+            Ok(rows.flatten().collect())
+        })
+    }
+
+    /// Свежие живые записи (для dual-side вердиктов Ф32.1: LLM выбирает
+    /// «новую» сторону из списка кандидатов).
+    pub fn recent_records(&self, limit: usize) -> anyhow::Result<Vec<MemoryRecord>> {
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, key, content, category, importance, source, meta, \
+                        embedding, created_at, updated_at, access_count, last_accessed, project_id \
+                 FROM memories WHERE deleted_at IS NULL \
+                 ORDER BY updated_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![limit as i64], |row| {
+                Ok(MemoryRecord {
+                    id: row.get(0)?,
+                    key: row.get(1)?,
+                    content: row.get(2)?,
+                    category: row.get(3)?,
+                    importance: row.get(4)?,
+                    source: row.get(5)?,
+                    meta: row.get(6)?,
+                    embedding: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                    access_count: row.get(10)?,
+                    last_accessed: row.get(11)?,
+                    project_id: row.get(12)?,
+                })
+            })?;
+            Ok(rows.flatten().collect())
+        })
     }
 
 }
@@ -978,7 +1074,7 @@ impl MemoryService {
         let edges: Vec<(i64, i64, String, f64)> = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT l.from_id, l.to_id, l.kind, l.weight FROM memory_links l \
-                 WHERE l.from_id IN (SELECT id FROM memories WHERE deleted_at IS NULL \
+                 WHERE l.deleted_at IS NULL AND l.from_id IN (SELECT id FROM memories WHERE deleted_at IS NULL \
                                      ORDER BY importance DESC, updated_at DESC LIMIT ?1)",
             )?;
             let rows = stmt.query_map(params![limit], |r| {
@@ -1190,6 +1286,13 @@ impl MemoryService {
             let count = conn.execute(
                 // strftime в формате utcnow() (RFC3339, +00:00) для честного сравнения строк
                 "DELETE FROM memories WHERE deleted_at IS NOT NULL AND deleted_at <
+                 strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?1)",
+                params![format!("-{older_than_days} days")],
+            )?;
+            // M7 (Ф32.4): tombstone рёбра вычищаются тем же окном — записи каскадом
+            // удалят связанные рёбра (ON DELETE CASCADE), остальные tombstones — здесь.
+            conn.execute(
+                "DELETE FROM memory_links WHERE deleted_at IS NOT NULL AND deleted_at <
                  strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', ?1)",
                 params![format!("-{older_than_days} days")],
             )?;

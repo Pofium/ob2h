@@ -37,6 +37,9 @@ pub struct Settings {
     pub dream_batch: usize,
     pub dream_extract_enabled: bool,
     pub dream_memory_revision: bool,
+    /// Ф32.3: belief-derivation lite — LLM может ставить рёбра kind=causes между
+    /// записями; off (дефолт) — предложения только в дрим-отчёт.
+    pub dream_belief: bool,
     pub dream_ralph_revision: bool,
 
     // --- Ф30: ночной bench-гейт дрима ---
@@ -153,6 +156,10 @@ impl Settings {
         let dream_memory_revision = env::var("OB2H_DREAM_MEMORY_REVISION")
             .map(|v| v != "0" && v.to_lowercase() != "false")
             .unwrap_or(true);
+        // Ф32.3: belief-derivation lite (рёбра kind=causes); off — только предложения в отчёте.
+        let dream_belief = env::var("OB2H_DREAM_BELIEF")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false);
         // Ф28.1 (FR-K7): dream-ревизия stale-findings Ralph по свежему контексту.
         let dream_ralph_revision = env::var("OB2H_DREAM_RALPH")
             .map(|v| v != "0" && v.to_lowercase() != "false")
@@ -241,6 +248,7 @@ impl Settings {
             dream_batch,
             dream_extract_enabled,
             dream_memory_revision,
+            dream_belief,
             dream_ralph_revision,
             bench_gate_enabled,
             bench_gate_timeout_ms,
