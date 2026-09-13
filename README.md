@@ -8,7 +8,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.2.0-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
+[![Release](https://img.shields.io/badge/Release-v1.4.0-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](https://github.com/Pofium/ob2h)
 [![CloudTips](https://img.shields.io/badge/%F0%9F%92%B0%20%D0%A7%D0%B0%D0%B5%D0%B2%D1%8B%20%D0%B0%D0%B2%D1%82%D0%BE%D1%80%D1%83-CloudTips%20(РФ)-ff69b4.svg)](https://pay.cloudtips.ru/p/4e7f8019)
 
@@ -40,6 +40,10 @@
 8. 🌙 **«Видеть сны» (Дриминг)**: пока вы отдыхаете, агент ночью в фоне анализирует историю дня, удаляет устаревшие данные, обновляет файлы памяти (`SOUL.md`, `USER.md`, `MEMORY.md`) и сохраняет версии в Git.
 9. 🔄 **Помнить одно и то же на нескольких машинах**: домашний ПК и агент на VPS синхронизируют память и граф знаний между собой через защищенный SSH.
 10. 🤖 **Подключаться к любому AI-агенту в 1 клик**: `ob2h agent install --all` и диагностика `ob2h doctor --fix`.
+11. 🎓 **Обучаемая память**: каждая запись имеет машинный `trust` — использование, feedback агента и ночная ревизия дримом поднимают или гасят его; устаревшее уходит из выдачи управляемо, без автоудалений.
+12. 🕸️ **Multi-hop поиск (PPR)**: Personalized PageRank по памяти и графу знаний находит связанные факты, до которых линейный поиск не доходит.
+13. 🔁 **Ralph Knowledge Layer**: знание о циклах разработки (вердикты по тестам, AST-дельты, reuse-кандидаты, debt-леджер) — для автономных agentic-циклов.
+14. 🌙 **Ночной bench-гейт**: дрим, ухудшивший качество поиска (recall/MRR), автоматически откатывается той же ночью.
 
 **Кому подходит:** у кого Hermes живёт на двух машинах (ПК + VPS/сервер, работа + дом)
 и кому нужна **приватная** память — все данные остаются на ваших машинах, наружу уходит
@@ -81,7 +85,7 @@ cd ob2h
 - Зарегистрирует сервер `ob2h` в `config.yaml`.
 
 ### Шаг 3. Перезапустите Hermes (или любого поддерживаемого агента)
-Откройте вашего агента — все **25 инструментов** MCP для памяти, графа знаний, кода и дриминга активируются автоматически!
+Откройте вашего агента — все **35 инструментов** MCP (память, граф знаний, код, дриминг, Ralph-циклы) активируются автоматически!
 
 ### Шаг 3.5 (рекомендуется). Включите «постоянную память» — плагин
 
@@ -130,8 +134,11 @@ ob2h doctor --fix
 
 У вас Hermes дома на Windows и Telegram-агент на Linux-VPS? С v0.9 их **память и граф
 знаний — общие**: рассказали дома о новом проекте — серверный агент уже в курсе.
-Обмен — инкрементальные бандлы поверх SSH: LWW-конфликты, репликация удалений,
-идемпотентность, авто-бэкап перед каждым импортом. Живая БД никогда не передаётся.
+Обмен — инкрементальные дельта-бандлы v2 поверх SSH: только изменённое (курсор по `updated_at`),
+поле-уровневый merge без молчаливого LWW (журнал `conflicts.jsonl`, проигравшие версии —
+в `meta.conflict_versions` за флагом), в бандле — память, trust, `memory_links` и удаления.
+Идемпотентность, авто-бэкап перед импортом, `ob2h sync verify` — сверка дрейфа без переноса.
+Живая БД никогда не передаётся.
 
 **Кому это надо:**
 - ПК + VPS: общий мозг у десктопного и Telegram/gateway-агента;
@@ -204,6 +211,23 @@ ob2h agent status
 ob2h project list
 ob2h project scan --id <project_id>
 ob2h project report --id <project_id>
+ob2h project dead-code --id <project_id>   # мёртвые символы (без entrypoints)
+ob2h project repo-map --id <project_id>    # карта репо под token budget
+
+# Регрессионный контур поиска: golden set, recall@k/MRR, история прогонов
+ob2h bench                                 # прогон на живой БД (data/bench/golden.jsonl)
+ob2h bench --mode history                  # тренд ночных прогонов + вердикты
+
+# Лёгкая база и бэкапы
+ob2h db quantize-embeddings --dry-run      # int8-квантование эмбеддингов (оценка)
+ob2h backup --scope quick                  # быстрый бэкап памяти+воркспейса
+ob2h backup verify data/backups/<копия>    # проверка целостности копии
+
+# Гигиена памяти
+ob2h memory dedup --dry-run                # кандидаты на слияние (без LLM)
+
+# Ralph-циклы разработки
+ob2h ralph findings-to-memory --project <id>
 ```
 
 ---
@@ -220,6 +244,13 @@ ob2h project report --id <project_id>
 | `OB2H_LLM_MODEL` | `deepseek-v4-flash` | Модель для экстракции и дриминга |
 | `OB2H_EMBED_PROVIDER` | `local` | `local` (встроенный Candle) или `api` (внешний эндпоинт) |
 | `OB2H_AUTODREAM_ENABLED` | `true` | Фоновый авто-дриминг при работе Hermes |
+| `OB2H_PREFETCH_MAX_CHARS` | `8000` | Бюджет блока памяти в промпте (рез по границам записей) |
+| `OB2H_HALF_LIFE_DAYS` | `90` | Полураспад свежести в скоринге prefetch |
+| `OB2H_BENCH_GATE` | `0` | Ночной гейт качества дрима (`1` — откат дрима при деградации recall/MRR) |
+| `OB2H_PPR_DAMPING` | `0.85` | Damping Personalized PageRank (поиск по памяти/графу) |
+| `OB2H_BACKUP_KEEP_FULL` / `OB2H_BACKUP_KEEP_QUICK` | `3` / `14` | Ротация бэкапов |
+| `OB2H_DREAM_MEMORY_REVISION` | `true` | Ночная ревизия слабых записей дримом (trust ±) |
+| `OB2H_VEC0` | `0` | Эксперимент sqlite-vec rescore (ADR-35.1, дефолт off) |
 
 ---
 

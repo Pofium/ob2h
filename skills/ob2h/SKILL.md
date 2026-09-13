@@ -33,23 +33,30 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   данные/БД `{{DATA_DIR}}` (ob2h.db, workspace/: SOUL.md/USER.md/memory/MEMORY.md +
   daily/*.jsonl — файлы создаются лениво, `workspace_read` отсутствующего = `""`),
   Hermes home `{{HERMES_HOME}}` (config.yaml, plugins/ob2h, ob2h.json).
-- Инструменты (24 шт): memory_save/search/update/forget/context, workspace_read/write,
-  session_log, session_ingest (bulk-транскрипта), knowledge_extract,
-  graph_search/reason/stats, dream_run/status/log/restore, omnes_stats/backup,
-  project_init, project_scan, project_context, project_graph_search, project_report.
+- Инструменты (35 шт): memory_save/search/update/forget/context, memory_feedback (trust ±),
+  memory_merge (слияние дублей), workspace_read/write, session_log, session_ingest,
+  knowledge_extract, graph_search (mode=classic|ppr)/reason (scope=docs|memory|all)/stats,
+  dream_run/status/log/restore, omnes_stats/backup, project_init/scan/context/
+  graph_search/report/impact, project_call_path (callers/callees/call-path),
+  ralph_start/iteration/verdict/context/report, ast_diff, ast_history.
 - Детерминированный AST-граф кода: `project_scan` извлекает классы, функции, трейты и связи
   со 100% точностью (Graphify-подход) без вызовов LLM; `project_report` и `project_context`
   выделяют центральные хабы архитектуры (God Nodes).
 - AutoDreamWorker: гейты ≥4ч и ≥10 событий, lock, git-история правок, бэкапы
-  VACUUM INTO с ротацией 14. CLI: `ob2h stats | dream run/status/log/restore <sha> |
-  backup | install/uninstall | plugin install/uninstall/status | skill install |
-  agent install/status | project init/scan/list/report |
-  sync status/export/import/apply-inbox/push/pull`.
+  (full/quick, verify, раздельная ротация), ночной bench-гейт (откат дрима при
+  деградации recall/MRR). CLI: `ob2h stats | doctor [--fix] | dream run/status/log/restore |
+  bench [--mode history] | backup [--scope quick] [verify <path>] |
+  db quantize-embeddings | memory dedup [--dry-run] | install/uninstall |
+  plugin install/uninstall/status | skill install | agent install/status |
+  project init/scan/list/report/dead-code/repo-map |
+  ralph findings-to-memory | sync status/verify/export/import/apply-inbox/push/pull`.
 
 ## Синхронизация двух машин (PC ↔ VPS)
-- Обмен — gzip-бандлы JSONL поверх SSH (`{{DATA_DIR}}/sync/peers.json`: origin=pc|vps,
-  приоритеты, пути; инициатива на PC — push/pull, VPS только apply-inbox+export по таймеру).
-  LWW по updated_at, tie-break по приоритету origin, удаления — tombstones. Идемпотентно.
+- Обмен — gzip-дельта-бандлы v2 JSONL поверх SSH (`{{DATA_DIR}}/sync/peers.json`:
+  origin=pc|vps, приоритеты, пути; инициатива на PC — push/pull, VPS — apply-inbox+export).
+  Только изменённое (курсор по updated_at); в бандле память+trust+memory_links+удаления;
+  поле-уровневый merge с журналом `sync/conflicts.jsonl` (не молчаливый LWW);
+  `ralph_*` вне бандлов (ADR-K6). Идемпотентно; сверка дрейфа — `ob2h sync verify`.
 - Живую БД `{{DATA_DIR}}/ob2h.db` НИКОГДА не синкать файловой синхронизацией (WAL = порча),
   только папку бандлов. Диагностика обмена: `ob2h sync status`.
 
@@ -88,4 +95,4 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
 ## Ссылки
 - `references/testing.md` — транскрипт из state.db + JSON-RPC драйв сервера (изолированный OB2H_DATA_DIR)
 - `references/autodream-and-history.md` — устройство дрима/истории
-- План v0.8+: `{{PROJECT_DIR}}/docs/PLAN_v0.8.md`
+- Планы: `{{PROJECT_DIR}}/PLAN_v1.3.md`, `{{PROJECT_DIR}}/PLAN_v1.4.md`; скилл Ralph-циклов — `ralph-loop`

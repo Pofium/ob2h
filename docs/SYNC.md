@@ -17,8 +17,10 @@
 | **Агент-ассистент на сервере + офлайн-работа с ноутбука** | VPS копит знания круглосуточно; ноутбук подтягивает их и отдаёт свои |
 | **Бэкап-стратегия** | Каждая машина — живая реплика памяти другой (в дополнение к `ob2h backup`) |
 
-**Что именно синхронизируется:** факты памяти (`memories`), узлы и рёбра графа знаний
-(`graph_nodes`/`graph_edges`), удаления (tombstones).
+**Что именно синхронизируется:** факты памяти (`memories` — вместе с `trust`,
+`last_feedback_at` и feedback-журналом в `meta`), связи памяти (`memory_links`,
+включая soft-delete рёбер M7), узлы и рёбра графа знаний (`graph_nodes`/`graph_edges`),
+удаления (tombstones). `ralph_*`/`ast_changes` не возятся (ADR-K6, см. ниже).
 
 **Что НЕ синхронизируется (сознательно):**
 - сырые транскрипты диалогов (`daily/*.jsonl`) и консолидированная история
@@ -190,12 +192,13 @@ ob2h sync status                   # состояние обеих сторон
 
 | Команда | Что делает |
 |---|---|
-| `status` | origin, приоритеты, watermark'ы, счётчики бандлов |
-| `export --peer <имя>` | выгрузить изменения в `data/sync/outbox/` (watermark на пира) |
+| `status` | origin, приоритеты, watermark'ы, счётчики бандлов + накопленный счётчик проигранных LWW-конфликтов |
+| `export --peer <имя>` | выгрузить изменения в `data/sync/outbox/` (дельта по курсору; `push --full` — полный бандл v2) |
 | `import <файл...>` | применить конкретные бандлы |
 | `apply-inbox` | применить всё из `data/sync/inbox/` |
 | `push --peer <имя>` | export + scp на пир (method=ssh) |
 | `pull --peer <имя>` | scp от пира + apply-inbox (method=ssh) |
+| `verify [--peer <имя>]` | сверка дрейфа БЕЗ переноса: counts, trust_avg, контрольные суммы |
 
 ## 6. Безопасность и приватность
 
@@ -251,3 +254,24 @@ CREATE TABLE sync_state (
 как workspace/daily. Знания переносятся явно: `ob2h ralph findings-to-memory
 --project <id>` конвертирует verified-findings в `memories` (category=ralph),
 а дальше они едут обычными бандлами.
+
+## Бандлы v2: дельты и поле-уровневый merge (v1.4)
+
+С v1.4 экспорт по умолчанию — **дельта** по курсору пира (только строки с
+`updated_at` после последней отправки; полный бандл — `ob2h sync push --full`).
+Заголовок манифеста несёт `format: 2`; читатель v1.4 понимает и старые v1-бандлы,
+а старый бинарник на v2 получает внятную ошибку.
+
+Отличия от v1:
+- в бандле — `trust`, `last_feedback_at`, `memory_links` (с M7 `deleted_at`) и
+  feedback-журнал из `meta`;
+- apply — **поле-уровневый merge, не молчаливый LWW**: `meta` — глубокое объединение
+  (входящие ключи выигрывают), `access_count` — max; конфликт `content` всегда
+  журналируется в `data/sync/conflicts.jsonl` (обе стороны), а при
+  `OB2H_SYNC_KEEP_LOSERS=1` проигравшая версия ещё и сохраняется в
+  `meta.conflict_versions`;
+- `ralph_*`/`ast_changes` по-прежнему вне бандлов (ADR-K6).
+
+Сверка машин без переноса данных: `ob2h sync verify [--peer vps]` — counts
+(memories/links), средний trust, контрольные суммы по `key`+`updated_at` и
+рёбрам, отчёт о дрейфе.
