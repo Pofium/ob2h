@@ -2,7 +2,7 @@
 
 > **Версия плана:** 1.3.0
 > **Статус:** Черновик — на утверждение
-> **Обновлён:** 2026-09-13 — добавлены трек B «Ralph Knowledge Layer» (Фазы 26–28), опциональная Фаза 29 (PPR), исследование технологий с источниками (§8), счётчик LWW-конфликтов (25.4)
+> **Обновлён:** 2026-09-13 — добавлены трек B «Ralph Knowledge Layer» (Фазы 26–28), опциональная Фаза 29 (PPR), исследование технологий с источниками (§8), счётчик LWW-конфликтов (25.4); **rev.2** — ревью владельца: OMEGA/mcp-memory-service/GAAMA в §8, расширяемые kind в memory_links (23.5), dual-seed/edge-type PPR (29), sqlite-vec-rescore как явный кандидат v1.4
 > **Предыдущие этапы:** v0.8/0.9 (Ядро, Память, Дриминг, Синк), v1.0/1.1 (AST-граф 8 языков, God Nodes, мультиагентность), v1.2 (Zero-Config проекты, инкрементальный AST, AutoSync, семантика кода)
 > **Источники:** Ralph-спека `Ralph Knowledge Layer (ob2h)_v1.2.3.md` (нормативная для Фаз 26–28), аудит живой системы 2026-09-13 (§1), предложения владельца, интернет-исследование 2026-09-13 (§8)
 > **Оценка:** трек A (Фазы 21–25) ≈ 7 дней; трек B (Фазы 26–28) ≈ 5.5–8 дней; Фаза 29 ≈ 1–2 дня
@@ -157,7 +157,9 @@ Ralph-миграция из спеки (названа там «M4», что у�
 - [ ] **23.5** Автосвязи `memory_links`: при `memory_save` — связи `same_project`/`category` +
   пересечение сущностей (существующий OneKE-lite-экстрактор); `memory_search` mode=hybrid
   опционально (`related=true`) добавляет 1-hop соседей отдельным блоком `[related]`,
-  не смешивая с основными хитами.
+  не смешивая с основными хитами. Набор `kind` расширяемый без ломки API: в v1.3 —
+  `same_project|entity|category|manual`; зарезервировать `contradicts|causes|supersedes`
+  для dream-ревизии (23.2; belief-derivation — бэклог, см. mcp-memory-service в §8).
 - [ ] **23.6** Дедуп со builtin-памятью Hermes: в промпт дрима — правило «если правило уже есть
   в ob2h, не предлагать его в builtin MEMORY.md» (сейчас часть правил живёт в обоих сторах
   и попадает в контекст дважды).
@@ -256,10 +258,12 @@ Ralph-миграция из спеки (названа там «M4», что у�
 
 Идея HippoRAG/2 (§8): single-step multi-hop без графовых СУБД, pure Rust поверх `graph_edges`.
 
-- [ ] **29.1** `src/graph/pagerank.rs`: итеративный PPR (d=0.85, ≤20 итераций, L1-норма),
-  персонализация по seed-узлам подграфа проекта; без новых зависимостей.
-- [ ] **29.2** `graph_search` mode=ppr: seed = топ FTS/векторных матчей → PPR-ранжирование узлов
-  (вместо 1-hop-расширения).
+- [ ] **29.1** `src/graph/pagerank.rs`: итеративный PPR (damping d∈0.5–0.85 — подбирать на bench,
+  старт 0.85; ≤20 итераций, L1-норма), персонализация по seed-узлам подграфа проекта;
+  без новых зависимостей.
+- [ ] **29.2** `graph_search` mode=ppr: **dual-seed** — топ FTS/векторных матчей + phrase/entity-узлы
+  (из OneKE-lite) → PPR-ранжирование узлов (вместо 1-hop-расширения); веса рёбер по типу
+  (edge-type-aware, идеи HippoRAG 2 / GAAMA — §8).
 - [ ] **29.3** `graph_reason`: факт-блок пополняется PPR-подграфом (пути между used_entities).
 - [ ] **29.4** Тесты: синтетический multi-hop A→B→C (запрос по A достигает C, 1-hop не достигает);
   сходимость PPR; bench на живой БД.
@@ -344,16 +348,24 @@ Ralph-миграция из спеки (названа там «M4», что у�
 | **Zep / Graphiti** — temporal knowledge graph, bi-temporal рёбра, edge invalidation; лидер LongMemEval (63.8% vs Mem0 49.0%) | [arXiv 2501.13956](https://arxiv.org/html/2501.13956v1), [github.com/getzep/graphiti](https://github.com/getzep/graphiti), [сравнение фреймворков 2026](https://particula.tech/blog/agent-memory-frameworks-tested-mem0-zep-letta-cognee-2026) | Порт **нет** (требует Neo4j/FalkorDB — нарушение ADR-6). Идеи **взяты**: «знание протухает и инвалидируется» → trust-ревизия дрима (23.2) + staleness-pass Ralph (27.2) |
 | **Mem0** — пайплайн фактов: LLM решает ADD / UPDATE / DELETE / NOOP при сохранении | [arXiv 2504.19413](https://arxiv.org/html/2504.19413v1), [github.com/mem0ai/mem0](https://github.com/mem0ai/mem0), [docs.mem0.ai](https://docs.mem0.ai/core-concepts/how-it-works) | **Кандидат в бэклог**: LLM-merge при `memory_save` (косинус-близкие записи → один вызов `llm_client` → UPDATE вместо дубля). Сейчас рост памяти ограничивает только trust-петля |
 | **A-MEM** — Zettelkasten-заметки: link generation + memory evolution при добавлении | [arXiv 2502.12110](https://arxiv.org/abs/2502.12110), [github.com/agiresearch/A-mem](https://github.com/agiresearch/A-mem), NeurIPS 2025 | Подтверждает **23.5** (автосвязи `memory_links`) и **23.2** (эволюция памяти дримом) — тот же паттерн поверх наших таблиц |
-| **HippoRAG / HippoRAG 2** — Personalized PageRank по KG, single-step multi-hop | [github.com/osu-nlp-group/hipporag](https://github.com/osu-nlp-group/hipporag), [arXiv 2405.14831](https://arxiv.org/html/2405.14831v1) | **Фаза 29** (опционально): PPR pure-Rust без зависимостей для `graph_search`/`graph_reason` |
+| **HippoRAG / HippoRAG 2** — PPR по KG, single-step multi-hop; v2: dual-node (passage+phrase), LLM-фильтр триплетов, +7 F1 на ассоциативных задачах (ICML'25) | [github.com/osu-nlp-group/hipporag](https://github.com/osu-nlp-group/hipporag), [arXiv 2405.14831](https://arxiv.org/html/2405.14831v1) | **Фаза 29** (опционально): PPR pure-Rust; из v2 — dual-seed, из GAAMA — edge-type-aware веса (строки ниже) |
+| **GAAMA** — hierarchical KG (4 типа узлов / 5 типов рёбер), concept-mediated, edge-type-aware PPR; LoCoMo-10 78.9% | [arXiv 2603.27910](https://arxiv.org/html/2603.27910v1), [github.com/swarna-kpaul/gaama](https://github.com/swarna-kpaul/gaama) | Идеи для Фазы 29: edge-type-aware PPR и concept-узлы как «сквозные» пути — кандидат в `memory_links`/PPR-seed |
+| **OMEGA (omega-memory)** — local-first MCP-память: SQLite + sqlite-vec + ONNX, decay/compaction, contradiction detection, graph edges (архитектурный twin OB2H) | [github.com/omega-memory/omega-memory](https://github.com/omega-memory/omega-memory), [сравнение с Mem0/Zep](https://omegamax.co/blog/omega-vs-mem0-vs-zep) | **Бэклог/исследование**: compaction (Jaccard-кластеризация → summary-nodes) и contradiction-check при save — кандидаты в Фазу 23. Цифры LongMemEval (~95.4%) — self-reported, не воспроизводимы |
+| **mcp-memory-service** — SQLite-vec + local ONNX, typed KG (`causes`/`fixes`/`contradicts`), scheduled consolidation (decay + кластеризация + belief derivation) | [github.com/doobidoo/mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) | Подтверждает 23.2/23.5; typed edges — кандидат в расширение `memory_links.kind` (23.5), belief-derivation — в бэклог |
+| **GraphQLite / sqlite-graphrag** — Cypher + алгоритмы (PageRank/Louvain) в SQLite; Rust-бинарник FTS5+cosine+multi-hop | по данным ревью владельца (проверка ссылок перед реализацией) | Идеи multi-hop expansion и symbol-history для Фазы 29; Cypher и расширения не берём — только pure-Rust алгоритмы |
 | **LongMemEval** — бенчмарк 5 способностей памяти: извлечение, многосессионный синтез, knowledge update, temporal reasoning, abstention | [arXiv 2410.10813](https://arxiv.org/abs/2410.10813), [github.com/xiaowu0162/longmemeval](https://github.com/xiaowu0162/longmemeval) | **Фаза 21**: методология категорий golden set (особенно knowledge update и abstention — «правильно промолчать», если факта нет); сам бенчмарк не запускаем — персональный масштаб |
 | **LoCoMo-контроверза** — Zep опубликовал rebuttal Mem0; Letta Filesystem набрала 74% на LoCoMo, просто храня транскрипты файлами | [разбор систем памяти 2026](https://blog.devgenius.io/ai-agent-memory-systems-in-2026-mem0-zep-hindsight-memvid-and-everything-in-between-compared-96e35b818da8), [getzep.com/platform/graphiti](https://www.getzep.com/platform/graphiti/) | Публичные цифры противоречивы → свой bench (Фаза 21) важнее чужих бенчмарков; файловый workspace + dream валидированы как конкурентоспособный подход |
-| **sqlite-vec** — int8/binary quantization в vec0-таблицах, pre-v1 | [github.com/asg017/sqlite-vec](https://github.com/asg017/sqlite-vec), [гайд binary quantization](https://alexgarcia.xyz/sqlite-vec/guides/binary-quant.html) | Остаётся в **бэклоге** (ADR-2). Собственное int8 (Фаза 24) проще: без новой зависимости; критерий возврата — латентность из bench (21) |
+| **sqlite-vec** — int8/binary quantization, vec_quantize_binary, **rescore ANN** (oversample + full-precision re-rank, DiskANN); pre-v1 | [github.com/asg017/sqlite-vec](https://github.com/asg017/sqlite-vec), [гайд binary quantization](https://alexgarcia.xyz/sqlite-vec/guides/binary-quant.html) | Бэклог с **повышенным приоритетом**: после фаз 21 (latency-baseline) и 24 (свой int8) — явный эксперимент «vec0 + rescore vs собственный brute-force». Кандидат в v1.4, если p95 `memory_search` > 80–100 мс на ~600K векторов |
 | **fastembed rerankers** — `TextCrossEncoder`, bge-reranker-base (ONNX, CPU) | [docs Qdrant rerankers](https://qdrant.tech/documentation/fastembed/fastembed-rerankers/), [BAAI/bge-reranker-base](https://huggingface.co/BAAI/bge-reranker-base), [crates.io/fastembed](https://crates.io/crates/fastembed) | **25.3** как записано (за флагом, после bench). Альтернатива без ort-зависимости: LLM-реранк топ-20 через `llm_client` — бэклог |
 | **EmbeddingGemma-300m** — мультиязычный on-device эмбеддер (ONNX q8/q4) | [onnx-community/embeddinggemma-300m-ONNX](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX), [fastembed-rust enum](https://docs.rs/fastembed/latest/fastembed/enum.EmbeddingModel.html) | **Бэклог**: смена эмбеддера = ort/fastembed-rust + пере-embed всей БД; reconsider при следующем апгрейде модели |
 | **MCP spec 2026-07-28** — stateless core, Extensions framework; elicitation/sampling (с 2025-06-18) | [spec](https://modelcontextprotocol.io/specification/2026-07-28), [changelog](https://modelcontextprotocol.io/specification/draft/changelog), [блог MCP](https://blog.modelcontextprotocol.io/posts/2026-07-28/) | Локальный stdio-сервер не затронут (stateless-переход касается удалённых серверов). **Бэклог**: tool annotations (`readOnlyHint` и др. — дёшево, помогает harness'ам), elicitation для вопросов дрима |
 | **Litestream** — непрерывная WAL-репликация SQLite в S3/файл | [litestream.io](https://litestream.io) | **Бэклог** для VPS-бэкапов (ADR-9 остаётся основным); вариант, если захочется автоматизации поверх `backup verify` (24.4) |
 | **HyDE / query-expansion** — LLM-перефраз запроса перед embed | общая практика RAG | **Отклонено** для горячего пути prefetch (латентность+токены на каждый ход); допустимо внутри `graph_reason` |
 
-**Пополняем бэклог:** LLM-merge при save (Mem0-style), bge-reranker/LLM-реранк,
-EmbeddingGemma-300m, sqlite-vec (по латентности), MCP-аннотации/elicitation, Litestream,
+**Пополняем бэклог:** contradiction-check / LLM-merge при `memory_save` (Mem0 + OMEGA-style),
+typed edges + belief-derivation в dream-ревизии, compaction (кластеризация → summary-nodes)
+как альтернатива/дополнение candidate_for_forget, эксперимент sqlite-vec rescore после
+latency-baseline (критерий v1.4: p95 > 80–100 мс), лёгкий hierarchical tiering
+(working/episodic/semantic, TiMem-style) после trust, bge-reranker/LLM-реранк,
+EmbeddingGemma-300m, sqlite-vec (см. строку выше), MCP-аннотации/elicitation, Litestream,
 Layer3-профиль пользователя, GBAM-зеркало сессий (из PLAN.md).
