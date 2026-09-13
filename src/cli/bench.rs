@@ -341,6 +341,67 @@ fn write_baseline(result: &BenchResult, out: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Ф30.4: `ob2h bench history [--last N]` — тренд ночных прогонов гейта.
+pub fn cli_history(settings: &crate::config::Settings, last: usize) -> anyhow::Result<()> {
+    let rows = crate::dream::bench_gate::read_history(settings, last)?;
+    if rows.is_empty() {
+        println!(
+            "История пуста: {} (гейт пишет строку на каждый прогон после дрима)",
+            settings.data_dir.join("bench").join("history.jsonl").display()
+        );
+        return Ok(());
+    }
+    println!(
+        "ob2h bench history — последние {} из {} (data/bench/history.jsonl)",
+        rows.len(),
+        last
+    );
+    println!();
+    println!(
+        "{:<20} {:<10} {:>9} {:>8} {:>9} {:>7} {:>9} {:<6} {}",
+        "ts", "gate", "recall@5", "Δr@5", "recall@10", "MRR", "p95, мс", "БД,МБ", "dream_sha"
+    );
+    let mut prev_recall: Option<f64> = None;
+    for row in &rows {
+        let ts = row.get("ts").and_then(|v| v.as_str()).unwrap_or("-");
+        let gate = row.get("gate").and_then(|v| v.as_str()).unwrap_or("-");
+        let r5 = row.get("recall@5").and_then(|v| v.as_f64());
+        let r10 = row.get("recall@10").and_then(|v| v.as_f64());
+        let mrr = row.get("mrr").and_then(|v| v.as_f64());
+        let p95 = row.get("p95_ms").and_then(|v| v.as_f64());
+        let dbmb = row.get("db_size_mb").and_then(|v| v.as_f64());
+        let sha = row.get("dream_sha").and_then(|v| v.as_str()).unwrap_or("-");
+        let delta = match (prev_recall, r5) {
+            (Some(p), Some(c)) => format!("{:+.3}", c - p),
+            _ => "-".to_string(),
+        };
+        let fmt = |v: Option<f64>, digits: usize| match v {
+            Some(x) => format!("{x:.digits$}"),
+            None => "-".to_string(),
+        };
+        println!(
+            "{:<20} {:<10} {:>8} {:>8} {:>9} {:>7} {:>9} {:<6} {}",
+            ts,
+            gate,
+            fmt(r5, 3),
+            delta,
+            fmt(r10, 3),
+            fmt(mrr, 3),
+            fmt(p95, 1),
+            fmt(dbmb, 1),
+            sha
+        );
+        if r5.is_some() {
+            prev_recall = r5;
+        }
+    }
+    println!();
+    println!(
+        "Пороги гейта: recall@5 >10% или MRR >15% относительно bench:last → rollback дрима"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

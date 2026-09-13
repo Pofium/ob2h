@@ -131,4 +131,37 @@ impl GitStore {
             None => format!("restore_failed: {commit_ref}"),
         }
     }
+
+    /// Текущий HEAD (короткий sha) — Ф30: фиксация состояния workspace до дрима.
+    pub fn head(&self) -> Option<String> {
+        if !self.ensure_repo() {
+            return None;
+        }
+        self.run_git(&["rev-parse", "--short", "HEAD"])
+    }
+
+    /// Ф30: workspace-инвариант — файл потерял больше max_drop доли непустых строк
+    /// относительно коммита commit_ref. Возвращает имя испорченного файла или None.
+    /// Ловит «дрим съел память» — то, что bench по БД увидеть не может.
+    pub fn file_shrunk_beyond(&self, commit_ref: &str, max_drop: f64) -> Option<String> {
+        if !self.ensure_repo() {
+            return None;
+        }
+        for file in TRACKED_FILES {
+            let before = match self.run_git(&["show", &format!("{commit_ref}:{file}")]) {
+                Some(b) => b,
+                None => continue, // файла нет в коммите или git недоступен — не наш случай
+            };
+            let before_count = before.lines().filter(|l| !l.trim().is_empty()).count();
+            if before_count == 0 {
+                continue;
+            }
+            let after = std::fs::read_to_string(self.root.join(file)).unwrap_or_default();
+            let after_count = after.lines().filter(|l| !l.trim().is_empty()).count();
+            if (after_count as f64) < before_count as f64 * (1.0 - max_drop) {
+                return Some(file.to_string());
+            }
+        }
+        None
+    }
 }

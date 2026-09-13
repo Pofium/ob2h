@@ -105,6 +105,8 @@ pub fn start_background_workers(ctx: Arc<AppContext>) {
             ctx.memory.clone(),
             ctx.settings.clone(),
             Some(ctx.sync.clone()),
+            ctx.gitstore.clone(),
+            ctx.db.clone(),
         ));
         worker.start();
     }

@@ -73,6 +73,9 @@ pub enum Commands {
     },
     /// Регрессионный bench retrieval: golden set, recall@k, MRR, латентность (Фаза 21)
     Bench {
+        /// Подкоманда (напр. history — тренд ночных прогонов, Ф30)
+        #[command(subcommand)]
+        command: Option<BenchCommands>,
         /// Режим: search (memory_search hybrid) | context (memory_context / build_context)
         #[arg(short, long, default_value = "search")]
         mode: String,
@@ -88,6 +91,16 @@ pub enum Commands {
         /// Сохранить агрегаты как baseline в docs/bench_baseline.md
         #[arg(long)]
         save_baseline: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BenchCommands {
+    /// Тренд ночных bench-прогонов гейта дрима из data/bench/history.jsonl (Ф30)
+    History {
+        /// Сколько последних строк показать
+        #[arg(long, default_value_t = 20)]
+        last: usize,
     },
 }
 

@@ -106,23 +106,28 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 Цель: дрим, ухудшивший retrieval, откатывается той же ночью — замыкание петли обучения.
 
-- [ ] **30.1** В `AutoDreamWorker` после успешного дрима: прогон quick-набора bench
+- [x] **30.1** В `AutoDreamWorker` после успешного дрима: прогон quick-набора bench
   (15 запросов golden set, mode=context, бюджет `OB2H_BENCH_GATE_TIMEOUT_MS`, дефолт 3000).
-- [ ] **30.2** Откат при деградации **любого** из двух сигналов: recall@5 > 10% или
+- [x] **30.2** Откат при деградации **любого** из двух сигналов: recall@5 > 10% или
   MRR > 15% относительно `bench:last` → `dream_restore` на предыдущий workspace-коммит,
   `bench:last` не обновляется, в дрим-отчёт — алерт «ОТКАТ: дрим <sha> ухудшил
   recall@5 с X до Y / MRR с A до B» (падение только MRR при стабильном recall — тоже
   деградация). Иначе — обновление `bench:last` + строка в `history.jsonl`.
   **Timeout ≠ rollback:** не уложился в бюджет — warning, гейт пропущен, `bench:last`
   не трогается (никаких решений по неполным данным).
-- [ ] **30.3** Гейты: golden set существует; `OB2H_BENCH_GATE=1` (дефолт off до набора
+  *Реализация: дополнительно workspace-инвариант — обвал tracked-файла (>50% строк
+  относительно коммита до дрима) = rollback (bench по БД порчу MD-файлов не видит;
+  требование теста «портящий MEMORY.md → rollback»).*
+- [x] **30.3** Гейты: golden set существует; `OB2H_BENCH_GATE=1` (дефолт off до набора
   статистики).
-- [ ] **30.4** `ob2h bench history [--last N]` — тренд по `history.jsonl`; в `dream_status` —
-  исход последнего гейта.
-- [ ] **Тесты:** FakeLLM-дрим, реально портящий MEMORY.md (не только trust) → rollback,
-  workspace на предыдущем sha; деградация только MRR (recall стабилен) → тоже rollback;
-  timeout-путь → warning, БЕЗ rollback; здоровый дрим → baseline обновлён;
-  без golden set — гейт пропущен с warning.
+- [x] **30.4** `ob2h bench history [--last N]` — тренд по `history.jsonl`; в `dream_status` —
+  исход последнего гейта (поле `bench_gate` в stats dream_runs).
+- [x] **Тесты:** FakeLLM-дрим, реально портящий MEMORY.md (не только trust) → rollback,
+  workspace на предыдущем sha (в тесте — workspace-инвариант + restore на prev_sha);
+  деградация только MRR (recall стабилен) → тоже rollback (is_degradation, dual-сигнал);
+  timeout-путь → warning, БЕЗ rollback (SlowEmbedding даёт реальную точку Pending);
+  здоровый дрим → baseline обновлён (first_run → pass);
+  без golden set — гейт пропущен с warning (skipped).
 
 ### Фаза 31 — Консолидация при записи и дедуп (Оценка: 2–2.5 дня)
 

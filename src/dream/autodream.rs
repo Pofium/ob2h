@@ -10,9 +10,10 @@ use tracing::{info, warn};
 
 use super::Dream;
 use crate::config::Settings;
+use crate::db::Database;
 use crate::memory::MemoryService;
 use crate::sync::SyncManager;
-use crate::workspace::Workspace;
+use crate::workspace::{GitStore, Workspace};
 
 pub const LOCK_STALE_SECS: u64 = 3600;
 
@@ -22,17 +23,24 @@ pub struct AutoDreamWorker {
     memory: Arc<MemoryService>,
     settings: Settings,
     sync: Option<Arc<SyncManager>>,
+    /// Ф30: gitstore — фиксация HEAD до дрима и dream_restore при деградации.
+    gitstore: Arc<GitStore>,
+    /// Ф30: доступ к kv bench:last / bench:runs.
+    db: Database,
     #[allow(dead_code)]
     running: Arc<Mutex<bool>>,
 }
 
 impl AutoDreamWorker {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         dream: Arc<Dream>,
         workspace: Arc<Workspace>,
         memory: Arc<MemoryService>,
         settings: Settings,
         sync: Option<Arc<SyncManager>>,
+        gitstore: Arc<GitStore>,
+        db: Database,
     ) -> Self {
         Self {
             dream,
@@ -40,6 +48,8 @@ impl AutoDreamWorker {
             memory,
             settings,
             sync,
+            gitstore,
+            db,
             running: Arc::new(Mutex::new(false)),
         }
     }
@@ -66,9 +76,32 @@ impl AutoDreamWorker {
                 }
 
                 info!("Запуск автодрима...");
+                // Ф30.2: фиксируем HEAD до дрима — точка отката при деградации.
+                let prev_sha = self.gitstore.head();
                 let result = self.dream.run("auto").await;
                 match result {
-                    Ok(stats) => info!("Автодрим завершён: status={}", stats.status),
+                    Ok(stats) => {
+                        info!("Автодрим завершён: status={}", stats.status);
+                        // Ф30: ночной bench-гейт — сразу после дрима, до decay/purge,
+                        // чтобы замер отражал эффект самого дрима.
+                        if stats.status == "ok" {
+                            if let Some(verdict) =
+                                super::bench_gate::run_gate(
+                                    &self.memory,
+                                    &self.db,
+                                    &self.gitstore,
+                                    &self.settings,
+                                    stats.commit.as_deref(),
+                                    prev_sha.as_deref(),
+                                )
+                                .await
+                            {
+                                let _ = self
+                                    .dream
+                                    .append_run_gate(stats.run_id, verdict.to_json());
+                            }
+                        }
+                    }
                     Err(e) => warn!("Ошибка автодрима: {e}"),
                 }
 

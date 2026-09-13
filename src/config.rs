@@ -38,6 +38,12 @@ pub struct Settings {
     pub dream_extract_enabled: bool,
     pub dream_memory_revision: bool,
 
+    // --- Ф30: ночной bench-гейт дрима ---
+    /// Гейт выключен по умолчанию — до набора статистики (Ф30.3).
+    pub bench_gate_enabled: bool,
+    /// Бюджет quick-прогона bench; таймаут ≠ rollback (Ф30.2).
+    pub bench_gate_timeout_ms: u64,
+
     // --- Ретеншн ---
     pub retention_days: i64,
     /// Ротация полных бэкапов (Ф24).
@@ -137,6 +143,15 @@ impl Settings {
             .map(|v| v != "0" && v.to_lowercase() != "false")
             .unwrap_or(true);
 
+        // Ф30: ночной bench-гейт дрима (дефолт off до набора статистики).
+        let bench_gate_enabled = env::var("OB2H_BENCH_GATE")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false);
+        let bench_gate_timeout_ms = env::var("OB2H_BENCH_GATE_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3000);
+
         let retention_days = env::var("OB2H_RETENTION_DAYS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -193,6 +208,8 @@ impl Settings {
             dream_batch,
             dream_extract_enabled,
             dream_memory_revision,
+            bench_gate_enabled,
+            bench_gate_timeout_ms,
             retention_days,
             backup_keep_full,
             backup_keep_quick,

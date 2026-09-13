@@ -1,6 +1,7 @@
 //! Дриминг: фоновая консолидация памяти «во сне» (порт Dream из OmnesBOT).
 
 pub mod autodream;
+pub mod bench_gate;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -396,6 +397,29 @@ impl Dream {
             }
         }
         Ok(applied)
+    }
+
+    /// Ф30: дописать исход bench-гейта в stats последнего дрима —
+    /// исход виден в dream_status/dream_log без изменения контракта.
+    pub fn append_run_gate(&self, run_id: i64, gate: serde_json::Value) -> anyhow::Result<()> {
+        self.db.with_conn(|conn| {
+            let stats: Option<String> = conn
+                .query_row(
+                    "SELECT stats FROM dream_runs WHERE id = ?1",
+                    params![run_id],
+                    |r| r.get(0),
+                )
+                .ok();
+            let mut val: serde_json::Value = stats
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or(serde_json::json!({}));
+            val["bench_gate"] = gate;
+            conn.execute(
+                "UPDATE dream_runs SET stats = ?1 WHERE id = ?2",
+                params![val.to_string(), run_id],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn last_status(&self) -> anyhow::Result<Option<serde_json::Value>> {

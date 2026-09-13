@@ -6,6 +6,18 @@
 ## [Не выпущено]
 
 ### Added
+- **Ночной bench-гейт дрима (Фаза 30 PLAN_v1.4)**: после успешного автодрима прогон
+  quick-набора golden set (15 кейсов, mode=context, бюджет `OB2H_BENCH_GATE_TIMEOUT_MS=3000`);
+  относительное падение recall@5 >10% или MRR >15% против kv `bench:last` →
+  `dream_restore` на workspace-коммит до дрима + алерт «ОТКАТ: …» в дрим-отчёт
+  (dual-сигнал: падение только MRR — тоже откат). Timeout ≠ rollback: warning,
+  `bench:last` не трогается. Workspace-инвариант: обвал tracked-файла (>50% строк
+  относительно коммита до дрима) — тоже rollback (bench по БД порчу MD-файлов не видит).
+  Гейт выключен по умолчанию (`OB2H_BENCH_GATE=1` — включить), без golden set — skip
+  с warning. История прогонов: `data/bench/history.jsonl` (ts, gate, recall@5/10, MRR,
+  p95, db_size_mb, embedding_backend, dream_sha); CLI `ob2h bench history [--last N]`;
+  исход последнего гейта — в `dream_status` (поле `bench_gate` в stats). Счётчик
+  `bench:runs` — для решения по реранкеру в Ф35.2.
 - **Лёгкая база и бэкапы (Фаза 24 PLAN_v1.3)**: int8-квантование эмбеддингов v2
   (`[0x01][scale f32][i8 × dim]`, ~4× компактнее f32; dual-read по magic-байту, все
   писатели пишут v2); CLI `ob2h db quantize-embeddings [--dry-run]` (пре-бэкап + VACUUM;

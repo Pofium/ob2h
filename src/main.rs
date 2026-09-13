@@ -4,7 +4,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use ob2h::cli::{Cli, Commands, DbCommands, DreamCommands, PluginCommands, SyncCommands};
+use ob2h::cli::{BenchCommands, Cli, Commands, DbCommands, DreamCommands, PluginCommands, SyncCommands};
 use ob2h::config::Settings;
 use ob2h::mcp::McpServer;
 use ob2h::{init_app, start_background_workers};
@@ -45,16 +45,20 @@ async fn main() -> anyhow::Result<()> {
             let server = Arc::new(McpServer::new(ctx));
             server.run_stdio().await?;
         }
-        Some(Commands::Bench { mode, k, golden, json, save_baseline }) => {
-            ob2h::cli::bench::cli_run(
-                &ctx,
-                &mode,
-                &k,
-                golden.as_deref(),
-                json,
-                save_baseline,
-            )
-            .await?;
+        Some(Commands::Bench { command, mode, k, golden, json, save_baseline }) => {
+            if let Some(BenchCommands::History { last }) = command {
+                ob2h::cli::bench::cli_history(&ctx.settings, last)?;
+            } else {
+                ob2h::cli::bench::cli_run(
+                    &ctx,
+                    &mode,
+                    &k,
+                    golden.as_deref(),
+                    json,
+                    save_baseline,
+                )
+                .await?;
+            }
         }
         Some(Commands::Doctor { fix }) => {
             let doctor = ob2h::cli::Doctor::new(ctx.settings.clone(), fix);
