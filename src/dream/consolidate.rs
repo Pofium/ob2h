@@ -146,7 +146,15 @@ impl Dream {
                         &b
                     };
                     let absorbed = if canonical.id == a.id { &b } else { &a };
-                    self.apply_merge(canonical, absorbed)?;
+                    // единый движок слияния — тот же, что у memory_merge (31.4)
+                    let Some(memory) = self.memory.as_ref() else {
+                        anyhow::bail!("memory-сервис недоступен для слияния");
+                    };
+                    memory.merge_records(
+                        &[canonical.key.clone(), absorbed.key.clone()],
+                        Some(&canonical.key),
+                        verdict.note.as_deref(),
+                    )?;
                     report["merges"].as_array_mut().unwrap().push(json!({
                         "canonical": canonical.key,
                         "absorbed": absorbed.key,
@@ -204,71 +212,8 @@ impl Dream {
         })
     }
 
-    /// Слияние: каноническая запись получает union meta, max importance, sum access;
-    /// поглощённая — tombstone + meta.merged_into; links редиректятся на каноническую.
-    fn apply_merge(&self, canonical: &Candidate, absorbed: &Candidate) -> anyhow::Result<()> {
-        let merged_meta = union_meta(&canonical.meta, &absorbed.meta);
-        let now = utcnow();
-        self.db.with_conn(|conn| {
-            conn.execute(
-                "UPDATE memories SET importance = MAX(importance, ?1), access_count = access_count + ?2, \
-                 meta = ?3, updated_at = ?4 WHERE id = ?5",
-                params![absorbed.importance, absorbed.access_count, merged_meta, now, canonical.id],
-            )?;
-            // поглощённая: tombstone + merged_into (реплицируется синком как tombstone)
-            let mut absorbed_meta: Value = serde_json::from_str(&absorbed.meta).unwrap_or(json!({}));
-            if let Some(obj) = absorbed_meta.as_object_mut() {
-                obj.remove("merge_candidate");
-                obj.insert("merged_into".to_string(), json!(canonical.key));
-            }
-            conn.execute(
-                "UPDATE memories SET deleted_at = ?1, updated_at = ?1, meta = ?2, origin = '' WHERE id = ?3",
-                params![now, absorbed_meta.to_string(), absorbed.id],
-            )?;
-            Ok(())
-        })?;
-        self.redirect_links(absorbed.id, canonical.id)
-    }
-
-    /// Соседи поглощённой записи перепривязываются к канонической (без дублей PK).
-    fn redirect_links(&self, absorbed_id: i64, canonical_id: i64) -> anyhow::Result<()> {
-        self.db.with_conn(|conn| {
-            // чтение — в отдельном scope: stmt держит borrow conn
-            let links: Vec<(i64, i64, String, f64, String)> = {
-                let mut stmt = conn.prepare(
-                    "SELECT from_id, to_id, kind, weight, created_at FROM memory_links \
-                     WHERE from_id = ?1 OR to_id = ?1",
-                )?;
-                let rows = stmt.query_map(params![absorbed_id], |r| {
-                    Ok((
-                        r.get::<_, i64>(0)?,
-                        r.get::<_, i64>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, f64>(3)?,
-                        r.get::<_, String>(4)?,
-                    ))
-                })?;
-                rows.flatten().collect()
-            };
-            for (from, to, kind, weight, created) in links {
-                let new_from = if from == absorbed_id { canonical_id } else { from };
-                let new_to = if to == absorbed_id { canonical_id } else { to };
-                if new_from == new_to {
-                    continue; // самолинк не нужен
-                }
-                conn.execute(
-                    "INSERT OR IGNORE INTO memory_links (from_id, to_id, kind, weight, created_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![new_from, new_to, kind, weight, created],
-                )?;
-            }
-            conn.execute(
-                "DELETE FROM memory_links WHERE from_id = ?1 OR to_id = ?1",
-                params![absorbed_id],
-            )?;
-            Ok(())
-        })
-    }
+    /// Слияние делегируется единому движку `MemoryService::merge_records` (31.4) —
+    /// тот же код, что и у явного `memory_merge`; здесь остаётся только выбор канонической.
 
     /// Typed edge (резерв 23.5 начинает работать); повторный дрим не дублирует.
     fn insert_edge(&self, from_id: i64, to_id: i64, kind: &str) -> anyhow::Result<()> {
@@ -441,20 +386,6 @@ impl Dream {
 fn marker_target(meta: &str) -> Option<String> {
     let v: Value = serde_json::from_str(meta).ok()?;
     v.get("merge_candidate")?.as_str().map(str::to_string)
-}
-
-/// Union meta-JSON: ключи канонической записи выигрывают при коллизии.
-fn union_meta(canonical: &str, absorbed: &str) -> String {
-    let mut base: Value = serde_json::from_str(canonical).unwrap_or(json!({}));
-    let extra: Value = serde_json::from_str(absorbed).unwrap_or(json!({}));
-    if let (Some(base_obj), Some(extra_obj)) = (base.as_object_mut(), extra.as_object()) {
-        for (k, v) in extra_obj {
-            base_obj.entry(k.clone()).or_insert(v.clone());
-        }
-        // маркер в объединённой meta больше не нужен
-        base_obj.remove("merge_candidate");
-    }
-    base.to_string()
 }
 
 /// Похожесть для кластеризации: Jaccard токенов ключа ≥ 0.5 или косинус ≥ 0.75.

@@ -8,7 +8,13 @@ use sha2::{Digest, Sha256};
 
 use crate::db::{models::MemoryRecord, utcnow, Database};
 use crate::embedding::EmbeddingProvider;
-use crate::vector::{rrf_merge, serialize_q, top_k};
+use crate::vector::{rrf_merge, serialize_q, similarity::{cosine, deserialize}, top_k};
+
+/// Ф31.1: порог identity-дубля при save («одно и то же» → тихий UPDATE).
+pub const COS_IDENTITY: f32 = 0.98;
+/// Ф31.1: нижняя граница подозрения на дубль (0.75–0.98 → маркер merge_candidate;
+/// вилка плана 0.75–0.95 расширена до 0.98 без пропуска).
+pub const COS_SUSPECT: f32 = 0.75;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryHit {
@@ -73,6 +79,31 @@ impl MemoryService {
         let embeddings = self.embedder.embed(&[content.to_string()]).await?;
         let emb_blob = embeddings.first().map(|v| serialize_q(v));
 
+        // Ф31.1: дешёвый save-time пре-чек дублей (без LLM) — топ-1 косинусный сосед.
+        // cos ≥ 0.98 — identity-дубль: тихий UPDATE существующей записи, новой строки нет;
+        // 0.75–0.98 — подозрение: маркер meta.merge_candidate на новой записи
+        // (вердикт — офлайн в дриме, 31.2, или явный memory_merge).
+        let mut suspect_of: Option<String> = None;
+        if let Some(vec) = embeddings.first() {
+            if let Some((neighbor, cos)) = self.top_cosine_neighbor(vec, &k)? {
+                if cos >= COS_IDENTITY {
+                    let merged_meta = merge_meta_objects(&neighbor.meta, meta);
+                    let now = utcnow();
+                    self.db.with_conn(|conn| {
+                        conn.execute(
+                            "UPDATE memories SET content = ?1, meta = ?2, \
+                             importance = MAX(importance, ?3), access_count = access_count + 1, \
+                             updated_at = ?4 WHERE id = ?5",
+                            params![content, merged_meta, importance, now, neighbor.id],
+                        )?;
+                        Ok(())
+                    })?;
+                    return Ok(neighbor.key);
+                }
+                suspect_of = Some(neighbor.key);
+            }
+        }
+
         let now = utcnow();
 
         self.db.with_conn(|conn| {
@@ -104,7 +135,241 @@ impl MemoryService {
         })?;
         self.link_after_save(row_id, category, project_id)?;
 
+        // Ф31.1: подозрение на дубль — маркер для дрим-ревизии (31.2)
+        if let Some(neighbor_key) = suspect_of {
+            let meta_now: String = self.db.with_conn(|conn| {
+                conn.query_row(
+                    "SELECT COALESCE(meta, '{}') FROM memories WHERE id = ?1",
+                    params![row_id],
+                    |r| r.get(0),
+                )
+            })?;
+            let merged = merge_meta_objects(&meta_now, None);
+            let mut v: serde_json::Value =
+                serde_json::from_str(&merged).unwrap_or(serde_json::json!({}));
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("merge_candidate".to_string(), serde_json::json!(neighbor_key));
+            }
+            self.db.with_conn(|conn| {
+                conn.execute(
+                    "UPDATE memories SET meta = ?1 WHERE id = ?2",
+                    params![v.to_string(), row_id],
+                )?;
+                Ok(())
+            })?;
+        }
+
         Ok(k)
+    }
+
+    /// Ф31.1: топ-1 косинусный сосед среди живых записей (cos ≥ COS_SUSPECT).
+    fn top_cosine_neighbor(
+        &self,
+        vec: &[f32],
+        exclude_key: &str,
+    ) -> anyhow::Result<Option<(DupNeighbor, f32)>> {
+        let rows: Vec<(i64, String, String, f64, i64, Option<Vec<u8>>)> = self
+            .db
+            .with_conn(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, key, COALESCE(meta, '{}'), importance, access_count, embedding \
+                     FROM memories WHERE deleted_at IS NULL AND key != ?1",
+                )?;
+                let rows = stmt.query_map(params![exclude_key], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                })?;
+                Ok(rows.flatten().collect())
+            })
+            .unwrap_or_default();
+
+        let mut best: Option<(DupNeighbor, f32)> = None;
+        for (id, key, meta, importance, access_count, blob) in rows {
+            let Some(v) = blob.as_deref().and_then(deserialize) else {
+                continue;
+            };
+            let c = cosine(vec, &v);
+            if c < COS_SUSPECT {
+                continue;
+            }
+            if best.as_ref().map(|b| c > b.1).unwrap_or(true) {
+                best = Some((
+                    DupNeighbor { id, key, meta, importance, access_count },
+                    c,
+                ));
+            }
+        }
+        Ok(best)
+    }
+
+    /// Ф31.4: явное подтверждённое слияние (`memory_merge`, №34). Каноническая запись
+    /// получает union meta / max importance / sum access; остальные — tombstone с
+    /// `meta.merged_into` (+ note), links редиректятся. Возвращает человекочитаемый отчёт.
+    pub fn merge_records(
+        &self,
+        keys: &[String],
+        canonical_key: Option<&str>,
+        note: Option<&str>,
+    ) -> anyhow::Result<String> {
+        if keys.len() < 2 {
+            anyhow::bail!("нужно ≥2 ключа для слияния");
+        }
+        // живые записи по ключам
+        let mut rows: Vec<MergeRow> = Vec::new();
+        for k in keys {
+            let row: Option<MergeRow> = self.db.with_conn(
+                |conn| -> rusqlite::Result<Option<MergeRow>> {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, key, COALESCE(meta, '{}'), importance, access_count, trust \
+                         FROM memories WHERE key = ?1 AND deleted_at IS NULL LIMIT 1",
+                    )?;
+                    let mut it = stmt.query(params![k])?;
+                    Ok(it
+                        .next()?
+                        .map(|r| -> rusqlite::Result<MergeRow> {
+                            Ok(MergeRow {
+                                id: r.get(0)?,
+                                key: r.get(1)?,
+                                meta: r.get(2)?,
+                                importance: r.get(3)?,
+                                access_count: r.get(4)?,
+                                trust: r.get(5)?,
+                            })
+                        })
+                        .transpose()?)
+                },
+            )?;
+            match row {
+                Some(r) => rows.push(r),
+                None => anyhow::bail!("запись не найдена или tombstone: {k}"),
+            }
+        }
+        let canonical = match canonical_key {
+            Some(ck) => {
+                let row = rows
+                    .iter()
+                    .find(|r| r.key == ck)
+                    .ok_or_else(|| anyhow::anyhow!("canonical_key не входит в keys: {ck}"))?;
+                row.clone()
+            }
+            None => rows
+                .iter()
+                .max_by(|a, b| {
+                    a.trust
+                        .partial_cmp(&b.trust)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(a.importance.partial_cmp(&b.importance).unwrap_or(std::cmp::Ordering::Equal))
+                })
+                .cloned()
+                .expect("rows непуст"),
+        };
+        let absorbed: Vec<&MergeRow> = rows.iter().filter(|r| r.id != canonical.id).collect();
+
+        // union meta на канонической: её ключи выигрывают; маркер чистим
+        let mut meta_v: serde_json::Value =
+            serde_json::from_str(&canonical.meta).unwrap_or(serde_json::json!({}));
+        if let Some(obj) = meta_v.as_object_mut() {
+            obj.remove("merge_candidate");
+            if let Some(n) = note {
+                obj.insert("merged_note".to_string(), serde_json::json!(n));
+            }
+        }
+        for a in &absorbed {
+            let extra: serde_json::Value =
+                serde_json::from_str(&a.meta).unwrap_or(serde_json::json!({}));
+            if let (Some(base), Some(ext)) = (meta_v.as_object_mut(), extra.as_object()) {
+                for (kk, vv) in ext {
+                    base.entry(kk.clone()).or_insert(vv.clone());
+                }
+            }
+        }
+
+        let total_access: i64 = rows.iter().map(|r| r.access_count).sum();
+        let max_importance = rows.iter().map(|r| r.importance).fold(0.0_f64, f64::max);
+        let now = utcnow();
+        self.db.with_conn(|conn| {
+            conn.execute(
+                "UPDATE memories SET meta = ?1, importance = MAX(importance, ?2), \
+                 access_count = ?3, updated_at = ?4 WHERE id = ?5",
+                params![meta_v.to_string(), max_importance, total_access, now, canonical.id],
+            )?;
+            for a in &absorbed {
+                let mut am: serde_json::Value =
+                    serde_json::from_str(&a.meta).unwrap_or(serde_json::json!({}));
+                if let Some(obj) = am.as_object_mut() {
+                    obj.remove("merge_candidate");
+                    obj.insert("merged_into".to_string(), serde_json::json!(canonical.key));
+                    if let Some(n) = note {
+                        obj.insert("merged_note".to_string(), serde_json::json!(n));
+                    }
+                }
+                conn.execute(
+                    "UPDATE memories SET deleted_at = ?1, updated_at = ?1, meta = ?2, origin = '' \
+                     WHERE id = ?3",
+                    params![now, am.to_string(), a.id],
+                )?;
+            }
+            Ok(())
+        })?;
+
+        // редирект links поглощённых на каноническую (без дублей PK, без самолинков)
+        let mut redirected = 0usize;
+        for a in &absorbed {
+            redirected += self.redirect_links(a.id, canonical.id)?;
+        }
+        Ok(format!(
+            "merged: canonical={} absorbed=[{}] links_redirected={redirected}",
+            canonical.key,
+            absorbed.iter().map(|a| a.key.as_str()).collect::<Vec<_>>().join(", ")
+        ))
+    }
+
+    /// Перепривязка links поглощённой записи к канонической (Ф31.4).
+    /// Возвращает число перенесённых рёбер.
+    fn redirect_links(&self, absorbed_id: i64, canonical_id: i64) -> anyhow::Result<usize> {
+        self.db.with_conn(|conn| {
+            let links: Vec<(i64, i64, String, f64, String)> = {
+                let mut stmt = conn.prepare(
+                    "SELECT from_id, to_id, kind, weight, created_at FROM memory_links \
+                     WHERE from_id = ?1 OR to_id = ?1",
+                )?;
+                let rows = stmt.query_map(params![absorbed_id], |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, f64>(3)?,
+                        r.get::<_, String>(4)?,
+                    ))
+                })?;
+                rows.flatten().collect()
+            };
+            let mut moved = 0usize;
+            for (from, to, kind, weight, created) in links {
+                let new_from = if from == absorbed_id { canonical_id } else { from };
+                let new_to = if to == absorbed_id { canonical_id } else { to };
+                if new_from == new_to {
+                    continue;
+                }
+                conn.execute(
+                    "INSERT OR IGNORE INTO memory_links (from_id, to_id, kind, weight, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![new_from, new_to, kind, weight, created],
+                )?;
+                moved += 1;
+            }
+            conn.execute(
+                "DELETE FROM memory_links WHERE from_id = ?1 OR to_id = ?1",
+                params![absorbed_id],
+            )?;
+            Ok(moved)
+        })
     }
 
     /// Получить воспоминание по ключу.
@@ -948,4 +1213,41 @@ mod tests {
         let picked = mmr_select(&rel, &vecs, 2, 1.0);
         assert_eq!(picked, vec![1, 0]);
     }
+}
+
+/// Ф31.1: сосед, найденный пре-чеком дублей.
+struct DupNeighbor {
+    id: i64,
+    key: String,
+    meta: String,
+    #[allow(dead_code)]
+    importance: f64,
+    #[allow(dead_code)]
+    access_count: i64,
+}
+
+/// Ф31.4: строка для слияния.
+#[derive(Clone)]
+struct MergeRow {
+    id: i64,
+    key: String,
+    meta: String,
+    importance: f64,
+    access_count: i64,
+    trust: f64,
+}
+
+/// Union meta-JSON: ключи existing выигрывают при коллизии, incoming добавляется.
+fn merge_meta_objects(existing: &str, incoming: Option<&str>) -> String {
+    let mut base: serde_json::Value =
+        serde_json::from_str(existing).unwrap_or(serde_json::json!({}));
+    if let Some(inc) = incoming {
+        let extra: serde_json::Value = serde_json::from_str(inc).unwrap_or(serde_json::json!({}));
+        if let (Some(base_obj), Some(ext)) = (base.as_object_mut(), extra.as_object()) {
+            for (k, v) in ext {
+                base_obj.entry(k.clone()).or_insert(v.clone());
+            }
+        }
+    }
+    base.to_string()
 }

@@ -88,6 +88,182 @@ async fn save(env: &Env, key: &str, content: &str, importance: f64) {
         .expect("save");
 }
 
+// --- 31.1: save-time пре-чек + 31.4: memory_merge ---------------------------
+
+/// Embedding-провайдер со скриптованными векторами (по содержимому),
+/// фолбэк — FakeEmbedding. Даёт детерминированные косинусы для порогов 31.1.
+struct ScriptedEmbedding {
+    vectors: std::collections::HashMap<String, Vec<f32>>,
+    fallback: Arc<FakeEmbedding>,
+}
+
+impl ScriptedEmbedding {
+    fn new(pairs: &[(&str, Vec<f32>)]) -> Self {
+        Self {
+            vectors: pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+            fallback: Arc::new(FakeEmbedding::new(384)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ob2h::embedding::EmbeddingProvider for ScriptedEmbedding {
+    async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        let mut out = Vec::with_capacity(texts.len());
+        for t in texts {
+            if let Some(v) = self.vectors.get(t) {
+                out.push(v.clone());
+            } else {
+                out.extend(self.fallback.embed(std::slice::from_ref(t)).await?);
+            }
+        }
+        Ok(out)
+    }
+
+    fn dim(&self) -> usize {
+        384
+    }
+}
+
+#[tokio::test]
+async fn save_identity_duplicate_updates_existing_silently() {
+    let tmp = tempdir().expect("tempdir");
+    let db = Database::in_memory().expect("db");
+    let embedder = Arc::new(ScriptedEmbedding::new(&[
+        ("Пользователь работает в Яндексе", vec![1.0, 0.0, 0.0]),
+        ("Пользователь работает в компании Яндекс", vec![1.0, 0.0, 0.0]),
+        ("Совершенно другая тема", vec![0.0, 1.0, 0.0]),
+    ]));
+    let memory = Arc::new(MemoryService::new(db.clone(), embedder));
+
+    let k1 = memory
+        .save("Пользователь работает в Яндексе", Some("k-yandex"), "notes", 0.5, "chat", None)
+        .await
+        .expect("save1");
+    assert_eq!(k1, "k-yandex");
+
+    // identity-дубль (cos 1.0 ≥ 0.98): новой строки нет, тихий UPDATE
+    let k2 = memory
+        .save("Пользователь работает в компании Яндекс", Some("k-yandex2"), "notes", 0.7, "chat", None)
+        .await
+        .expect("save2");
+    assert_eq!(k2, "k-yandex", "вернулся ключ существующей записи");
+
+    let count: i64 = db
+        .with_conn(|conn| {
+            Ok(conn.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))?)
+        })
+        .expect("count");
+    assert_eq!(count, 1, "дубль не создал вторую строку");
+
+    let rec = memory.get("k-yandex").expect("get").expect("rec");
+    assert_eq!(rec.importance, 0.7, "max importance");
+    assert_eq!(rec.access_count, 1, "+1 access");
+    assert!(rec.content.contains("компании Яндекс"), "свежая формулировка");
+}
+
+#[tokio::test]
+async fn save_suspect_marks_merge_candidate() {
+    let tmp = tempdir().expect("tempdir");
+    let db = Database::in_memory().expect("db");
+    let embedder = Arc::new(ScriptedEmbedding::new(&[
+        ("База данных проекта: Postgres", vec![1.0, 0.0, 0.0]),
+        ("База данных проекта: PostgreSQL", vec![0.8, 0.6, 0.0]),
+    ]));
+    let memory = Arc::new(MemoryService::new(db.clone(), embedder));
+
+    memory
+        .save("База данных проекта: Postgres", Some("k-db-old"), "notes", 0.5, "chat", None)
+        .await
+        .expect("save1");
+    // cos 0.8 ∈ [0.75, 0.98) — подозрение: новая запись + маркер
+    let k2 = memory
+        .save("База данных проекта: PostgreSQL", Some("k-db-new"), "notes", 0.5, "chat", None)
+        .await
+        .expect("save2");
+    assert_eq!(k2, "k-db-new", "подозрение НЕ схлопывается молча");
+
+    let rec = memory.get("k-db-new").expect("get").expect("rec");
+    let meta: serde_json::Value =
+        serde_json::from_str(rec.meta.as_deref().unwrap_or("{}")).unwrap_or(serde_json::json!({}));
+    assert_eq!(meta["merge_candidate"], "k-db-old", "маркер для дрим-ревизии");
+}
+
+#[tokio::test]
+async fn merge_records_explicit_canonical_and_links() {
+    let tmp = tempdir().expect("tempdir");
+    let db = Database::in_memory().expect("db");
+    let memory = Arc::new(MemoryService::new(
+        db.clone(),
+        Arc::new(FakeEmbedding::new(384)),
+    ));
+
+    memory.save("Запись A", Some("m-a"), "notes", 0.4, "chat", None).await.unwrap();
+    memory.save("Запись B", Some("m-b"), "notes", 0.8, "chat", None).await.unwrap();
+    memory.save("Запись C", Some("m-c"), "notes", 0.5, "chat", None).await.unwrap();
+    db.with_conn(|conn| {
+        conn.execute("UPDATE memories SET trust = 0.9 WHERE key = 'm-a'", [])?;
+        conn.execute("UPDATE memories SET trust = 0.2 WHERE key = 'm-b'", [])?;
+        Ok(())
+    })
+    .unwrap();
+    // ссылка на m-b — переправится на m-a
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO memory_links (from_id, to_id, kind, weight, created_at) \
+             SELECT (SELECT id FROM memories WHERE key='m-c'), id, 'manual', 1.0, '2026-09-13' \
+             FROM memories WHERE key = 'm-b'",
+            [],
+        )
+    })
+    .expect("link");
+
+    let report = memory
+        .merge_records(
+            &["m-a".to_string(), "m-b".to_string()],
+            Some("m-a"),
+            Some("дубль по решению агента"),
+        )
+        .expect("merge");
+    assert!(report.contains("canonical=m-a"), "{report}");
+    assert!(report.contains("absorbed=[m-b]"), "{report}");
+
+    assert!(memory.get("m-b").unwrap().is_none(), "поглощённая вне search");
+    let a = memory.get("m-a").unwrap().unwrap();
+    assert_eq!(a.importance, 0.8, "max importance");
+    let meta: serde_json::Value = serde_json::from_str(a.meta.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["merged_note"], "дубль по решению агента");
+
+    let stale: i64 = db
+        .with_conn(|conn| {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM memory_links l JOIN memories t ON t.id = l.to_id WHERE t.key = 'm-b'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(stale, 0, "ссылок на поглощённую нет");
+    let redirected: i64 = db
+        .with_conn(|conn| {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM memory_links l \
+                 JOIN memories f ON f.id = l.from_id JOIN memories t ON t.id = l.to_id \
+                 WHERE f.key = 'm-c' AND t.key = 'm-a'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(redirected, 2, "оба ребра на m-b (manual + автосвязь category) переправлены на m-a");
+
+    // ошибка: одна запись не сливается
+    assert!(memory.merge_records(&["m-c".to_string()], None, None).is_err());
+}
+
 // --- 31.2: merge ------------------------------------------------------------
 
 #[tokio::test]

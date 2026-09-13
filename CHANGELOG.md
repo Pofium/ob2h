@@ -6,6 +6,16 @@
 ## [Не выпущено]
 
 ### Added
+- **Save-time дедуп + `memory_merge` (Фаза 31 PLAN_v1.4, завершение — 31.1/31.4)**:
+  `memory_save` без LLM находит топ-1 косинусного соседа — cos ≥ 0.98: identity-дубль,
+  тихий UPDATE существующей записи (union meta, max importance, +1 access_count, свежая
+  формулировка), новой строки нет; cos 0.75–0.98: подозрение → маркер
+  `meta.merge_candidate` на новой записи (вердикт — офлайн в дриме). MCP-инструмент
+  **`memory_merge` (№34)** `memory_merge(keys[], canonical_key?, note?)` — явное
+  подтверждённое слияние (каноническая = максимум trust/importance или явно заданная):
+  union meta, max importance, sum access, tombstone поглощённых с `meta.merged_into`,
+  редирект memory_links. Единый движок `MemoryService::merge_records` используется и
+  дрим-вердиктом merge (31.2). +3 теста на ScriptedEmbedding.
 - **Офлайн-консолидация в дриме (Фаза 31 PLAN_v1.4, частично — 31.2/31.3/31.5)**:
   модуль `src/dream/consolidate.rs` — LLM-вердикты по группам `meta.merge_candidate`
   (`merge | keep_both | contradicts | supersedes`, исходы MELD; ≤5 групп за дрим):
