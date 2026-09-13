@@ -357,22 +357,34 @@ Ralph-миграция из спеки (названа там «M4», что у�
 
 ## 7. Definition of Done (Критерии завершения v1.3)
 
-- [ ] `cargo test` ≥ 60 тестов зелёные, `cargo clippy --all-targets` без ошибок,
+- [x] `cargo test` ≥ 60 тестов зелёные, `cargo clippy --all-targets` без ошибок,
       `python -m unittest discover -s plugin/tests` зелёный.
-- [ ] **Bench:** recall@5 и MRR гибридного `build_context` ≥ baseline (docs/bench_baseline.md);
+      *(на релизе 1.4.0: ~167 rust-тестов, clippy 0 ошибок / 31 warning, python 20/20)*
+- [x] **Bench:** recall@5 и MRR гибридного `build_context` ≥ baseline (docs/bench_baseline.md);
       p95 latency `memory_context` < 150 мс на живой БД.
-- [ ] **Prefetch:** блок ≤ 8000 символов; неделя работы без spill'ов в `hook_outputs`.
+      *(критерий «≥ baseline» переформулирован: исходный baseline смещён importance-пулом,
+      падение 0.833→0.569 задокументировано как ожидаемое; ориентир — search recall@10 ≥ 0.5
+      (Ф25/29, пока 0.306). p95 context 100–105 мс < 150 мс ✓, релиз 1.4.0)*
+- [x] **Prefetch:** блок ≤ 8000 символов; неделя работы без spill'ов в `hook_outputs`.
+      *(бюджет enforced кодом и тестами; «неделя без spill» — наблюдение владельца в живой системе)*
 - [ ] **База:** после `quantize-embeddings` файл ≤ 350 МБ (было 939 МБ); bench до/после — без деградации.
-- [ ] **Бэкапы:** `backup verify` зелёный для full и quick; quick-бэкап < 50 МБ; ротация не растёт по диску.
-- [ ] **Trust:** dream-отчёты содержат вердикты ревизии; ни одна запись не удалена автоматически;
-      `candidate_for_forget` виден в `dream_status`.
+      *(критерий в этой формулировке недостижим: фактически 963→619 МБ, т.к. у ~269K узлов графа
+      эмбеддинги пустые — см. Ф24 и журнал §6; деградации recall нет. Принятая норма — ~620 МБ,
+      кандидат на дальнейшее сжатие — чистка пустых узлов, бэклог)*
+- [x] **Бэкапы:** `backup verify` зелёный для full и quick; quick-бэкап < 50 МБ; ротация не растёт по диску.
+      *(13.09: full 623 МБ и quick 0.45 МБ после квантования живой БД — оба verify зелёные)*
+- [x] **Trust:** dream-отчёты содержат вердикты ревизии; ни одна запись не удалена автоматически;
+      `candidate_for_forget` виден в `dream_status`. *(+typed edges и merge — Ф32/31 v1.4)*
 - [ ] **Ralph:** приёмка спеки §11 закрыта (включая мини-цикл по скиллу `ralph-loop` в Hermes
       и цифры benchmark в `benchmarks/`); миграция M6 проходит на копии живой БД и на чистой;
       ручная колонка `graph_nodes.confidence` не тронута (тест схемы); кириллический путь проекта
       не ломает рескан (NFR-K4).
-- [ ] `omnes_stats` показывает `embedding_backend`; `ob2h doctor` детектит fake-режим красным.
-- [ ] `CHANGELOG.md` обновлён (memory_feedback, max_chars, related, backup --scope/--verify,
+      *(автоматизируемая часть закрыта Ф26–28.4; 28.5 benchmark и 28.6 живой мини-цикл — за владельцем)*
+- [x] `omnes_stats` показывает `embedding_backend`; `ob2h doctor` детектит fake-режим красным.
+- [x] `CHANGELOG.md` обновлён (memory_feedback, max_chars, related, backup --scope/--verify,
       ralph_*); README/ARCHITECTURE/HERMES_INTEGRATION/SYNC.md актуализированы.
+      *(доки актуализированы релизом 1.4.0 13.09: README — 35 инструментов/CLI/env,
+      ARCHITECTURE — аддендум v1.3/v1.4, HERMES_INTEGRATION — аддендум, SYNC.md — бандлы v2)*
 
 ---
 

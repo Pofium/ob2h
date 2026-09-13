@@ -112,3 +112,28 @@ cp ob2h-sync.service ob2h-sync.timer /etc/systemd/system/ && systemctl enable --
 3. Документ → `knowledge_extract` → `graph_reason`.
 4. `ob2h stats`, `ob2h dream status`, `ob2h sync status`.
 5. Логи при проблемах: `data/logs/ob2h.log`.
+
+---
+
+## Аддендум v1.3/v1.4 (2026-09-13)
+
+Дельта к тексту выше (база описывает v0.9):
+
+- **Контракт**: 35 MCP-инструментов (было 19–25 в ранних версиях). Новые с v1.3/v1.4:
+  `memory_feedback` (agentic-коррекция доверия: helpful/unhelpful/outdated → trust ±),
+  `memory_merge` (подтверждённое слияние почти-дублей), `ralph_start/iteration/verdict/
+  context/report`, `ast_diff/ast_history` (Ralph-циклы разработки), `project_call_path`
+  (call-path/callers/callees). Расширены: `memory_search` (+`related`, `mode=graph`),
+  `memory_context` (+`max_chars`, +`author`), `graph_search` (+`mode=ppr`),
+  `graph_reason` (+`scope=docs|memory|all`), `project_context` (+`mode=repo_map`,
+  +`with_memory`), `project_graph_search` (+`mode=callers|callees`).
+- **Мультиагентные сессии**: плагин принимает `turn_author` в `sync_turn` — автор хода
+  пишется в `meta.author` daily-записей; `memory_context`/prefetch с параметром `author`
+  исключает записи других авторов (gateway-сессии нескольких агентов больше не смешивают
+  память).
+- **Prefetch**: бюджет блока — `OB2H_PREFETCH_MAX_CHARS` (8000, рез по границам записей,
+  маркер truncated); блок `[related]`/`[ppr]` — соседи памяти (1-hop / PPR); блок
+  `[conflicts]` — обе стороны известного противоречия с trust; warn-блок
+  `<blast_radius>` — свежие правки кода (флаг `OB2H_EDIT_BLAST=warn`, дефолт off).
+- **Валидация провайдера**: контракт-тест — 35 инструментов, handshake, roundtrip
+  (`plugin/tests/test_integration.py`).
