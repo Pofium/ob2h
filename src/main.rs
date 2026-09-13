@@ -285,6 +285,12 @@ async fn main() -> anyhow::Result<()> {
                 let report = ctx.db.with_conn(|conn| ob2h::graph::GraphAnalytics::generate_project_report(conn, &id))?;
                 println!("{}", report.markdown_summary);
             }
+            ob2h::cli::ProjectCliCommands::RepoMap { id, tokens, query } => {
+                let map = ctx
+                    .db
+                    .with_conn(|conn| ob2h::graph::repomap::build_repo_map(conn, &id, query.as_deref(), tokens))?;
+                println!("{map}");
+            }
             ob2h::cli::ProjectCliCommands::DeadCode { id, limit } => {
                 let dead = ctx
                     .db

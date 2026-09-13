@@ -196,6 +196,17 @@ pub enum ProjectCliCommands {
         #[arg(short, long)]
         id: String,
     },
+    /// Ф37: repo-map — карта «файл → символы» под token budget (Aider-паттерн)
+    RepoMap {
+        #[arg(short, long)]
+        id: String,
+        /// Бюджет в токенах (2k/4k/8k)
+        #[arg(long, default_value_t = 4096)]
+        tokens: usize,
+        /// Фокус: файлы, совпадающие с query, получают PPR-сид
+        #[arg(short, long)]
+        query: Option<String>,
+    },
     /// Ф36.3: кандидаты в мёртвый код — символы с in-degree 0 (кроме entrypoints)
     DeadCode {
         #[arg(short, long)]

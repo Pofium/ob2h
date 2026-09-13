@@ -6,6 +6,13 @@
 ## [Не выпущено]
 
 ### Added
+- **Repo-map под token budget (Фаза 37 / трек C PLAN_v1.4)**: `project_context
+  mode=repo_map` — карта «файл → сигнатуры символов», уложенная в бюджет токенов
+  (2k/4k/8k): PPR-ранжирование по file-dependency графу (прямые file→file IMPORTS +
+  ко-импортная связность 1/|файлы модуля|), бинарный поиск максимального префикса
+  под бюджет, query-фокус через PPR-сиды. CLI `ob2h project repo-map`. Дефолтный
+  `project_context` без mode — прежний формат (совместимость).
+  Модуль `src/graph/repomap.rs`; +4 теста (`tests/test_repomap.rs`).
 - **Structural queries по кодовому графу (Фаза 36 / трек C PLAN_v1.4)**: новый
   MCP-инструмент **`project_call_path` (№35)** — явная цепочка вызовов/зависимостей
   `from→to` (BFS по `CALLS/IMPORTS/IMPLEMENTS/DEPENDS_ON`) либо callers/callees

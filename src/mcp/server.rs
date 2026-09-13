@@ -1339,6 +1339,18 @@ impl McpServer {
                     None => return "[Error] id is required".to_string(),
                 };
                 let query = args.get("query").and_then(|v| v.as_str());
+                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("context");
+
+                // Ф37: repo_map — компактная карта «файл → символы» под token budget
+                if mode == "repo_map" {
+                    let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(4096) as usize;
+                    return match self.ctx.db.with_conn(|conn| {
+                        crate::graph::repomap::build_repo_map(conn, id, query, max_tokens)
+                    }) {
+                        Ok(m) => m,
+                        Err(e) => format!("[Error] {e}"),
+                    };
+                }
 
                 match self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::build_project_context(conn, id, query)) {
                     Ok(ctx) => ctx,

@@ -3,6 +3,7 @@
 pub mod analytics;
 pub mod callpath;
 pub mod pagerank;
+pub mod repomap;
 pub mod service;
 
 pub use pagerank::{
