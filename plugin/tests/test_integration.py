@@ -41,9 +41,22 @@ class TestRealServer(unittest.TestCase):
     def test_handshake_and_contract(self):
         tools = self.rpc.tools_list()
         names = [t["name"] for t in tools]
-        # контракт v1.3: 26 инструментов (25 базовых v1.2 + memory_feedback Ф23)
-        self.assertEqual(names[-1], "memory_feedback")
-        self.assertEqual(len(names), 26)
+        # контракт v1.4: 34 инструмента = 25 базовых v1.2 + memory_feedback №26
+        # + ralph_start/ralph_iteration/ralph_verdict/ralph_context/ralph_report/
+        #   ast_diff/ast_history №27–33 (v1.3) + memory_merge №34 (Ф31.2)
+        self.assertEqual(len(names), 34)
+        for required in (
+            "memory_feedback",
+            "memory_merge",
+            "ralph_start",
+            "ralph_iteration",
+            "ralph_verdict",
+            "ralph_context",
+            "ralph_report",
+            "ast_diff",
+            "ast_history",
+        ):
+            self.assertIn(required, names)
 
     def test_turn_lands_in_daily_log(self):
         out = self.rpc.tool_call(
