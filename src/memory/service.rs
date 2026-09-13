@@ -1397,11 +1397,14 @@ impl MemoryService {
             _ => return self.build_context_fallback(limit, query, opts),
         };
 
-        // Скоринг (§22.2): 0.35*rel + 0.25*importance + 0.1*trust + 0.1*recency + 0.1*log1p(access).
-        // trust — константа 0.1 до Фазы 23. recency — экспоненциальный полураспад по updated_at.
+        // Скоринг (§22.2): 0.35*rel + 0.25*importance + 0.2*trust + 0.1*recency + 0.1*log1p(access).
+        // recency — экспоненциальный полураспад по updated_at. Доверие из trust-петли (Ф23)
+        // влияет на автоконтекст; дефолт 0.5 даёт те же 0.1, что была константа до Ф23.
         let max_rrf = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max).max(1e-9);
         let half_life = opts.half_life_days.max(0.1);
         let now = chrono::Utc::now();
+        let candidate_ids: Vec<i64> = hits.iter().map(|h| h.record.id).collect();
+        let trust_map = self.trust_map(&candidate_ids).unwrap_or_default();
         let mut cands: Vec<Candidate> = hits
             .into_iter()
             .filter(|h| author_allows(&h.record.meta, &opts.author))
@@ -1418,8 +1421,12 @@ impl MemoryService {
                 // Насыщение доступа: log1p, 1.0 достигается на ~50-м использовании.
                 let sat_access =
                     ((1.0 + h.record.access_count.max(0) as f64).ln() / 50f64.ln()).clamp(0.0, 1.0);
-                let score =
-                    0.35 * rel + 0.25 * h.record.importance + 0.1 + 0.1 * recency + 0.1 * sat_access;
+                let trust = trust_map.get(&h.record.id).copied().unwrap_or(0.5);
+                let score = 0.35 * rel
+                    + 0.25 * h.record.importance
+                    + 0.2 * trust
+                    + 0.1 * recency
+                    + 0.1 * sat_access;
                 Candidate { record: h.record, score }
             })
             .collect();

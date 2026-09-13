@@ -3,9 +3,13 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
-## [Не выпущено]
+## [1.4.0] — 2026-09-13
 
 ### Added
+- **Trust в скоринге prefetch (аудит v1.3, замыкание §22.2)**: `build_context` использует
+  реальный `0.2*trust` вместо константы 0.1 — trust-петля Ф23 (touch/feedback/дрим-ревизия)
+  теперь влияет на автоконтекст каждого хода; дефолт trust 0.5 сохраняет прежний баланс.
+  Тест `trust_boost_lifts_record_in_prefetch_scoring` (tests/test_context_v2.rs).
 - **Ночная статистика bench (Ф35.2/30.3, доделано)**: каждый bench-прогон дописывает
   `data/bench/history.jsonl` (§4: ts/mode/recall/mrr/p95/db_size/embedding_backend/
   vec0/dream_sha); сервер раз в 24 ч сам гонит latency-бенч по golden-набору
@@ -115,7 +119,9 @@
   Память как граф: `MemoryService::ppr_rank` (узлы — живые записи, рёбра — `memory_links`
   с весом kind × вес ребра, dual-seed: гибридные хиты + entity-фразы),
   `ppr_expand_records` и `ppr_context`. MCP: `memory_search mode=graph` (блок `[ppr]`
-  вместо 1-hop, фолбэк на 1-hop) и `graph_reason scope=memory|all` (PPR-подграф памяти,
+  вместо 1-hop, фолбэк на 1-hop), `graph_search mode=ppr` (PPR по графу знаний: dual-seed
+  из матчинга, веса рёбер по типу через `OB2H_PPR_WEIGHTS`, проектный фильтр) и
+  `graph_reason scope=memory|all` (PPR-подграф памяти,
   уверенность по trust × PPR-массе, лимиты 500 узлов / 1 с; без `scope` — прежний ответ
   по графу знаний). Новые настройки: `OB2H_PPR_WEIGHTS`, `OB2H_PPR_DAMPING`,
   `OB2H_GRAPH_REASON_MEMORY_MAX_NODES`, `OB2H_GRAPH_REASON_MEMORY_TIMEOUT_MS`.
