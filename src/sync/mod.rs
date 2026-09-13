@@ -487,6 +487,20 @@ impl SyncManager {
             Ok(())
         })?;
 
+        // Ф25.4: накопительный счётчик проигранных LWW-конфликтов — тихие
+        // перезаписи становятся наблюдаемой метрикой (sync status).
+        if stats.conflicts_lost > 0 {
+            self.db.with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO kv (key, value) VALUES ('sync.conflicts_total', ?1)
+                     ON CONFLICT(key) DO UPDATE SET
+                       value = CAST(CAST(value AS INTEGER) + CAST(?1 AS INTEGER) AS TEXT)",
+                    params![stats.conflicts_lost.to_string()],
+                )?;
+                Ok(())
+            })?;
+        }
+
         info!(
             "sync import {}: mem={} node={} edge={} конфликты_проиграны={} пропуск_ссылок={}",
             stats.bundle_id, stats.memories_applied, stats.nodes_applied, stats.edges_applied,
@@ -996,6 +1010,22 @@ impl SyncManager {
             .unwrap_or(0);
         out.push_str(&format!(
             "\noutbox: {outbox_count} бандл(ов), inbox: {inbox_count}"
+        ));
+        // Ф25.4: суммарные потери LWW за историю синка
+        let conflicts_total: i64 = self
+            .db
+            .with_conn(|conn| {
+                let v: i64 = conn.query_row(
+                    "SELECT CAST(value AS INTEGER) FROM kv WHERE key = 'sync.conflicts_total'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+                Ok(v)
+            })
+            .unwrap_or(0);
+        out.push_str(&format!(
+            "\nконфликтов LWW проиграно (всего): {conflicts_total}"
         ));
         out
     }

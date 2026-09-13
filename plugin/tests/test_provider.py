@@ -209,6 +209,18 @@ class TestLlmChildEnv(unittest.TestCase):
         self.plugin = load_plugin_module()
         self.home = tempfile.mkdtemp()
         self.addCleanup(lambda: __import__("shutil").rmtree(self.home, ignore_errors=True))
+        # Изоляция от реального окружения машины: у владельца в env может быть
+        # живой ключ — он должен не влиять на сценарии с фикстурным .env.
+        self._env_backup = {}
+        for var in ("OB2H_LLM_API_KEY", "OB2H_LLM_MODEL", "OB2H_LLM_BASE_URL", "DEEPSEEK_API_KEY"):
+            if var in os.environ:
+                self._env_backup[var] = os.environ.pop(var)
+        self.addCleanup(self._restore_env)
+
+    def _restore_env(self):
+        os.environ.update(self._env_backup)
+        for var in ("OB2H_LLM_API_KEY", "OB2H_LLM_MODEL", "OB2H_LLM_BASE_URL", "DEEPSEEK_API_KEY"):
+            os.environ.pop(var, None)
 
     def test_agent_key_from_dotenv(self):
         (Path(self.home) / ".env").write_text(

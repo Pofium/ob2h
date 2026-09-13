@@ -677,7 +677,12 @@ impl MemoryService {
     /// Сборка контекста `<agent_memory>` для инъекции в системный промпт.
     /// Прежний путь (до Фазы 22): топ по importance + подстрочный overlap.
     /// Fallback для пустых/тривиальных запросов и пустого гибридного пула.
-    fn build_context_fallback(&self, limit: usize, query: Option<&str>) -> anyhow::Result<String> {
+    fn build_context_fallback(
+        &self,
+        limit: usize,
+        query: Option<&str>,
+        opts: &ContextOptions,
+    ) -> anyhow::Result<String> {
         let query_words: HashSet<String> = query
             .unwrap_or_default()
             .to_lowercase()
@@ -715,6 +720,7 @@ impl MemoryService {
 
         let mut scored: Vec<(MemoryRecord, f64)> = records
             .into_iter()
+            .filter(|r| author_allows(&r.meta, &opts.author))
             .map(|r| {
                 let overlap = if query_words.is_empty() {
                     0.0
@@ -756,13 +762,13 @@ impl MemoryService {
     ) -> anyhow::Result<String> {
         let q = query.map(str::trim).unwrap_or("");
         if q.is_empty() {
-            return self.build_context_fallback(limit, query);
+            return self.build_context_fallback(limit, query, opts);
         }
 
         let pool_size = (limit * 2).max(20);
         let hits = match self.search_hybrid_hits(q, pool_size, 0.0, false).await {
             Ok(h) if !h.is_empty() => h,
-            _ => return self.build_context_fallback(limit, query),
+            _ => return self.build_context_fallback(limit, query, opts),
         };
 
         // Скоринг (§22.2): 0.35*rel + 0.25*importance + 0.1*trust + 0.1*recency + 0.1*log1p(access).
@@ -772,6 +778,7 @@ impl MemoryService {
         let now = chrono::Utc::now();
         let mut cands: Vec<Candidate> = hits
             .into_iter()
+            .filter(|h| author_allows(&h.record.meta, &opts.author))
             .map(|h| {
                 let rel = (h.score / max_rrf).clamp(0.0, 1.0);
                 let age_days = chrono::DateTime::parse_from_rfc3339(&h.record.updated_at)
@@ -856,7 +863,7 @@ struct Candidate {
     score: f64,
 }
 
-/// Параметры сборки контекстного блока (Фаза 22).
+/// Параметры сборки контекстного блока (Фаза 22 + Ф25.2).
 #[derive(Debug, Clone)]
 pub struct ContextOptions {
     /// Бюджет символов блока (None — без обрезки).
@@ -865,11 +872,26 @@ pub struct ContextOptions {
     pub half_life_days: f64,
     /// Вес релевантности в MMR (0..1), остаток — разнообразие.
     pub mmr_lambda: f64,
+    /// Автор хода (Ф25.2): записи с чужим meta.author исключаются.
+    pub author: Option<String>,
 }
 
 impl Default for ContextOptions {
     fn default() -> Self {
-        Self { max_chars: None, half_life_days: 90.0, mmr_lambda: 0.7 }
+        Self { max_chars: None, half_life_days: 90.0, mmr_lambda: 0.7, author: None }
+    }
+}
+
+/// Ф25.2: записи без meta.author проходят всегда; с автором — только свой.
+fn author_allows(meta: &Option<String>, want: &Option<String>) -> bool {
+    let Some(want) = want else { return true };
+    let record_author = meta
+        .as_deref()
+        .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+        .and_then(|v| v.get("author").and_then(|a| a.as_str()).map(str::to_string));
+    match record_author {
+        Some(a) => a == *want,
+        None => true,
     }
 }
 

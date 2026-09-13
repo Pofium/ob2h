@@ -199,19 +199,25 @@ Ralph-миграция из спеки (названа там «M4», что у�
 
 ### Фаза 25 — Надёжность и мультиагентность (Оценка: 1 день)
 
-- [ ] **25.1** `FakeEmbedding` — громкий: warn при активации; `omnes_stats` → поле
-  `embedding_backend: fake|local_bert|fastembed|api`; `memory_search` при fake добавляет
-  строку-предупреждение в выдачу; секция в `ob2h doctor` (красный статус).
-- [ ] **25.2** `plugin/ob2h/__init__.py`: `sync_turn(..., **kwargs)` принимает `turn_author`
+- [x] **25.1** `FakeEmbedding` — громкий: warn при активации; `omnes_stats` → поле
+  `backend=fake|local_bert|api`; `memory_search` при fake добавляет
+  строку-предупреждение в выдачу; секция в `ob2h doctor` (реальная канареечная
+  проверка: загрузка модели + embed, красный статус при деградации).
+- [x] **25.2** `plugin/ob2h/__init__.py`: `sync_turn(..., turn_author="", **kwargs)`
   (Hermes шлёт провайдерам, чья сигнатура его принимает); автор — в `meta.author`
-  при `session_ingest`; prefetch фильтрует по identity, когда он задан.
+  daily-записей (`session_log`/`session_ingest` + опциональный `author` в контракте
+  обоих инструментов); `memory_context` + `author` — записи с чужим `meta.author`
+  исключаются из prefetch-блока; плагин передаёт автора в prefetch и запись.
 - [ ] **25.3** (Опционально, только после bench) реранкер через fastembed `TextCrossEncoder`
   (bge-reranker-base, ONNX — в рамках ADR «без torch/transformers»): за флагом
   `OB2H_RERANK=1`, реранк top-30 → top-8 в `memory_search`; по умолчанию выключен.
-- [ ] **25.4** Наблюдаемость синка: `sync status`/import-отчёт — счётчик `conflicts_overwritten`
-  (сколько записей перезаписано по LWW) — тихая потеря хвоста при LWW становится видимой метрикой.
-- [ ] **Тесты:** фейковый бэкенд детектится в stats/doctor; `turn_author` пишется и
-  фильтруется (общая сессия с двумя авторами); плагин остаётся stdlib-only.
+  *Отложено: fastembed-rust тянет ort (тяжёлая зависимость, ADR-14 в §8) — решение
+  отдельно по §6 PLAN.md; альтернатива без зависимостей — LLM-реранк через llm_client.*
+- [x] **25.4** Наблюдаемость синка: `sync status`/import-отчёт — счётчик `конфликтов LWW
+  проиграно (всего)` (kv `sync.conflicts_total`, копится на каждом import).
+- [x] **Тесты:** фейковый бэкенд детектится в stats/doctor; `turn_author` пишется и
+  фильтруется (записи с meta.author); плагин остаётся stdlib-only; python-контракт
+  обновлён (26 инструментов, изоляция env в TestLlmChildEnv).
 
 ---
 

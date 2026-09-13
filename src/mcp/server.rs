@@ -521,6 +521,14 @@ impl McpServer {
                         }
                     }
                 }
+                // Ф25.1: деградация эмбеддингов не молчит
+                if crate::embedding::active_backend() == "fake"
+                    && self.ctx.settings.embed_provider != "fake"
+                {
+                    out.push_str(
+                        "\n[warn] эмбеддинги деградированы (fallback: fake) — семантический режим недостоверен",
+                    );
+                }
                 out
             }
             "memory_update" => {
@@ -574,9 +582,16 @@ impl McpServer {
                     .and_then(|v| v.as_u64())
                     .map(|v| v as usize)
                     .or(Some(self.ctx.settings.prefetch_max_chars));
+                // author (Ф25.2): записи с чужим meta.author исключаются из блока
+                let author = args
+                    .get("author")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(String::from);
                 let opts = crate::memory::ContextOptions {
                     max_chars,
                     half_life_days: self.ctx.settings.recency_half_life_days,
+                    author,
                     ..Default::default()
                 };
                 match self.ctx.memory.build_context(limit, query, &opts).await {
@@ -624,12 +639,13 @@ impl McpServer {
                     None => return "[Error] assistant_text is required".to_string(),
                 };
                 let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("hermes");
+                // Ф25.2: автор хода (turn_author) — в meta записи daily-лога
+                let mut meta = serde_json::json!({ "source": source });
+                if let Some(a) = args.get("author").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                    meta["author"] = serde_json::Value::String(a.to_string());
+                }
 
-                let _ = self.ctx.workspace.log_daily_session(
-                    user_text,
-                    assistant_text,
-                    Some(serde_json::json!({ "source": source })),
-                );
+                let _ = self.ctx.workspace.log_daily_session(user_text, assistant_text, Some(meta));
 
                 let mut session = self.ctx.pending_session.lock().await;
                 session.append("user", user_text);
@@ -648,6 +664,11 @@ impl McpServer {
                 };
                 let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("hermes");
                 let session_id = args.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+                // Ф25.2: автор хода — в meta записей daily-лога
+                let mut entry_meta = serde_json::json!({ "source": source, "session_id": session_id });
+                if let Some(a) = args.get("author").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                    entry_meta["author"] = serde_json::Value::String(a.to_string());
+                }
 
                 // Дедуп: kv "ingest:<session_id>" хранит, сколько сообщений этой сессии
                 // уже принято (включая пропущенные роли) — повторный вызов с полной
@@ -710,7 +731,7 @@ impl McpServer {
                         let _ = self.ctx.workspace.log_daily_session(
                             u,
                             a,
-                            Some(serde_json::json!({ "source": source, "session_id": session_id })),
+                            Some(entry_meta.clone()),
                         );
                         session.append("user", u);
                         session.append("assistant", a);
@@ -913,6 +934,8 @@ impl McpServer {
             }
             "omnes_stats" => {
                 let db_size = self.ctx.settings.db_path().metadata().map(|m| m.len()).unwrap_or(0);
+                // Ф25.1: активный бэкенд эмбеддингов (деградация видна в stats)
+                let backend = crate::embedding::active_backend();
                 let counts = self.ctx.db.with_conn(|conn| {
                     let m: i64 = conn.query_row("SELECT count(*) FROM memories", [], |r| r.get(0)).unwrap_or(0);
                     let r: i64 = conn.query_row("SELECT count(*) FROM memory_relations", [], |r| r.get(0)).unwrap_or(0);
@@ -925,8 +948,8 @@ impl McpServer {
                 }).unwrap_or_default();
 
                 format!(
-                    "memories={} relations={} documents={} chunks={} graph_nodes={} graph_edges={} dream_runs={} db={}KB",
-                    counts.0, counts.1, counts.2, counts.3, counts.4, counts.5, counts.6, db_size / 1024
+                    "memories={} relations={} documents={} chunks={} graph_nodes={} graph_edges={} dream_runs={} db={}KB backend={}",
+                    counts.0, counts.1, counts.2, counts.3, counts.4, counts.5, counts.6, db_size / 1024, backend
                 )
             }
             "omnes_backup" => match self.ctx.backup.create() {

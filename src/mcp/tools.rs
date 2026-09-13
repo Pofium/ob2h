@@ -68,12 +68,14 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 5. memory_context
         McpToolDef {
             name: "memory_context".to_string(),
-            description: "Блок <agent_memory> с самыми важными фактами — для вставки в промпт. query повышает релевантность отбора. project_id фильтрует контекст проекта.".to_string(),
+            description: "Блок <agent_memory> с самыми важными фактами — для вставки в промпт. query повышает релевантность отбора. project_id фильтрует контекст проекта. author исключает записи с чужим meta.author.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Контекстный запрос" },
                     "max_tokens": { "type": "integer", "description": "Максимальный объем токенов" },
+                    "max_chars": { "type": "integer", "description": "Бюджет символов блока (дефолт: OB2H_PREFETCH_MAX_CHARS=8000)" },
+                    "author": { "type": "string", "description": "Автор хода: записи с чужим meta.author исключаются (Ф25.2)" },
                     "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
                 }
             }),
@@ -114,6 +116,7 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "user_text": { "type": "string", "description": "Сообщение пользователя" },
                     "assistant_text": { "type": "string", "description": "Ответ ассистента" },
                     "source": { "type": "string", "description": "Источник сессии (дефолт: hermes)" },
+                    "author": { "type": "string", "description": "Автор хода (turn_author) — пишется в meta записи (Ф25.2)" },
                     "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
                 },
                 "required": ["user_text", "assistant_text"]
@@ -245,6 +248,7 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     },
                     "source": { "type": "string", "description": "Источник (дефолт: hermes; напр. pre_compress)" },
                     "session_id": { "type": "string", "description": "Идентификатор сессии для дедупа (опционально)" },
+                    "author": { "type": "string", "description": "Автор хода (turn_author) — пишется в meta записей (Ф25.2)" },
                     "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
                 },
                 "required": ["messages"]

@@ -133,6 +133,7 @@ class Ob2hProvider(MemoryProvider):
         self._unavailable = ""
         self._writes_enabled = True
         self._session_id = ""
+        self._author = ""  # Ф25.2: turn_author последнего хода
         # Аккумулятор сообщений текущей сессии: каждый ход отправляется полным
         # префиксом, сервер пишет только хвост (дедуп по session_id/позиции).
         self._accumulated: List[Dict[str, str]] = []
@@ -280,8 +281,12 @@ class Ob2hProvider(MemoryProvider):
         try:
             if self._rpc:
                 self._rpc.ensure()
+                ctx_params: Dict[str, Any] = {"query": query, "max_tokens": 30}
+                if self._author:
+                    # Ф25.2: записи с чужим meta.author не попадают в контекст
+                    ctx_params["author"] = self._author
                 block = self._rpc.tool_call(
-                    "memory_context", {"query": query, "max_tokens": 30},
+                    "memory_context", ctx_params,
                     timeout=_PREFETCH_TIMEOUT,
                 ).strip()
                 if block:
@@ -324,9 +329,14 @@ class Ob2hProvider(MemoryProvider):
         *,
         session_id: str = "",
         messages: Optional[List[Dict[str, Any]]] = None,
+        turn_author: str = "",
+        **kwargs: Any,
     ) -> None:
         if not self._writes_enabled:
             return
+        if turn_author:
+            # Ф25.2: автор хода (Hermes шлёт turn_author расширенной сигнатурой)
+            self._author = turn_author
         if not (user_content or "").strip() and not (assistant_content or "").strip():
             return
         sid = session_id or self._session_id
@@ -419,17 +429,27 @@ class Ob2hProvider(MemoryProvider):
                         kind = item[0]
                         if kind == "ingest":
                             _, msgs, source, sid = item
+                            params: Dict[str, Any] = {
+                                "messages": msgs, "source": source, "session_id": sid,
+                            }
+                            if self._author:
+                                params["author"] = self._author  # Ф25.2
                             out = self._rpc.tool_call(
                                 "session_ingest",
-                                {"messages": msgs, "source": source, "session_id": sid},
+                                params,
                                 timeout=_WRITE_TIMEOUT,
                             )
                             logger.debug("ob2h ingest: %s", out)
                         elif kind == "log":
                             _, user_text, assistant_text = item
+                            log_params: Dict[str, Any] = {
+                                "user_text": user_text, "assistant_text": assistant_text,
+                            }
+                            if self._author:
+                                log_params["author"] = self._author  # Ф25.2
                             self._rpc.tool_call(
                                 "session_log",
-                                {"user_text": user_text, "assistant_text": assistant_text},
+                                log_params,
                                 timeout=_WRITE_TIMEOUT,
                             )
                         elif kind == "save":

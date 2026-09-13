@@ -191,11 +191,54 @@ impl Doctor {
     }
 
     fn check_embeddings(&self, results: &mut Vec<DoctorItem>) {
+        // Ф25.1: честная проверка — грузим провайдер и делаем канареечный embed.
+        // Отдельный поток со своим рантаймом: doctor вызывается и из async-контекста,
+        // и из синхронных тестов — вложенный block_on в обоих случаях запрещён.
+        let settings = self.settings.clone();
+        let handle = std::thread::spawn(move || {
+            let backend = crate::embedding::provider_for(&settings);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let vecs = rt.block_on(backend.embed(&["проверка ob2h doctor".to_string()]))?;
+            let dim = backend.dim();
+            anyhow::Ok((vecs.into_iter().next(), dim, crate::embedding::active_backend().to_string()))
+        });
+        let checked = handle.join().ok().and_then(|r| r.ok());
+
+        let backend_name = checked.as_ref().map(|(_, _, b)| b.as_str()).unwrap_or("unknown");
+        let (status, details) = match checked {
+            Some((Some(vec), dim, backend))
+                if vec.iter().all(|f| f.is_finite()) && !vec.is_empty() =>
+            {
+                if backend == "fake" && self.settings.embed_provider != "fake" {
+                    (
+                        DoctorStatus::Error,
+                        format!(
+                            "fallback на fake ({dim}d) — векторный поиск недостоверен; \
+                             проверьте модель Candle или настройте OB2H_EMBED_BASE_URL"
+                        ),
+                    )
+                } else if backend == "fake" {
+                    (
+                        DoctorStatus::Warn,
+                        format!("fake-провайдер включён явно ({dim}d) — векторы являются хэшами"),
+                    )
+                } else {
+                    (DoctorStatus::Ok, format!("{} ({}d, канарейка ok)", backend, dim))
+                }
+            }
+            _ => (
+                DoctorStatus::Error,
+                format!("канареечный embed не удался (backend: {backend_name})"),
+            ),
+        };
+
         results.push(DoctorItem {
             category: "Эмбеддинги и Вектора".to_string(),
             name: "Провайдер эмбеддингов".to_string(),
-            status: DoctorStatus::Ok,
-            details: format!("{} (модель: {})", self.settings.embed_provider, self.settings.embed_model),
+            status,
+            details,
         });
     }
 
