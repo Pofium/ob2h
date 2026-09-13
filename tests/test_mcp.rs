@@ -33,6 +33,8 @@ fn test_tools_list_contract_snapshot() {
         "project_scan",
         "project_context",
         "project_graph_search",
+        // v1.4 / трек C: структурные запросы (Фаза 36) — №35, вставлен после graph_search
+        "project_call_path",
         "project_report",
         // v1.2: Анализ радиуса изменений (Blast Radius)
         "project_impact",

@@ -1358,6 +1358,33 @@ impl McpServer {
                 let provenance = args.get("provenance").and_then(|v| v.as_str()).unwrap_or("all");
                 let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("hybrid");
 
+                // Ф36.2: структурные режимы — callers/callees по query-символу
+                if mode == "callers" || mode == "callees" {
+                    let dir = if mode == "callers" {
+                        crate::graph::callpath::Dir::Callers
+                    } else {
+                        crate::graph::callpath::Dir::Callees
+                    };
+                    let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(2) as usize;
+                    return match self.ctx.db.with_conn(|conn| {
+                        let Some(sym) = crate::graph::callpath::resolve_symbol(conn, id, query)? else {
+                            return Ok(format!("[callers/callees] символ не найден: {query}"));
+                        };
+                        let links =
+                            crate::graph::callpath::neighbors(conn, id, sym.id, dir, depth, limit)?;
+                        let header = format!(
+                            "{} `{}` ({})",
+                            if dir == crate::graph::callpath::Dir::Callers { "Callers" } else { "Callees" },
+                            sym.label,
+                            sym.location()
+                        );
+                        Ok(crate::graph::callpath::format_links(&header, &links))
+                    }) {
+                        Ok(text) => text,
+                        Err(e) => format!("[Error] {e}"),
+                    };
+                }
+
                 match self.ctx.graph.search_project_nodes_hybrid(id, query, mode, provenance, limit).await {
                     Ok(nodes) => {
                         if nodes.is_empty() {
@@ -1381,6 +1408,59 @@ impl McpServer {
                             lines.join("\n")
                         }
                     }
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "project_call_path" => {
+                // Ф36.1: структурные запросы — путь from→to или callers/callees
+                let from_symbol = match args.get("from_symbol").and_then(|v| v.as_str()) {
+                    Some(s) => s,
+                    None => return "[Error] from_symbol is required".to_string(),
+                };
+                let active_proj = self.ctx.active_project_id.read().await.clone();
+                let id = match args.get("id").and_then(|v| v.as_str()).or(active_proj.as_deref()) {
+                    Some(i) => i.to_string(),
+                    None => return "[Error] id is required (no active project)".to_string(),
+                };
+                let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(25) as usize;
+                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("callees");
+
+                match self.ctx.db.with_conn(|conn| {
+                    let Some(from) = crate::graph::callpath::resolve_symbol(conn, &id, from_symbol)? else {
+                        return Ok(format!("[project_call_path] символ не найден: {from_symbol}"));
+                    };
+
+                    if let Some(to_symbol) = args.get("to_symbol").and_then(|v| v.as_str()) {
+                        let Some(to) = crate::graph::callpath::resolve_symbol(conn, &id, to_symbol)? else {
+                            return Ok(format!("[project_call_path] целевой символ не найден: {to_symbol}"));
+                        };
+                        return Ok(match crate::graph::callpath::call_path(conn, &id, &from, &to, depth)? {
+                            Some(path) => crate::graph::callpath::format_path(&path),
+                            None => format!(
+                                "[project_call_path] пути от `{}` к `{}` на глубине ≤ {depth} не найдено",
+                                from.label,
+                                to.label
+                            ),
+                        });
+                    }
+
+                    let dir = match mode {
+                        "callers" => crate::graph::callpath::Dir::Callers,
+                        _ => crate::graph::callpath::Dir::Callees,
+                    };
+                    let links = crate::graph::callpath::neighbors(conn, &id, from.id, dir, depth, limit)?;
+                    let header = match dir {
+                        crate::graph::callpath::Dir::Callers => {
+                            format!("Callers `{}` ({})", from.label, from.location())
+                        }
+                        crate::graph::callpath::Dir::Callees => {
+                            format!("Callees `{}` ({})", from.label, from.location())
+                        }
+                    };
+                    Ok(crate::graph::callpath::format_links(&header, &links))
+                }) {
+                    Ok(text) => text,
                     Err(e) => format!("[Error] {e}"),
                 }
             }

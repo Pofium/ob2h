@@ -20,6 +20,7 @@ pub fn annotations_for(name: &str) -> Option<serde_json::Value> {
         "project_graph_search",
         "project_impact",
         "project_report",
+        "project_call_path",
         "ralph_report",
         "workspace_read",
     ];
@@ -346,12 +347,29 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "query": { "type": "string", "description": "Поисковый запрос (имя структуры/функции или описание естественным языком)" },
                     "limit": { "type": "integer", "description": "Лимит результатов (дефолт: 15)" },
                     "provenance": { "type": "string", "enum": ["ast", "llm", "all"], "description": "Фильтр источника связей (дефолт: all)" },
-                    "mode": { "type": "string", "enum": ["hybrid", "text", "vector"], "description": "Режим поиска: hybrid (дефолт, RRF k=60), text (лексический), vector (семантический)" }
+                    "mode": { "type": "string", "enum": ["hybrid", "text", "vector", "callers", "callees"], "description": "Режим: hybrid (дефолт, RRF k=60), text (лексический), vector (семантический), callers/callees (структурные соседи символа из query, Ф36)" }
                 },
                 "required": ["id", "query"]
             }),
         },
-        // 24. project_report
+        // 35. project_call_path (Ф36.1, трек C)
+        McpToolDef {
+            name: "project_call_path".to_string(),
+            description: "Структурные запросы по кодовому графу (Ф36): явная цепочка вызовов/зависимостей от символа к символу (BFS по CALLS/IMPORTS/IMPLEMENTS/DEPENDS_ON); без to_symbol — кто вызывает from (mode=callers) или кого вызывает сам from (mode=callees) на глубину depth.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Идентификатор проекта (опционально — берётся активный)" },
+                    "from_symbol": { "type": "string", "description": "Имя символа или путь файла-источника" },
+                    "to_symbol": { "type": "string", "description": "Целевой символ/файл: если задан — ищется явная цепочка from→to" },
+                    "depth": { "type": "integer", "description": "Глубина обхода (дефолт: 3, max 12 для пути / 10 для соседей)" },
+                    "mode": { "type": "string", "enum": ["callers", "callees"], "description": "Без to_symbol: callers — кто вызывает from, callees — кого вызывает from (дефолт: callees)" },
+                    "limit": { "type": "integer", "description": "Лимит соседей (дефолт: 25)" }
+                },
+                "required": ["from_symbol"]
+            }),
+        },
+        // 24. project_report (после вставки project_call_path — №35)
         McpToolDef {
             name: "project_report".to_string(),
             description: "Сгенерировать архитектурный дайджест проекта: ключевые хабы (God Nodes), компоненты, наиболее используемые зависимости.".to_string(),

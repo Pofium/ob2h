@@ -284,6 +284,14 @@ impl GraphAnalytics {
             }
         }
 
+        // Ф36.3: кандидаты в мёртвый код — in-degree 0 по usage-рёбрам, кроме entrypoints
+        if let Ok(dead) = super::callpath::dead_code(conn, project_id) {
+            if !dead.is_empty() {
+                md.push_str("\n## Кандидаты в мёртвый код (Ф36)\n\n");
+                md.push_str(&super::callpath::format_dead_code(&dead, 20));
+            }
+        }
+
         Ok(ProjectReport {
             project_id: project_id.to_string(),
             project_name: name,

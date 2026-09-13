@@ -331,17 +331,28 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 ### Фаза 36 (C1) — Structural queries: call-path, callers, dead code (Оценка: 1.5–2 дня)
 
-- [ ] **36.1** Новый MCP-инструмент **`project_call_path` (№35)**:
+- [x] **36.1** Новый MCP-инструмент **`project_call_path` (№35)**:
   `project_call_path(project_id?, from_symbol, to_symbol?, depth?)` — явная цепочка
   вызовов/зависимостей по `graph_edges` (CALLS/IMPORTS/INHERITS); без `to_symbol` —
   кто вызывает from (callers) / что вызывает сам from (callees) с глубиной.
-- [ ] **36.2** `project_graph_search` — режимы `mode=callers|callees` (аддитивно):
+- [x] **36.2** `project_graph_search` — режимы `mode=callers|callees` (аддитивно):
   быстрый ответ без нового инструмента.
-- [ ] **36.3** Dead-code report: CLI `ob2h project dead-code [--id]` + секция в
+- [x] **36.3** Dead-code report: CLI `ob2h project dead-code [--id]` + секция в
   `project_report` — символы с in-degree 0, кроме entrypoints (main, #[test]/tests,
   pub API; список entrypoints расширяется в Ф40 — kind=ROUTE/HANDLES).
-- [ ] **Тесты:** fixture-репо: цепочка A→B→C находится; мёртвый символ — в отчёте;
+- [x] **Тесты:** fixture-репо: цепочка A→B→C находится; мёртвый символ — в отчёте;
   entrypoints не попадают.
+
+  **РЕАЛИЗАЦИЯ (13.09.2026):** `src/graph/callpath.rs` (resolve_symbol, BFS
+  callers/callees по `CALLS/IMPORTS/IMPLEMENTS/DEPENDS_ON` с глубинами, call_path
+  с реконструкцией цепочки, dead-code: in-degree 0, исключая main/тесты/pub API —
+  по описанию узла; служебные `DEFINES`-рёбра в in-degree не входят). MCP-инструмент
+  №35 `project_call_path` (annotated read-only), режимы `mode=callers|callees` в
+  `project_graph_search`, CLI `ob2h project dead-code`, секция в `project_report`.
+  Тесты `tests/test_callpath.rs` (5): цепочка main→app→parser→lex, BFS-глубины,
+  dead-code исключает entrypoints, секция в отчёте. E2E на живой копии: 35
+  инструментов, честные «не найдено» — CALLS-рёбра в AST-графе разрежены
+  (import-level), что мотивирует Ф39 (type-resolve).
 
 ### Фаза 37 (C2) — Repo-map под token budget (Aider-паттерн) (Оценка: 1–1.5 дня)
 

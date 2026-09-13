@@ -1,6 +1,7 @@
 //! Сервис графа знаний (KAG-lite) без внешних серверов баз данных (ADR-6).
 
 pub mod analytics;
+pub mod callpath;
 pub mod pagerank;
 pub mod service;
 

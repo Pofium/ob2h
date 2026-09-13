@@ -6,6 +6,13 @@
 ## [Не выпущено]
 
 ### Added
+- **Structural queries по кодовому графу (Фаза 36 / трек C PLAN_v1.4)**: новый
+  MCP-инструмент **`project_call_path` (№35)** — явная цепочка вызовов/зависимостей
+  `from→to` (BFS по `CALLS/IMPORTS/IMPLEMENTS/DEPENDS_ON`) либо callers/callees
+  с глубиной; режимы `mode=callers|callees` в `project_graph_search`; CLI
+  `ob2h project dead-code` и секция «Кандидаты в мёртвый код» в `project_report`
+  (in-degree 0, исключая entrypoints: main, тесты, pub API; расширяется в Ф40).
+  Модуль `src/graph/callpath.rs`; +5 тестов (`tests/test_callpath.rs`).
 - **Латентность и гигиена (Фаза 35 PLAN_v1.4)**: bench-режим `--mode latency` —
   p50/p95 отдельно по `memories`, `graph_nodes` и эмбеддингу запроса (пол);
   автосохранение latency-секции в `docs/bench_baseline.md` (`--save-baseline`,

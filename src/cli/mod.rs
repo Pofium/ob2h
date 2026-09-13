@@ -196,6 +196,14 @@ pub enum ProjectCliCommands {
         #[arg(short, long)]
         id: String,
     },
+    /// Ф36.3: кандидаты в мёртвый код — символы с in-degree 0 (кроме entrypoints)
+    DeadCode {
+        #[arg(short, long)]
+        id: String,
+        /// Лимит вывода (дефолт: 50)
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
     /// Установить Git-хуки для автоматического инкрементального сканирования
     HookInstall {
         /// Путь к репозиторию (по умолчанию текущая директория)

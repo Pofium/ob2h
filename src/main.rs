@@ -285,6 +285,12 @@ async fn main() -> anyhow::Result<()> {
                 let report = ctx.db.with_conn(|conn| ob2h::graph::GraphAnalytics::generate_project_report(conn, &id))?;
                 println!("{}", report.markdown_summary);
             }
+            ob2h::cli::ProjectCliCommands::DeadCode { id, limit } => {
+                let dead = ctx
+                    .db
+                    .with_conn(|conn| ob2h::graph::callpath::dead_code(conn, &id))?;
+                println!("{}", ob2h::graph::callpath::format_dead_code(&dead, limit));
+            }
             ob2h::cli::ProjectCliCommands::HookInstall { path, id } => {
                 let target_path = if let Some(p) = path {
                     std::path::PathBuf::from(p)
