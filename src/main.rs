@@ -167,9 +167,9 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Sync { command }) => match command {            SyncCommands::Status => {
                 println!("{}", ctx.sync.status());
             }
-            SyncCommands::Export { peer } => {
-                let path = ctx.sync.export(&peer)?;
-                println!("export: {}", path.display());
+            SyncCommands::Export { peer, full } => {
+                let path = ctx.sync.export_opts(&peer, full)?;
+                println!("export{}: {}", if full { " (full)" } else { "" }, path.display());
             }
             SyncCommands::Import { files } => {
                 if files.is_empty() {
@@ -189,8 +189,8 @@ async fn main() -> anyhow::Result<()> {
                     println!("{}", format_import_stats(&stats));
                 }
             }
-            SyncCommands::Push { peer } => {
-                let path = ctx.sync.push(&peer)?;
+            SyncCommands::Push { peer, full } => {
+                let path = ctx.sync.push_opts(&peer, full)?;
                 println!("push: {} → {peer}", path.display());
             }
             SyncCommands::Pull { peer } => {
@@ -201,6 +201,14 @@ async fn main() -> anyhow::Result<()> {
                 for stats in all {
                     println!("{}", format_import_stats(&stats));
                 }
+            }
+            SyncCommands::Verify { peer } => {
+                let report = ctx.sync.verify(&peer).await?;
+                println!("{report}");
+            }
+            SyncCommands::LocalStats => {
+                let stats = ctx.sync.local_stats()?;
+                println!("{}", serde_json::to_string_pretty(&stats)?);
             }
         },
         Some(Commands::SkillInstall) => {
@@ -273,9 +281,10 @@ fn format_import_stats(stats: &ob2h::sync::ImportStats) -> String {
         return format!("{}: уже применён (no-op)", stats.bundle_id);
     }
     format!(
-        "{}: mem={} node={} edge={} конфликтов_проиграно={} пропусков_ссылок={}",
+        "{}: mem={} node={} edge={} mlink={} конфликтов_проиграно={} в_журнале={} пропусков_ссылок={}",
         stats.bundle_id, stats.memories_applied, stats.nodes_applied, stats.edges_applied,
-        stats.conflicts_lost, stats.skipped_missing_ref
+        stats.links_applied, stats.conflicts_lost, stats.conflicts_journaled,
+        stats.skipped_missing_ref
     )
 }
 

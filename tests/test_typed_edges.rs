@@ -97,9 +97,7 @@ fn edge_count(env: &Env, kind: &str, from_key: &str, to_key: &str) -> i64 {
                  AND to_id = (SELECT id FROM memories WHERE key = ?3)",
                 params![kind, from_key, to_key],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })
+            )})
         .expect("edge count")
 }
 
@@ -127,9 +125,7 @@ async fn contradicted_verdict_creates_contradicts_edge() {
                 "SELECT trust FROM memories WHERE key = 't-old'",
                 [],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })
+            )})
         .expect("trust");
     assert!(old_trust < 0.1, "trust старой записи падает (0.5 - 0.5): {old_trust}");
 }
@@ -228,9 +224,7 @@ async fn forget_soft_deletes_links() {
                 "SELECT deleted_at FROM memory_links WHERE from_id = ?1 AND to_id = ?2",
                 params![new_id, old_id],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })
+            )})
         .expect("deleted_at");
     assert!(deleted.is_some(), "ребро должно получить tombstone (M7)");
 
@@ -253,7 +247,7 @@ async fn conflict_markup_shows_both_sides() {
     settings.data_dir = tmp.path().to_path_buf();
     settings.embed_provider = "fake".to_string();
     let ctx = init_app(settings).expect("init app");
-    let db = ctx.db.clone();
+    let _db = ctx.db.clone();
     let memory = ctx.memory.clone();
     let server = McpServer::new(ctx);
 

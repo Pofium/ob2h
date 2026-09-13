@@ -206,11 +206,14 @@ pub enum ProjectCliCommands {
 pub enum SyncCommands {
     /// Статус: конфиг пирингов, watermark'ы, бандлы в outbox/inbox
     Status,
-    /// Выгрузить бандл изменений для пира в data/sync/outbox/
+    /// Выгрузить бандл изменений для пира в data/sync/outbox/ (Ф34.1: дефолт — дельта)
     Export {
         /// Имя пира из peers.json (watermark ведётся на пира; дефолт: default)
         #[arg(short, long, default_value = "default")]
         peer: String,
+        /// Ф34.1: полный бандл (игнорируя курсор) — ежемесячно/по запросу
+        #[arg(long)]
+        full: bool,
     },
     /// Применить бандл(и) из файлов
     Import {
@@ -223,12 +226,22 @@ pub enum SyncCommands {
     Push {
         #[arg(short, long)]
         peer: String,
+        /// Ф34.1: полный бандл (игнорируя курсор)
+        #[arg(long)]
+        full: bool,
     },
     /// scp бандлов пира в inbox + применение (method=ssh)
     Pull {
         #[arg(short, long)]
         peer: String,
     },
+    /// Ф34.4: сверка с пиром без переноса — counts, trust_avg, контрольные суммы
+    Verify {
+        #[arg(short, long)]
+        peer: String,
+    },
+    /// Ф34.4: статистика этой стороны в JSON (вызывается удалённой стороной по ssh)
+    LocalStats,
 }
 
 #[derive(Subcommand, Debug)]

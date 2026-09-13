@@ -6,6 +6,17 @@
 ## [Не выпущено]
 
 ### Added
+- **Sync v2 (Фаза 34 PLAN_v1.4)**: дельта-экспорт по курсору пира (`sync_state.last_export_at`)
+  + `ob2h sync push --full` — полный бандл; заголовок несёт `version: 2`. В v2-бандл входят
+  `memory_links` (с M7 soft-delete), `trust`, `last_feedback_at` — v1 их не возил; `ralph_*`/
+  `ast_changes` по-прежнему вне (ADR-K6). **Поле-уровневый merge при apply**: `meta` —
+  глубокое объединение (входящие ключи выигрывают), `access_count` — max; конфликт `content`
+  всегда пишется в `sync/conflicts.jsonl` (журнал обоих направлений, дополняет счётчик 25.4),
+  при `OB2H_SYNC_KEEP_LOSERS=1` проигравшая версия сохраняется в `meta.conflict_versions`
+  (StateFuse, §8). v1-бандлы читаются по старой семантике. **`ob2h sync verify [--peer]`** —
+  сверка без переноса: counts, trust_avg, контрольные суммы по `key`+`updated_at` (записи) и
+  `from+to+kind+created_at+deleted_at` (рёбра), отчёт о дрейфе (удалённая сторона — по ssh,
+  новые поля пира `data_dir`/`bin`). +6 тестов (`tests/test_sync_v2.rs`).
 - **Typed edges в dream-ревизии (Фаза 32 PLAN_v1.4, миграция M7 — схема 6→7)**:
   вердикты ревизора становятся рёбрами — `contradicted`+related_key → `contradicts`,
   `outdated`+related_key → `supersedes` (направление от новой записи к старой, upsert

@@ -42,6 +42,12 @@ pub struct PeerConfig {
     pub push_to: Option<String>,
     /// Откуда pull'им чужие бандлы (папка outbox на пире)
     pub pull_from: Option<String>,
+    /// Ф34.4: data_dir пира — для `sync verify` (удалённая сторона считает свои stats)
+    #[serde(default)]
+    pub data_dir: Option<String>,
+    /// Ф34.4: путь к бинарнику ob2h на пире (дефолт: `ob2h` в PATH)
+    #[serde(default)]
+    pub bin: Option<String>,
 }
 
 fn default_method() -> String {
@@ -106,7 +112,11 @@ pub struct ImportStats {
     pub memories_applied: usize,
     pub nodes_applied: usize,
     pub edges_applied: usize,
+    /// Ф34.3: применённые рёбра памяти (тип mlink, v2-бандлы)
+    pub links_applied: usize,
     pub conflicts_lost: usize,
+    /// Ф34.2: content-конфликты, записанные в sync/conflicts.jsonl
+    pub conflicts_journaled: usize,
     pub skipped_missing_ref: usize,
     pub already_applied: bool,
 }
@@ -167,13 +177,21 @@ impl SyncManager {
     // -- Экспорт ---------------------------------------------------------------
 
     /// Выгрузить изменения с прошлого экспорта для пира в outbox/<bundle>.jsonl.gz.
+    /// Ф34.1: курсор = sync_state.last_export_at (по пиру); `full=true` игнорирует
+    /// курсор (полный бандл, ежемесячно/по запросу), watermark после полного
+    /// экспорта двигается как обычно. Заголовок несёт `version: 2` (Ф34.3).
     pub fn export(&self, peer: &str) -> anyhow::Result<PathBuf> {
+        self.export_opts(peer, false)
+    }
+
+    /// Вариант экспорта с флагом полного бандла.
+    pub fn export_opts(&self, peer: &str, full: bool) -> anyhow::Result<PathBuf> {
         if self.node.peers.is_empty() && peer != "default" {
             // позволяем ручной экспорт без конфига пирингов (watermark "default")
         }
         std::fs::create_dir_all(self.outbox())?;
 
-        let watermark: Option<String> = self.db.with_conn(|conn| {
+        let stored: Option<String> = self.db.with_conn(|conn| {
             let mut stmt =
                 conn.prepare("SELECT last_export_at FROM sync_state WHERE peer = ?1")?;
             let mut rows = stmt.query(params![peer])?;
@@ -182,13 +200,16 @@ impl SyncManager {
                 None => None,
             })
         })?;
+        // Ф34.1: полный экспорт — курсор не участвует в отборе строк
+        let watermark: Option<String> = if full { None } else { stored };
 
         let mut rows: Vec<serde_json::Value> = Vec::new();
         let mut max_ts = watermark.clone().unwrap_or_default();
 
-        // memories (embedding конвертируем в hex прямо в SQL — collect_rows не знает blob)
+        // memories (embedding конвертируем в hex прямо в SQL — collect_rows не знает blob).
+        // Ф34.3: в v2-бандл входят trust и last_feedback_at (v1 их не возил).
         self.collect_rows(
-            "SELECT key, content, category, importance, source, meta, hex(embedding) AS embedding, created_at, updated_at, origin, deleted_at, project_id
+            "SELECT key, content, category, importance, source, meta, hex(embedding) AS embedding, created_at, updated_at, origin, deleted_at, project_id, trust, last_feedback_at
              FROM memories WHERE ?1 IS NULL OR MAX(updated_at, COALESCE(deleted_at, '')) >= ?1",
             watermark.as_deref(),
             &mut |v| {
@@ -241,9 +262,23 @@ impl SyncManager {
                 rows.push(v.clone());
             },
         )?;
+        // Ф34.3: memory_links (с M7 soft-delete) — typed edges реплицируются.
+        // Идентичность — (from_key, to_key, kind); дельта по created_at/deleted_at.
+        self.collect_rows(
+            "SELECT fk.key AS from_key, tk.key AS to_key, l.kind, l.weight, l.created_at, l.deleted_at
+             FROM memory_links l
+             JOIN memories fk ON fk.id = l.from_id
+             JOIN memories tk ON tk.id = l.to_id
+             WHERE ?1 IS NULL OR MAX(l.created_at, COALESCE(l.deleted_at, '')) >= ?1",
+            watermark.as_deref(),
+            &mut |v| {
+                v["type"] = json!("mlink");
+                rows.push(v.clone());
+            },
+        )?;
 
         for r in &rows {
-            for key in ["updated_at", "deleted_at"] {
+            for key in ["updated_at", "deleted_at", "created_at"] {
                 if let Some(ts) = r.get(key).and_then(|v| v.as_str()) {
                     if ts > max_ts.as_str() {
                         max_ts = ts.to_string();
@@ -266,12 +301,16 @@ impl SyncManager {
             "origin": self.node.origin,
             "peer": peer,
             "created_at": now,
+            // Ф34.1/34.3: v2 — trust/last_feedback_at у mem, тип mlink, поле-уровневый merge
+            "version": 2,
+            "full": full,
             "from": watermark.clone().unwrap_or_default(),
             "to": max_ts,
             "counts": {
                 "mem": rows.iter().filter(|r| r["type"] == "mem").count(),
                 "node": rows.iter().filter(|r| r["type"] == "node").count(),
                 "edge": rows.iter().filter(|r| r["type"] == "edge").count(),
+                "mlink": rows.iter().filter(|r| r["type"] == "mlink").count(),
             },
         });
 
@@ -366,6 +405,13 @@ impl SyncManager {
             .as_str()
             .context("bundle_id отсутствует")?
             .to_string();
+        // Ф34.1/34.2: версия бандла (v2 — поле-уровневый merge, mlink); v1 читается как раньше.
+        let bundle_version: u8 = header["version"].as_u64().unwrap_or(1).min(2) as u8;
+        // Ф34.2: OB2H_SYNC_KEEP_LOSERS=1 — проигравшая версия content сохраняется
+        // в meta.conflict_versions (идея StateFuse, §8).
+        let keep_losers = std::env::var("OB2H_SYNC_KEEP_LOSERS")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false);
 
         if self.bundle_applied(&bundle_id)? {
             return Ok(ImportStats {
@@ -389,6 +435,9 @@ impl SyncManager {
             .collect::<Result<_, anyhow::Error>>()?;
 
         // Недостающие эмбеддинги досчитываем локальной моделью (та же MiniLM).
+        // Журнал content-конфликтов (Ф34.2) копится в транзакции, пишется после неё.
+        let mut journal: Vec<String> = Vec::new();
+        let bundle_id = stats.bundle_id.clone();
         let mut reembed_mem: Vec<(String, String)> = Vec::new();
         let mut reembed_node: Vec<(String, String)> = Vec::new();
         for l in &lines {
@@ -448,8 +497,9 @@ impl SyncManager {
             "proj" => 0,
             "node" => 1,
             "mem" => 2,
-            "edge" => 3,
-            _ => 4,
+            "mlink" => 3,
+            "edge" => 4,
+            _ => 5,
         });
 
         self.db.with_tx(|tx| {
@@ -457,8 +507,19 @@ impl SyncManager {
             for l in ordered {
                 match l["type"].as_str().unwrap_or("") {
                     "proj" => Self::apply_project(tx, l)?,
-                    "mem" => Self::apply_mem(tx, l, &self.node, &mem_emb, &mut stats)?,
+                    "mem" => Self::apply_mem(
+                        tx,
+                        l,
+                        &self.node,
+                        &mem_emb,
+                        &mut stats,
+                        bundle_version,
+                        keep_losers,
+                        &bundle_id,
+                        &mut journal,
+                    )?,
                     "node" => Self::apply_node(tx, l, &self.node, &node_emb, &mut stats)?,
+                    "mlink" => Self::apply_mlink(tx, l, &mut stats)?,
                     "edge" => Self::apply_edge(tx, l, &self.node, &mut stats)?,
                     other => warn!("sync import: неизвестный тип строки: {other}"),
                 }
@@ -501,6 +562,30 @@ impl SyncManager {
             })?;
         }
 
+        // Ф34.2: журнал content-конфликтов — sync/conflicts.jsonl (append-only).
+        if !journal.is_empty() {
+            let conflicts_path = self.sync_dir().join("conflicts.jsonl");
+            if let Some(parent) = conflicts_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&conflicts_path)
+            {
+                Ok(mut f) => {
+                    use std::io::Write as _;
+                    for line in &journal {
+                        let _ = writeln!(f, "{line}");
+                    }
+                }
+                Err(e) => warn!(
+                    "sync import: журнал конфликтов недоступен ({}): {e}",
+                    conflicts_path.display()
+                ),
+            }
+        }
+
         info!(
             "sync import {}: mem={} node={} edge={} конфликты_проиграны={} пропуск_ссылок={}",
             stats.bundle_id, stats.memories_applied, stats.nodes_applied, stats.edges_applied,
@@ -530,12 +615,17 @@ impl SyncManager {
         node.rank(inc_origin) <= node.rank(ex_origin)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_mem(
         tx: &rusqlite::Transaction,
         l: &serde_json::Value,
         node: &NodeConfig,
         reembed: &HashMap<String, Vec<u8>>,
         stats: &mut ImportStats,
+        bundle_version: u8,
+        keep_losers: bool,
+        bundle_id: &str,
+        journal: &mut Vec<String>,
     ) -> anyhow::Result<()> {
         let key = l["key"].as_str().unwrap_or_default();
         if key.is_empty() {
@@ -550,18 +640,41 @@ impl SyncManager {
         let inc_origin = get_s("origin").unwrap_or_default();
         let deleted = l["deleted_at"].as_str();
         let content_in = get_s("content").unwrap_or_default();
+        let inc_trust = l["trust"].as_f64().unwrap_or(0.5);
+        let inc_feedback = get_s("last_feedback_at");
 
-        /// (updated_at, origin, content, deleted_at) существующей строки memories
-        type MemRow = (String, String, String, Option<String>);
+        /// (updated_at, origin, content, deleted_at, access_count, meta, trust, last_feedback_at)
+        type MemRow = (
+            String,
+            String,
+            String,
+            Option<String>,
+            i64,
+            Option<String>,
+            f64,
+            Option<String>,
+        );
         let existing: Option<MemRow> = tx
             .query_row(
-                "SELECT updated_at, origin, content, deleted_at FROM memories WHERE key = ?1",
+                "SELECT updated_at, origin, content, deleted_at, access_count, meta, trust, last_feedback_at \
+                 FROM memories WHERE key = ?1",
                 params![key],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                    ))
+                },
             )
             .optional()?;
 
-        if let Some((ex_upd, ex_origin, ex_content, ex_deleted)) = &existing {
+        if let Some((ex_upd, ex_origin, ex_content, ex_deleted, _, _, _, _)) = &existing {
             // Идентичная строка (переотправка границы watermark) — no-op без счётчиков.
             if *ex_upd == inc_upd
                 && node.effective_origin(ex_origin) == inc_origin
@@ -572,34 +685,123 @@ impl SyncManager {
             }
         }
 
-        if let Some((ex_upd, ex_origin, _, _)) = existing {
-            if !Self::incoming_wins(node, &inc_upd, &inc_origin, &ex_upd, &ex_origin) {
+        // Ф34.2: журнал content-конфликта — не молча. winner/loser с origin и версией.
+        let journal_conflict = |journal: &mut Vec<String>,
+                                winner_origin: &str,
+                                winner_upd: &str,
+                                winner_content: &str,
+                                loser_origin: &str,
+                                loser_upd: &str,
+                                loser_content: &str| {
+            let line = serde_json::json!({
+                "ts": utcnow(),
+                "bundle_id": bundle_id,
+                "key": key,
+                "field": "content",
+                "winner": {
+                    "origin": winner_origin,
+                    "updated_at": winner_upd,
+                    "content": winner_content,
+                },
+                "loser": {
+                    "origin": loser_origin,
+                    "updated_at": loser_upd,
+                    "content": loser_content,
+                },
+            });
+            journal.push(line.to_string());
+        };
+
+        if let Some((ex_upd, ex_origin, ex_content, _ex_deleted, ex_access, ex_meta, _, _)) =
+            &existing
+        {
+            if !Self::incoming_wins(node, &inc_upd, &inc_origin, ex_upd, ex_origin) {
                 stats.conflicts_lost += 1;
+                // Ф34.2: content-конфликт журналируется всегда (обе стороны)
+                if bundle_version >= 2 && *ex_content != content_in {
+                    journal_conflict(
+                        journal,
+                        &node.effective_origin(ex_origin),
+                        ex_upd,
+                        ex_content,
+                        &inc_origin,
+                        &inc_upd,
+                        &content_in,
+                    );
+                    stats.conflicts_journaled += 1;
+                }
                 return Ok(());
             }
+
+            let content_conflict = *ex_content != content_in;
+            if content_conflict {
+                stats.conflicts_lost += 1;
+                // Ф34.2: конфликт content пишется в журнал в ОБОИХ направлениях
+                // (здесь выигрывает входящая сторона).
+                if bundle_version >= 2 {
+                    journal_conflict(
+                        journal,
+                        &inc_origin,
+                        &inc_upd,
+                        &content_in,
+                        ex_origin,
+                        ex_upd,
+                        ex_content,
+                    );
+                    stats.conflicts_journaled += 1;
+                }
+            }
+
+            // Ф34.2: v2 — meta глубокое объединение (входящие ключи выигрывают),
+            // access_count = max; при keep_losers проигравший content — в meta.conflict_versions.
+            let (meta_out, access_out) = if bundle_version >= 2 {
+                let conflict_version = if keep_losers && content_conflict {
+                    Some(serde_json::json!({
+                        "origin": node.effective_origin(ex_origin),
+                        "updated_at": ex_upd,
+                        "content": ex_content,
+                    }))
+                } else {
+                    None
+                };
+                (
+                    Some(Self::merge_meta_v2(
+                        ex_meta.clone(),
+                        get_s("meta").as_deref(),
+                        conflict_version,
+                    )),
+                    (*ex_access).max(l["access_count"].as_i64().unwrap_or(0)),
+                )
+            } else {
+                (get_s("meta"), l["access_count"].as_i64().unwrap_or(0))
+            };
             tx.execute(
                 "UPDATE memories SET content=?1, category=?2, importance=?3, source=?4,
                  meta=?5, embedding=?6, updated_at=?7, origin=?8, deleted_at=?9,
-                 project_id=COALESCE(?10, project_id) WHERE key=?11",
+                 project_id=COALESCE(?10, project_id), access_count=?11, trust=?12,
+                 last_feedback_at=?13 WHERE key=?14",
                 params![
                     content_in,
                     get_s("category").unwrap_or_else(|| "general".into()),
                     l["importance"].as_f64().unwrap_or(0.5),
                     get_s("source").unwrap_or_else(|| "sync".into()),
-                    get_s("meta"),
+                    meta_out,
                     embedding,
                     inc_upd,
                     inc_origin,
                     deleted,
                     get_s("project_id"),
+                    access_out,
+                    inc_trust,
+                    inc_feedback,
                     key,
                 ],
             )?;
         } else {
             tx.execute(
                 "INSERT INTO memories (key, content, category, importance, source, meta, embedding,
-                 created_at, updated_at, origin, deleted_at, project_id)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+                 created_at, updated_at, origin, deleted_at, project_id, trust, last_feedback_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
                 params![
                     key,
                     content_in,
@@ -613,10 +815,131 @@ impl SyncManager {
                     inc_origin,
                     deleted,
                     get_s("project_id"),
+                    inc_trust,
+                    inc_feedback,
                 ],
             )?;
         }
         stats.memories_applied += 1;
+        Ok(())
+    }
+
+    /// Ф34.2: глубокое объединение meta (входящие ключи выигрывают — LWW по значению);
+    /// при keep_losers проигравшая версия content попадает в meta.conflict_versions
+    /// (последние 5 — защита от роста).
+    fn merge_meta_v2(
+        ex_meta: Option<String>,
+        inc_meta: Option<&str>,
+        conflict_version: Option<serde_json::Value>,
+    ) -> String {
+        let mut base: serde_json::Value = ex_meta
+            .as_deref()
+            .and_then(|m| serde_json::from_str(m).ok())
+            .unwrap_or(serde_json::json!({}));
+        if let Some(inc) = inc_meta {
+            if let Ok(inc_v) = serde_json::from_str::<serde_json::Value>(inc) {
+                if let (Some(b), Some(i)) = (base.as_object_mut(), inc_v.as_object()) {
+                    for (k, v) in i {
+                        b.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+        }
+        if let Some(cv) = conflict_version {
+            if let Some(b) = base.as_object_mut() {
+                let mut list: Vec<serde_json::Value> = b
+                    .get("conflict_versions")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default();
+                list.push(cv);
+                let start = list.len().saturating_sub(5);
+                b.insert(
+                    "conflict_versions".to_string(),
+                    serde_json::Value::Array(list[start..].to_vec()),
+                );
+            }
+        }
+        base.to_string()
+    }
+
+    /// Ф34.3: ребро памяти (mlink) — идентичность (from_key, to_key, kind),
+    /// LWW по MAX(created_at, deleted_at), upsert с оживлением (M7).
+    fn apply_mlink(
+        tx: &rusqlite::Transaction,
+        l: &serde_json::Value,
+        stats: &mut ImportStats,
+    ) -> anyhow::Result<()> {
+        let from_key = l["from_key"].as_str().unwrap_or_default();
+        let to_key = l["to_key"].as_str().unwrap_or_default();
+        let kind = l["kind"].as_str().unwrap_or_default();
+        if from_key.is_empty() || to_key.is_empty() || kind.is_empty() {
+            bail!("строка mlink без from_key/to_key/kind");
+        }
+        let resolve = |key: &str| -> anyhow::Result<Option<i64>> {
+            let id: Option<i64> = tx
+                .query_row("SELECT id FROM memories WHERE key = ?1", params![key], |r| {
+                    r.get(0)
+                })
+                .map(Some)
+                .or_else(|e| {
+                    if e == rusqlite::Error::QueryReturnedNoRows {
+                        Ok(None)
+                    } else {
+                        Err(e)
+                    }
+                })?;
+            Ok(id)
+        };
+        let (Some(from_id), Some(to_id)) = (resolve(from_key)?, resolve(to_key)?) else {
+            stats.skipped_missing_ref += 1;
+            return Ok(());
+        };
+        if from_id == to_id {
+            return Ok(());
+        }
+        let inc_created = l["created_at"].as_str().unwrap_or_default();
+        let inc_deleted = l["deleted_at"].as_str();
+        let weight = l["weight"].as_f64().unwrap_or(1.0);
+
+        let existing: Option<(String, Option<String>)> = tx
+            .query_row(
+                "SELECT created_at, deleted_at FROM memory_links \
+                 WHERE from_id = ?1 AND to_id = ?2 AND kind = ?3",
+                params![from_id, to_id, kind],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+
+        if let Some((ex_created, ex_deleted)) = &existing {
+            if *ex_created == inc_created && ex_deleted.as_deref() == inc_deleted {
+                return Ok(()); // идентично — no-op
+            }
+            // LWW по «времени состояния»: удаление/создание — что новее.
+            let inc_state = inc_deleted.unwrap_or(inc_created);
+            let ex_state = ex_deleted.as_deref().unwrap_or(ex_created);
+            if inc_state <= ex_state {
+                stats.conflicts_lost += 1;
+                return Ok(());
+            }
+        }
+
+        if inc_deleted.is_some() {
+            tx.execute(
+                "UPDATE memory_links SET deleted_at = ?4 \
+                 WHERE from_id = ?1 AND to_id = ?2 AND kind = ?3 AND deleted_at IS NULL",
+                params![from_id, to_id, kind, inc_deleted],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT INTO memory_links (from_id, to_id, kind, weight, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(from_id, to_id, kind) DO UPDATE SET \
+                 deleted_at = NULL, weight = excluded.weight",
+                params![from_id, to_id, kind, weight, inc_created],
+            )?;
+        }
+        stats.links_applied += 1;
         Ok(())
     }
 
@@ -890,6 +1213,11 @@ impl SyncManager {
 
     /// export + копирование бандла на пир (ssh).
     pub fn push(&self, peer_name: &str) -> anyhow::Result<PathBuf> {
+        self.push_opts(peer_name, false)
+    }
+
+    /// push с флагом полного бандла (Ф34.1).
+    pub fn push_opts(&self, peer_name: &str, full: bool) -> anyhow::Result<PathBuf> {
         let peer = self
             .node
             .peers
@@ -898,7 +1226,7 @@ impl SyncManager {
         if peer.method != "ssh" {
             bail!("пир '{peer_name}' method={} — push вручную из outbox", peer.method);
         }
-        let bundle = self.export(peer_name)?;
+        let bundle = self.export_opts(peer_name, full)?;
         let host = peer.host.as_deref().context("peers.json: host не задан")?;
         let remote = peer.push_to.as_deref().context("peers.json: push_to не задан")?;
         let remote_path = format!("{host}:{remote}/");
@@ -948,6 +1276,160 @@ impl SyncManager {
             }
         }
         Ok(())
+    }
+
+    /// Ф34.4: статистика этой стороны для `sync verify` (JSON).
+    /// Контрольные суммы — детерминированные агрегаты по key+updated_at (записи)
+    /// и from_key+to_key+kind+created_at+deleted_at (рёбра), без чтения контента.
+    pub fn local_stats(&self) -> anyhow::Result<serde_json::Value> {
+        use sha2::{Digest, Sha256};
+        self.db.with_conn(|conn| {
+            let (mem_total, mem_alive): (i64, i64) = conn.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(deleted_at IS NULL), 0) FROM memories",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let trust_avg: f64 = conn
+                .query_row(
+                    "SELECT COALESCE(AVG(trust), 0) FROM memories WHERE deleted_at IS NULL",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0.0);
+            let (links_alive, links_deleted): (i64, i64) = conn.query_row(
+                "SELECT COALESCE(SUM(deleted_at IS NULL), 0), COALESCE(SUM(deleted_at IS NOT NULL), 0) \
+                 FROM memory_links",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            // контрольные суммы: порядок строк не важен — XOR по u64 из sha256
+            let mut mem_sum: u64 = 0;
+            let rows = {
+                let mut stmt = conn.prepare("SELECT key, updated_at FROM memories")?;
+                let it = stmt.query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })?;
+                it.flatten().collect::<Vec<_>>()
+            };
+            for (key, upd) in rows {
+                let h = Sha256::digest(format!("{key}|{upd}").as_bytes());
+                let v = u64::from_le_bytes([
+                    h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
+                ]);
+                mem_sum ^= v;
+            }
+            let mut links_sum: u64 = 0;
+            let lrows = {
+                let mut stmt = conn.prepare(
+                    "SELECT fk.key, tk.key, l.kind, l.created_at, l.deleted_at \
+                     FROM memory_links l \
+                     JOIN memories fk ON fk.id = l.from_id \
+                     JOIN memories tk ON tk.id = l.to_id",
+                )?;
+                let it = stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                    ))
+                })?;
+                it.flatten().collect::<Vec<_>>()
+            };
+            for (fk, tk, kind, created, deleted) in lrows {
+                let h = Sha256::digest(format!("{fk}|{tk}|{kind}|{created}|{deleted:?}").as_bytes());
+                links_sum ^= u64::from_le_bytes([
+                    h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
+                ]);
+            }
+            Ok(json!({
+                "memories_total": mem_total,
+                "memories_alive": mem_alive,
+                "trust_avg": (trust_avg * 1000.0).round() / 1000.0,
+                "links_alive": links_alive,
+                "links_deleted": links_deleted,
+                "mem_checksum": format!("{mem_sum:016x}"),
+                "links_checksum": format!("{links_sum:016x}"),
+            }))
+        })
+    }
+
+    /// Ф34.4: сверка локальной стороны с пиром (ssh, без переноса данных).
+    pub async fn verify(&self, peer_name: &str) -> anyhow::Result<String> {
+        let local = self.local_stats()?;
+        let peer = self
+            .node
+            .peers
+            .get(peer_name)
+            .with_context(|| format!("пир '{peer_name}' не найден в peers.json"))?;
+        let host = peer.host.as_deref().context("peers.json: host не задан")?;
+        let data_dir = peer
+            .data_dir
+            .as_deref()
+            .context("peers.json: data_dir пира не задан (нужен для verify)")?;
+        let bin = peer.bin.as_deref().unwrap_or("ob2h");
+        let remote_cmd = format!("OB2H_DATA_DIR={data_dir} {bin} sync local-stats");
+        let mut cmd = Command::new("ssh");
+        if let Some(p) = peer.ssh_port.as_deref() {
+            cmd.arg("-p").arg(p);
+        }
+        cmd.arg("-o").arg("ConnectTimeout=10");
+        cmd.arg(host).arg(&remote_cmd);
+        let out = cmd
+            .output()
+            .context("запуск ssh (OpenSSH-клиент установлен?)")?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "ssh к {host} завершился с {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        let remote: serde_json::Value =
+            serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim())
+                .context("удалённая сторона вернула не JSON (нужен ob2h с sync local-stats)")?;
+        Ok(Self::compare_stats(&local, &remote))
+    }
+
+    /// Ф34.4: сравнение двух статистик — отчёт о дрейфе (человекочитаемый).
+    pub fn compare_stats(local: &serde_json::Value, remote: &serde_json::Value) -> String {
+        let get = |v: &serde_json::Value, k: &str| v.get(k).cloned().unwrap_or(json!(null));
+        let mut lines = Vec::new();
+        let field = |name: &str, a: &serde_json::Value, b: &serde_json::Value| {
+            let ok = a == b;
+            let mark = if ok { "OK" } else { "ДРЕЙФ" };
+            format!("{mark}: {name} local={a} remote={b}")
+        };
+        for name in [
+            "memories_total",
+            "memories_alive",
+            "links_alive",
+            "links_deleted",
+            "mem_checksum",
+            "links_checksum",
+        ] {
+            lines.push(field(name, &get(local, name), &get(remote, name)));
+        }
+        let (lt, rt) = (
+            get(local, "trust_avg").as_f64().unwrap_or(0.0),
+            get(remote, "trust_avg").as_f64().unwrap_or(0.0),
+        );
+        let trust_ok = (lt - rt).abs() < 0.001;
+        lines.push(format!(
+            "{}: trust_avg local={lt:.3} remote={rt:.3}",
+            if trust_ok { "OK" } else { "ДРЕЙФ" }
+        ));
+        let drift = lines.iter().any(|l| l.starts_with("ДРЕЙФ"));
+        lines.insert(
+            0,
+            if drift {
+                "СИНК: обнаружен дрейф между сторонами".to_string()
+            } else {
+                "СИНК: стороны согласованы".to_string()
+            },
+        );
+        lines.join("\n")
     }
 
     /// Человекочитаемый статус.

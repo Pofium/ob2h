@@ -259,20 +259,20 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 Цель: обмен PC↔VPS — только изменённое; конфликты — по полям, с журналом, без молчаливого LWW.
 
-- [ ] **34.1** Дельта-экспорт: курсор `sync_cursor:<peer>`, бандл v2 — только изменённые/
+- [x] **34.1** Дельта-экспорт: курсор `sync_cursor:<peer>`, бандл v2 — только изменённые/
   новые строки; `ob2h sync push --full` — полный (ежемесячно/по запросу); дефолт — дельта.
-- [ ] **34.2** Поле-уровневый merge при apply: `content/importance/category/trust` — LWW по
+- [x] **34.2** Поле-уровневый merge при apply: `content/importance/category/trust` — LWW по
   `updated_at`, но **не молча**: конфликт content всегда пишется в `sync/conflicts.jsonl`
   (дополняет счётчик 25.4); при флаге `OB2H_SYNC_KEEP_LOSERS=1` проигравшая версия
   сохраняется в `meta.conflict_versions` (идея StateFuse, §8) — видно, что именно
   «победил VPS». `meta` — глубокое объединение (union ключей, LWW по значению);
   `access_count` — max.
-- [ ] **34.3** В v2-бандл входят `memory_links` (с M7 soft-delete), `trust`, `last_feedback_at`,
+- [x] **34.3** В v2-бандл входят `memory_links` (с M7 soft-delete), `trust`, `last_feedback_at`,
   feedback-журнал из `meta` (v1 их не возил). `ralph_*`/`ast_changes` — по-прежнему вне
   (ADR-K6).
-- [ ] **34.4** `ob2h sync verify [--peer vps]` — сверка без переноса: counts (memories,
+- [x] **34.4** `ob2h sync verify [--peer vps]` — сверка без переноса: counts (memories,
   links), trust_avg, контрольные суммы по `key`+`updated_at` с обеих сторон, отчёт о дрейфе.
-- [ ] **Тесты:** дельта после N правок переносит ровно N строк; round-trip PC→VPS→PC
+- [x] **Тесты:** дельта после N правок переносит ровно N строк; round-trip PC→VPS→PC
   с trust/links — без потерь; конфликт content при флаге — проигравшая версия в
   `meta.conflict_versions`; v1-бандл читается; verify детектит искусственный дрейф;
   ralph-таблицы в бандл не попадают.
