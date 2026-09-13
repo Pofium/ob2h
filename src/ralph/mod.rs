@@ -383,6 +383,43 @@ impl RalphService {
         Ok(id)
     }
 
+    /// Ф28.1: stale-findings для dream-ревизии (до limit, глобально).
+    pub fn stale_findings(
+        &self,
+        limit: usize,
+    ) -> anyhow::Result<Vec<(String, String, String, String)>> {
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, COALESCE(project_id,''), content, symbols FROM ralph_findings \
+                 WHERE verdict = 'stale' ORDER BY stale_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![limit as i64], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })?;
+            Ok(rows.flatten().collect())
+        })
+    }
+
+    /// Ф28.3 (FR-K12): verified-findings проекта — кандидаты в долговременную память.
+    pub fn verified_findings(&self, project_id: &str) -> anyhow::Result<Vec<(String, String)>> {
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT content, symbols FROM ralph_findings \
+                 WHERE project_id = ?1 AND verdict = 'verified' \
+                 ORDER BY created_at DESC LIMIT 100",
+            )?;
+            let rows = stmt.query_map(params![project_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
+            Ok(rows.flatten().collect())
+        })
+    }
+
     /// ralph_verdict: смена вердикта итерации или finding'а (человек/дрим/агент).
     pub fn set_verdict(
         &self,

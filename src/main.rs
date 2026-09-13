@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Some(Commands::Doctor { fix }) => {
-            let doctor = ob2h::cli::Doctor::new(ctx.settings.clone(), fix);
+            let doctor = ob2h::cli::Doctor::new(ctx.settings.clone(), fix).with_db(ctx.db.clone());
             doctor.run()?;
         }
         Some(Commands::Dream { command }) => match command {
@@ -118,6 +118,33 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 ob2h::cli::dedup::print_report(&pairs, dry_run);
+            }
+        },
+        Some(Commands::Ralph { command }) => match command {
+            ob2h::cli::RalphCommands::FindingsToMemory { project, dry_run } => {
+                // FR-K12: verified-findings циклов → долговременная память
+                let findings = ctx.ralph.verified_findings(&project)?;
+                println!("verified-findings проекта '{project}': {}", findings.len());
+                if dry_run {
+                    for (content, symbols) in &findings {
+                        println!("- {content} {symbols}");
+                    }
+                    println!("dry-run: ничего не сохранено");
+                } else {
+                    let mut saved = 0usize;
+                    for (content, symbols) in &findings {
+                        let meta = format!(r#"{{"symbols":{symbols},"origin":"ralph"}}"#);
+                        if ctx
+                            .memory
+                            .save(content, None, "ralph", 0.7, "dream", Some(&meta))
+                            .await
+                            .is_ok()
+                        {
+                            saved += 1;
+                        }
+                    }
+                    println!("перенесено в память: {saved}/{}", findings.len());
+                }
             }
         },
         Some(Commands::Stats) => {

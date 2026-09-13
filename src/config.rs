@@ -37,6 +37,7 @@ pub struct Settings {
     pub dream_batch: usize,
     pub dream_extract_enabled: bool,
     pub dream_memory_revision: bool,
+    pub dream_ralph_revision: bool,
 
     // --- Ф30: ночной bench-гейт дрима ---
     /// Гейт выключен по умолчанию — до набора статистики (Ф30.3).
@@ -152,6 +153,10 @@ impl Settings {
         let dream_memory_revision = env::var("OB2H_DREAM_MEMORY_REVISION")
             .map(|v| v != "0" && v.to_lowercase() != "false")
             .unwrap_or(true);
+        // Ф28.1 (FR-K7): dream-ревизия stale-findings Ralph по свежему контексту.
+        let dream_ralph_revision = env::var("OB2H_DREAM_RALPH")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
 
         // Ф30: ночной bench-гейт дрима (дефолт off до набора статистики).
         let bench_gate_enabled = env::var("OB2H_BENCH_GATE")
@@ -236,6 +241,7 @@ impl Settings {
             dream_batch,
             dream_extract_enabled,
             dream_memory_revision,
+            dream_ralph_revision,
             bench_gate_enabled,
             bench_gate_timeout_ms,
             ppr_weights,

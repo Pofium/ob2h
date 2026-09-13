@@ -40,11 +40,18 @@ impl DoctorStatus {
 pub struct Doctor {
     settings: Settings,
     fix: bool,
+    db: Option<crate::db::Database>,
 }
 
 impl Doctor {
     pub fn new(settings: Settings, fix: bool) -> Self {
-        Self { settings, fix }
+        Self { settings, fix, db: None }
+    }
+
+    /// С доступом к БД: добавляет проверки Ralph (сироты-раны) и счётчиков.
+    pub fn with_db(mut self, db: crate::db::Database) -> Self {
+        self.db = Some(db);
+        self
     }
 
     pub fn run(&self) -> anyhow::Result<Vec<DoctorItem>> {
@@ -65,6 +72,30 @@ impl Doctor {
 
         // 3. Проверка векторной подсистемы
         self.check_embeddings(&mut results);
+
+        // 3.5 Ф28.3: Ralph — сироты-раны (applying/verifying без движения > 7 дней)
+        if let Some(ref db) = self.db {
+            let orphans: i64 = db
+                .with_conn(|conn| {
+                    let v: i64 = conn.query_row(
+                        "SELECT count(*) FROM ralph_runs WHERE status IN ('applying','verifying') \
+                         AND updated_at < datetime('now', '-7 days')",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                    Ok(v)
+                })
+                .unwrap_or(0);
+            results.push(DoctorItem {
+                category: "Ralph (циклы разработки)".to_string(),
+                name: "Активные ralph-раны (сироты >7 дней)".to_string(),
+                status: if orphans > 0 { DoctorStatus::Warn } else { DoctorStatus::Ok },
+                details: format!(
+                    "сироты: {orphans}; закрыть: ralph_verdict / статус archived через SQL"
+                ),
+            });
+        }
 
         // 4. Проверка подключения AI-агентов
         self.check_agents(&mut results);

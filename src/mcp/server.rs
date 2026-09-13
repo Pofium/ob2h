@@ -1159,12 +1159,17 @@ impl McpServer {
                     let gn: i64 = conn.query_row("SELECT count(*) FROM graph_nodes", [], |r| r.get(0)).unwrap_or(0);
                     let ge: i64 = conn.query_row("SELECT count(*) FROM graph_edges", [], |r| r.get(0)).unwrap_or(0);
                     let dr: i64 = conn.query_row("SELECT count(*) FROM dream_runs", [], |r| r.get(0)).unwrap_or(0);
-                    Ok((m, r, d, c, gn, ge, dr))
+                    // Ф28.3: блок Ralph
+                    let rr: i64 = conn.query_row("SELECT count(*) FROM ralph_runs", [], |r| r.get(0)).unwrap_or(0);
+                    let ri: i64 = conn.query_row("SELECT count(*) FROM ralph_iterations", [], |r| r.get(0)).unwrap_or(0);
+                    let rf: i64 = conn.query_row("SELECT count(*) FROM ralph_findings", [], |r| r.get(0)).unwrap_or(0);
+                    Ok((m, r, d, c, gn, ge, dr, rr, ri, rf))
                 }).unwrap_or_default();
 
                 format!(
-                    "memories={} relations={} documents={} chunks={} graph_nodes={} graph_edges={} dream_runs={} db={}KB backend={}",
-                    counts.0, counts.1, counts.2, counts.3, counts.4, counts.5, counts.6, db_size / 1024, backend
+                    "memories={} relations={} documents={} chunks={} graph_nodes={} graph_edges={} dream_runs={} db={}KB backend={} ralph: runs={} iters={} findings={}",
+                    counts.0, counts.1, counts.2, counts.3, counts.4, counts.5, counts.6, db_size / 1024, backend,
+                    counts.7, counts.8, counts.9
                 )
             }
             "omnes_backup" => match self.ctx.backup.create() {

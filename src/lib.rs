@@ -52,6 +52,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
     let pending_session = Arc::new(Mutex::new(PendingSession::new()));
     let graph = Arc::new(GraphService::new(db.clone(), embedder.clone()));
     let project = Arc::new(ProjectService::new_with_embedder(db.conn_arc(), Some(embedder.clone())));
+    let ralph = Arc::new(RalphService::new(db.clone(), project.clone(), settings.data_dir.clone()));
     let dream = Arc::new(Dream::new(
         workspace.clone(),
         gitstore.clone(),
@@ -60,6 +61,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         db.clone(),
         Some(graph.clone()),
         Some(memory.clone()),
+        Some(ralph.clone()),
     ));
     let backup = Arc::new(BackupManager::new(settings.clone(), db.clone()));
     let sync = Arc::new(SyncManager::new(
@@ -68,7 +70,6 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         embedder.clone(),
         backup.clone(),
     ));
-    let ralph = Arc::new(RalphService::new(db.clone(), project.clone(), settings.data_dir.clone()));
     let dream_lock = Arc::new(Mutex::new(()));
     let active_workspace = Arc::new(tokio::sync::RwLock::new(None));
     let active_project_id = Arc::new(tokio::sync::RwLock::new(None));

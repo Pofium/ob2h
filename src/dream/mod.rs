@@ -62,6 +62,8 @@ pub struct DreamStats {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_revision: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ralph_revision: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bench_gate: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub consolidation: Option<serde_json::Value>,
@@ -87,6 +89,12 @@ struct RevisionVerdict {
     verdict: String,
 }
 
+#[derive(Deserialize)]
+struct RalphRevisionVerdict {
+    id: String,
+    verdict: String,
+}
+
 pub struct Dream {
     workspace: Arc<Workspace>,
     gitstore: Arc<GitStore>,
@@ -95,9 +103,11 @@ pub struct Dream {
     db: Database,
     graph: Option<Arc<GraphService>>,
     memory: Option<Arc<crate::memory::MemoryService>>,
+    ralph: Option<Arc<crate::ralph::RalphService>>,
 }
 
 impl Dream {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         workspace: Arc<Workspace>,
         gitstore: Arc<GitStore>,
@@ -106,6 +116,7 @@ impl Dream {
         db: Database,
         graph: Option<Arc<GraphService>>,
         memory: Option<Arc<crate::memory::MemoryService>>,
+        ralph: Option<Arc<crate::ralph::RalphService>>,
     ) -> Self {
         Self {
             workspace,
@@ -115,6 +126,7 @@ impl Dream {
             db,
             graph,
             memory,
+            ralph,
         }
     }
 
@@ -144,6 +156,7 @@ impl Dream {
                     graph_entities: None,
                     graph_edges: None,
                     memory_revision: None,
+                    ralph_revision: None,
                     bench_gate: None,
                     consolidation: None,
                     note: None,
@@ -182,6 +195,7 @@ impl Dream {
                 graph_entities: None,
                 graph_edges: None,
                 memory_revision: None,
+                ralph_revision: None,
                 bench_gate: None,
                 consolidation: None,
                 note: Some("нет новых записей с прошлого дрима".to_string()),
@@ -219,12 +233,18 @@ impl Dream {
             }
         };
 
+        // Ф28.1 (FR-K7): ревизия stale-findings Ralph по свежему контексту
+        let ralph_revision = self.revise_ralph_findings().await.unwrap_or_else(|e| {
+            warn!("Dream-ревизия Ralph не удалась: {e}");
+            Vec::new()
+        });
+
         let new_cursor = new_records.iter().map(|r| r.cursor).max().unwrap_or(dream_cursor);
         self.workspace.set_dream_cursor(new_cursor)?;
         let _ = self.workspace.compact_history(1000);
 
         let now_str = Utc::now().format("%Y-%m-%d %H:%M").to_string();
-        let commit_msg = if revisions.is_empty() {
+        let mut commit_msg = if revisions.is_empty() {
             format!("dream: {now_str} (+{} правок)", edits.len())
         } else {
             format!(
@@ -233,6 +253,9 @@ impl Dream {
                 revisions.len()
             )
         };
+        if !ralph_revision.is_empty() {
+            commit_msg.push_str(&format!(" + {} ревизий ralph", ralph_revision.len()));
+        }
         let commit = self.gitstore.auto_commit(&commit_msg);
 
         Ok(DreamStats {
@@ -244,6 +267,7 @@ impl Dream {
             graph_entities: Some(graph_entities),
             graph_edges: Some(graph_edges),
             memory_revision: if revisions.is_empty() { None } else { Some(revisions) },
+            ralph_revision: if ralph_revision.is_empty() { None } else { Some(ralph_revision) },
             bench_gate: None,
             consolidation,
             note: None,
@@ -446,6 +470,56 @@ impl Dream {
             )?;
             Ok(())
         })
+    }
+
+    /// Ф28.1 (FR-K7): ревизия stale-findings Ralph — LLM по свежей истории решает,
+    /// подтвердилось ли знание (verified, source=dream) или остаётся устаревшим.
+    async fn revise_ralph_findings(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        if !self.settings.dream_ralph_revision {
+            return Ok(Vec::new());
+        }
+        let Some(ref ralph) = self.ralph else {
+            return Ok(Vec::new());
+        };
+        let stale = ralph.stale_findings(10)?;
+        if stale.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let list = stale
+            .iter()
+            .map(|(id, project, content, symbols)| {
+                let head: String = content.chars().take(200).collect();
+                format!("- id={id} project={project} symbols={symbols}: {head}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = format!(
+            "Знания, помеченные устаревшими после изменений кода:\n{list}\n\n\
+             Свежая история диалога могла их подтвердить. Для каждой записи верни JSON-массив \
+             {{\"id\": \"...\", \"verdict\": \"reverified|stays_stale\"}}: reverified — знание \
+             снова верно; stays_stale — остаётся устаревшим."
+        );
+        let verdicts: Vec<RalphRevisionVerdict> = self
+            .llm
+            .ask_json(&prompt, Some(REVISION_SYSTEM))
+            .await
+            .unwrap_or_default();
+
+        let mut applied = Vec::new();
+        for v in verdicts {
+            if v.verdict == "reverified" {
+                if ralph
+                    .set_verdict(Some(&v.id), None, "verified", "dream")
+                    .is_ok()
+                {
+                    applied.push(serde_json::json!({ "finding": v.id, "verdict": "verified (dream)" }));
+                }
+            } else if v.verdict == "stays_stale" {
+                applied.push(serde_json::json!({ "finding": v.id, "verdict": "stale (подтверждено дримом)" }));
+            }
+        }
+        Ok(applied)
     }
 
     pub fn last_status(&self) -> anyhow::Result<Option<serde_json::Value>> {

@@ -243,3 +243,11 @@ CREATE TABLE sync_state (
 `origin=''` означает «строка создана/изменена этим узлом» — при экспорте
 нормализуется в `origin` из peers.json. Локальная правка импортированной строки
 сбрасывает `origin` обратно в `''`.
+
+## Ralph: таблицы вне бандлов (v1.3)
+
+`ralph_runs`, `ralph_iterations`, `ralph_findings`, `ast_changes` (миграция M6)
+в синк-бандлы **не включаются** (ADR-K6): это локальная история циклов разработки,
+как workspace/daily. Знания переносятся явно: `ob2h ralph findings-to-memory
+--project <id>` конвертирует verified-findings в `memories` (category=ralph),
+а дальше они едут обычными бандлами.

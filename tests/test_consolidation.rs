@@ -41,6 +41,7 @@ fn setup() -> (tempfile::TempDir, Env) {
         db.clone(),
         None,
         Some(memory.clone()),
+        None,
     );
     (tmp, Env { dream, memory, db, llm })
 }

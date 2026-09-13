@@ -77,6 +77,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: ProjectCliCommands,
     },
+    /// Ralph Knowledge Layer: циклы разработки (Фазы 26–28)
+    Ralph {
+        #[command(subcommand)]
+        command: RalphCommands,
+    },
     /// Регрессионный bench retrieval: golden set, recall@k, MRR, латентность (Фаза 21)
     Bench {
         /// Подкоманда (напр. history — тренд ночных прогонов, Ф30)
@@ -97,6 +102,19 @@ pub enum Commands {
         /// Сохранить агрегаты как baseline в docs/bench_baseline.md
         #[arg(long)]
         save_baseline: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RalphCommands {
+    /// Перенести verified-findings проекта в долговременную память (FR-K12)
+    FindingsToMemory {
+        /// Идентификатор проекта
+        #[arg(short, long)]
+        project: String,
+        /// Только показать, что будет перенесено
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

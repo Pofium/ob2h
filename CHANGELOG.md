@@ -6,6 +6,30 @@
 ## [Не выпущено]
 
 ### Added
+- **Ralph Knowledge Layer — ядро и окружение (Фазы 26–28 PLAN_v1.3, миграция M6 → схема v7)**:
+  таблицы `ralph_runs`/`ralph_iterations`/`ralph_findings`/`ast_changes` (аддитивно,
+  graph_nodes не пересоздавался — confidence сохранена, тест схемы). MCP-инструменты
+  **№27–33**: `ralph_start`, `ralph_iteration` (авто-вердикт только по `tests_summary`
+  — ADR-K4; идемпотентность по (run, task, n); AST-рескан с symbol-level дельтой;
+  findings-маркеры Ponytail), `ralph_verdict`, `ralph_context` (спека → негативный
+  опыт → reuse-кандидаты из AST → инварианты → god nodes; lite/full; выгрузка на диск
+  + context_ref), `ralph_report` (debt-леджер, gain: reuse-hit rate), `ast_diff`,
+  `ast_history`. Staleness-pass: изменённые символы → findings `stale` (повторно не
+  перемечаются). CLI `ob2h ralph findings-to-memory --project <id> [--dry-run]` (FR-K12);
+  doctor — сироты-раны; `omnes_stats` — блок ralph. Dream-фаза 3 (FR-K7): ревизия
+  stale-findings LLM по свежей истории (reverified → verified source=dream; флаг
+  `OB2H_DREAM_RALPH`, дефолт on; сводка в dream_runs.stats и коммит-сообщении).
+  Скилл `skills/ralph-loop/SKILL.md` (лестница минимальности, red tests ≠ готово).
+  `ralph_*`/`ast_changes` вне синк-бандлов (ADR-K6) — см. SYNC.md.
+- **Надёжность и мультиагентность (Фаза 25 PLAN_v1.3)**: громкий FakeEmbedding —
+  runtime-бэкенд в `omnes_stats` (`backend=fake|local_bert|api`), `[warn]` в выдаче
+  `memory_search` при деградации, `ob2h doctor` — реальная канареечная проверка
+  (загрузка модели + embed, красный статус при fallback). Мультиагентность:
+  плагин `sync_turn(turn_author=..., **kwargs)` — автор хода в `meta.author`
+  daily-записей; `memory_context`/`session_log`/`session_ingest` + опциональный
+  `author` (записи с чужим meta.author исключаются из prefetch-блока). `sync status` —
+  накопленный счётчик проигранных LWW-конфликтов. 25.3 (реранкер) отложена —
+  ort-зависимость требует отдельного решения (ADR-14 §8).
 - **PPR по памяти / движок Personalized PageRank (Фаза 33 PLAN_v1.4 + 29.1 v1.3)**:
   новый `src/graph/pagerank.rs` — generic итеративный PPR без новых зависимостей
   (damping клампится 0.5–0.85, ≤20 итераций, сходимость по L1, degree-normalization
