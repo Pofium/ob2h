@@ -13,7 +13,14 @@ use serde::Serialize;
 pub const USAGE_EDGE_LABELS: &[&str] = &["CALLS", "IMPORTS", "IMPLEMENTS", "DEPENDS_ON"];
 
 /// Типы узлов, которые вообще могут быть «символами» для dead-code.
-const SYMBOL_TYPES: &[&str] = &["Function", "Struct", "Class", "Interface", "Trait", "Method"];
+const SYMBOL_TYPES: &[&str] = &[
+    "Function",
+    "Struct",
+    "Class",
+    "Interface",
+    "Trait",
+    "Method",
+];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolRef {
@@ -40,6 +47,9 @@ impl SymbolRef {
 pub struct CallLink {
     pub symbol: SymbolRef,
     pub edge: String,
+    /// Ф39.3: происхождение ребра (M8) — агент калибрует доверие к шуму
+    /// (RESOLVED — type-pass, EXTRACTED/'ast' — обычный скан, INFERRED — эвристики).
+    pub provenance: String,
     pub depth: usize,
 }
 
@@ -140,13 +150,13 @@ pub fn neighbors(
     let labels = labels_clause();
     let sql = match dir {
         Dir::Callers => format!(
-            "SELECT e.source_id, e.label FROM graph_edges e
+            "SELECT e.source_id, e.label, COALESCE(e.provenance, '') FROM graph_edges e
              JOIN graph_nodes n ON n.id = e.source_id
              WHERE e.target_id = ?1 AND e.label IN ({labels})
                AND n.project_id = ?2 AND (n.deleted_at IS NULL OR n.deleted_at = '')"
         ),
         Dir::Callees => format!(
-            "SELECT e.target_id, e.label FROM graph_edges e
+            "SELECT e.target_id, e.label, COALESCE(e.provenance, '') FROM graph_edges e
              JOIN graph_nodes n ON n.id = e.target_id
              WHERE e.source_id = ?1 AND e.label IN ({labels})
                AND n.project_id = ?2 AND (n.deleted_at IS NULL OR n.deleted_at = '')"
@@ -162,10 +172,14 @@ pub fn neighbors(
         for node in frontier {
             let mut stmt = conn.prepare(&sql)?;
             let found = stmt.query_map(params![node, project_id], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })?;
             for f in found {
-                let (id, edge) = f?;
+                let (id, edge, provenance) = f?;
                 if !seen.insert(id) {
                     continue;
                 }
@@ -173,6 +187,7 @@ pub fn neighbors(
                     out.push(CallLink {
                         symbol: sym,
                         edge,
+                        provenance,
                         depth: level,
                     });
                     if out.len() >= limit {
@@ -201,13 +216,13 @@ pub fn call_path(
     let max_depth = max_depth.clamp(1, 12);
     let labels = labels_clause();
     let sql = format!(
-        "SELECT e.target_id, e.label FROM graph_edges e
+        "SELECT e.target_id, e.label, COALESCE(e.provenance, '') FROM graph_edges e
          JOIN graph_nodes n ON n.id = e.target_id
          WHERE e.source_id = ?1 AND e.label IN ({labels})
            AND n.project_id = ?2 AND (n.deleted_at IS NULL OR n.deleted_at = '')"
     );
 
-    let mut parent: std::collections::HashMap<i64, (i64, String)> = Default::default();
+    let mut parent: std::collections::HashMap<i64, (i64, String, String)> = Default::default();
     let mut seen: std::collections::HashSet<i64> = Default::default();
     seen.insert(from.id);
     let mut frontier = vec![from.id];
@@ -218,14 +233,18 @@ pub fn call_path(
         for node in frontier {
             let mut stmt = conn.prepare(&sql)?;
             let out = stmt.query_map(params![node, project_id], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
             })?;
             for row in out {
-                let (target, edge) = row?;
+                let (target, edge, provenance) = row?;
                 if !seen.insert(target) {
                     continue;
                 }
-                parent.insert(target, (node, edge));
+                parent.insert(target, (node, edge, provenance));
                 if target == to.id {
                     found = true;
                     break;
@@ -247,24 +266,25 @@ pub fn call_path(
     }
 
     // реконструкция: от to к from
-    let mut chain_ids: Vec<(i64, String)> = Vec::new();
+    let mut chain_ids: Vec<(i64, String, String)> = Vec::new();
     let mut cursor = to.id;
     while cursor != from.id {
-        let (prev, edge) = match parent.get(&cursor) {
+        let (prev, edge, prov) = match parent.get(&cursor) {
             Some(v) => v.clone(),
             None => break,
         };
-        chain_ids.push((cursor, edge));
+        chain_ids.push((cursor, edge, prov));
         cursor = prev;
     }
     chain_ids.reverse();
 
     let mut chain = Vec::new();
-    for (idx, (id, edge)) in chain_ids.iter().enumerate() {
+    for (idx, (id, edge, prov)) in chain_ids.iter().enumerate() {
         if let Some(sym) = symbol_by_id(conn, *id)? {
             chain.push(CallLink {
                 symbol: sym,
                 edge: edge.clone(),
+                provenance: prov.clone(),
                 depth: idx + 1,
             });
         }
@@ -313,10 +333,7 @@ pub fn entrypoint_reason(sym: &SymbolRef, description: Option<&str>) -> Option<S
 
 /// Dead code: символы без входящих рёбер использования, кроме entrypoints.
 /// Возвращает (символ, число входящих usage-рёбер).
-pub fn dead_code(
-    conn: &Connection,
-    project_id: &str,
-) -> rusqlite::Result<Vec<DeadSymbol>> {
+pub fn dead_code(conn: &Connection, project_id: &str) -> rusqlite::Result<Vec<DeadSymbol>> {
     let labels = labels_clause();
     let types = SYMBOL_TYPES
         .iter()
@@ -368,11 +385,12 @@ pub fn format_links(header: &str, links: &[CallLink]) -> String {
     let mut s = format!("{header} ({}):\n", links.len());
     for l in links {
         s.push_str(&format!(
-            "- {} `{}` [{}] —{}→ глубина {}\n",
+            "- {} `{}` [{}] —{}({})→ глубина {}\n",
             l.symbol.location(),
             l.symbol.label,
             l.symbol.node_type,
             l.edge,
+            l.provenance,
             l.depth
         ));
     }

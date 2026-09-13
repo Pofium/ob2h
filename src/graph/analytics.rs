@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet, VecDeque};
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GodNodeInfo {
@@ -23,6 +23,8 @@ pub struct AffectedNode {
     pub file_path: Option<String>,
     pub depth: usize,
     pub edge_label: String,
+    /// Ф39.3: происхождение ребра (M8) — RESOLVED/EXTRACTED/'ast'/INFERRED.
+    pub provenance: String,
     pub is_god_node: bool,
 }
 
@@ -131,7 +133,11 @@ impl GraphAnalytics {
 
         // Берем топ 10% или минимум топ-5 наиболее связанных узлов
         let top_count = (node_scores.len() / 10).clamp(3, 20).min(node_scores.len());
-        let god_nodes_pks: Vec<i64> = node_scores.iter().take(top_count).map(|(pk, ..)| *pk).collect();
+        let god_nodes_pks: Vec<i64> = node_scores
+            .iter()
+            .take(top_count)
+            .map(|(pk, ..)| *pk)
+            .collect();
 
         // Маркируем в базе
         for pk in &god_nodes_pks {
@@ -198,7 +204,9 @@ impl GraphAnalytics {
             GROUP BY node_type
             "#,
         )?;
-        let type_rows = type_stmt.query_map(params![project_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize)))?;
+        let type_rows = type_stmt.query_map(params![project_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
+        })?;
         for tr in type_rows {
             let (ntype, count) = tr?;
             node_types_count.insert(ntype, count);
@@ -216,10 +224,16 @@ impl GraphAnalytics {
             LIMIT 10
             "#,
         )?;
-        let dep_rows = dep_stmt.query_map(params![project_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as usize)))?;
+        let dep_rows = dep_stmt.query_map(params![project_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as usize))
+        })?;
         for dr in dep_rows {
             let (target_pk, cnt) = dr?;
-            if let Ok(label) = conn.query_row("SELECT label FROM graph_nodes WHERE id = ?1", params![target_pk], |r| r.get::<_, String>(0)) {
+            if let Ok(label) = conn.query_row(
+                "SELECT label FROM graph_nodes WHERE id = ?1",
+                params![target_pk],
+                |r| r.get::<_, String>(0),
+            ) {
                 top_deps.push((label, cnt));
             }
         }
@@ -229,13 +243,19 @@ impl GraphAnalytics {
 
         // Формируем Markdown дайджест
         let mut md = String::new();
-        md.push_str(&format!("# 🏛️ Архитектурный дайджест проекта: {}\n\n", name));
+        md.push_str(&format!(
+            "# 🏛️ Архитектурный дайджест проекта: {}\n\n",
+            name
+        ));
         md.push_str(&format!("- **ID:** `{}`\n", project_id));
         md.push_str(&format!("- **Корневой путь:** `{}`\n", root_path));
         if let Some(ts) = tech_stack {
             md.push_str(&format!("- **Стек технологий:** {}\n", ts));
         }
-        md.push_str(&format!("- **Узлов в графе:** {} | **Связей:** {}\n\n", total_nodes, total_edges));
+        md.push_str(&format!(
+            "- **Узлов в графе:** {} | **Связей:** {}\n\n",
+            total_nodes, total_edges
+        ));
 
         md.push_str("## 👑 Ключевые архитектурные хабы (God Nodes)\n");
         md.push_str("Центральные структуры, модули и сервисы с максимальной связностью:\n\n");
@@ -265,22 +285,36 @@ impl GraphAnalytics {
         } else {
             md.push_str("⚠️ **Обнаружены потенциально проблемные циклы:**\n");
             for (i, cd) in circular_dependencies.iter().take(5).enumerate() {
-                md.push_str(&format!("{}. Длина {}: {}\n", i + 1, cd.length, cd.nodes.join(" ➔ ")));
+                md.push_str(&format!(
+                    "{}. Длина {}: {}\n",
+                    i + 1,
+                    cd.length,
+                    cd.nodes.join(" ➔ ")
+                ));
             }
         }
 
         if !component_metrics.is_empty() {
             md.push_str("\n## 📐 Архитектурная стабильность компонентов (Роберт Мартин)\n");
             let top_stable: Vec<&ComponentMetrics> = component_metrics.iter().take(4).collect();
-            let top_unstable: Vec<&ComponentMetrics> = component_metrics.iter().rev().take(4).collect();
+            let top_unstable: Vec<&ComponentMetrics> =
+                component_metrics.iter().rev().take(4).collect();
 
             md.push_str("**Наиболее стабильные компоненты (Ядро, малый Instability I):**\n");
             for c in top_stable {
-                md.push_str(&format!("- `{}`: I={:.2} (Ca={}, Ce={}) [{}]\n", c.component, c.instability, c.afferent_ca, c.efferent_ce, c.category));
+                md.push_str(&format!(
+                    "- `{}`: I={:.2} (Ca={}, Ce={}) [{}]\n",
+                    c.component, c.instability, c.afferent_ca, c.efferent_ce, c.category
+                ));
             }
-            md.push_str("\n**Наиболее гибкие/нестабильные компоненты (Листья, высокий Instability I):**\n");
+            md.push_str(
+                "\n**Наиболее гибкие/нестабильные компоненты (Листья, высокий Instability I):**\n",
+            );
             for c in top_unstable {
-                md.push_str(&format!("- `{}`: I={:.2} (Ca={}, Ce={}) [{}]\n", c.component, c.instability, c.afferent_ca, c.efferent_ce, c.category));
+                md.push_str(&format!(
+                    "- `{}`: I={:.2} (Ca={}, Ce={}) [{}]\n",
+                    c.component, c.instability, c.afferent_ca, c.efferent_ce, c.category
+                ));
             }
         }
 
@@ -335,21 +369,23 @@ impl GraphAnalytics {
         )?;
 
         let pattern = format!("%{}%", symbol_or_path);
-        let target_node = target_stmt.query_row(params![project_id, symbol_or_path, pattern], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, Option<String>>(4)?,
-                r.get::<_, i64>(5).unwrap_or(0) == 1,
-            ))
-        });
+        let target_node =
+            target_stmt.query_row(params![project_id, symbol_or_path, pattern], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, i64>(5).unwrap_or(0) == 1,
+                ))
+            });
 
-        let (target_pk, _target_nid, target_label, target_type, target_file, target_is_god) = match target_node {
-            Ok(n) => n,
-            Err(_) => {
-                return Ok(ImpactReport {
+        let (target_pk, _target_nid, target_label, target_type, target_file, target_is_god) =
+            match target_node {
+                Ok(n) => n,
+                Err(_) => {
+                    return Ok(ImpactReport {
                     target_symbol: symbol_or_path.to_string(),
                     target_file: None,
                     target_type: None,
@@ -362,8 +398,8 @@ impl GraphAnalytics {
                         symbol_or_path, project_id
                     ),
                 });
-            }
-        };
+                }
+            };
 
         // 2. BFS обход обратных связей (кто зависит от target)
         let mut visited: HashSet<i64> = HashSet::new();
@@ -376,7 +412,7 @@ impl GraphAnalytics {
 
         let mut in_edge_stmt = conn.prepare(
             r#"
-            SELECT e.source_id, e.label, n.node_id, n.label, n.node_type, n.file_path, n.is_god_node
+            SELECT e.source_id, e.label, n.node_id, n.label, n.node_type, n.file_path, n.is_god_node, COALESCE(e.provenance, '')
             FROM graph_edges e
             JOIN graph_nodes n ON n.id = e.source_id
             WHERE e.target_id = ?1
@@ -399,11 +435,12 @@ impl GraphAnalytics {
                     r.get::<_, String>(4)?,
                     r.get::<_, Option<String>>(5)?,
                     r.get::<_, i64>(6).unwrap_or(0) == 1,
+                    r.get::<_, String>(7)?,
                 ))
             })?;
 
             for r in rows {
-                let (src_pk, edge_lbl, n_id, n_lbl, n_type, f_path, is_god) = r?;
+                let (src_pk, edge_lbl, n_id, n_lbl, n_type, f_path, is_god, provenance) = r?;
                 if !visited.contains(&src_pk) {
                     visited.insert(src_pk);
                     let next_depth = current_depth + 1;
@@ -415,6 +452,7 @@ impl GraphAnalytics {
                         file_path: f_path,
                         depth: next_depth,
                         edge_label: edge_lbl,
+                        provenance,
                         is_god_node: is_god,
                     });
                     queue.push_back((src_pk, next_depth));
@@ -425,10 +463,12 @@ impl GraphAnalytics {
         // 3. Вычисление факторов риска
         let mut risk_factors = Vec::new();
         if target_is_god {
-            risk_factors.push("Целевой узел является ключевым архитектурным хабом (God Node)".to_string());
+            risk_factors
+                .push("Целевой узел является ключевым архитектурным хабом (God Node)".to_string());
         }
 
-        let god_nodes_affected: Vec<&AffectedNode> = affected_nodes.iter().filter(|n| n.is_god_node).collect();
+        let god_nodes_affected: Vec<&AffectedNode> =
+            affected_nodes.iter().filter(|n| n.is_god_node).collect();
         for gn in &god_nodes_affected {
             risk_factors.push(format!(
                 "Затрагивает архитектурный хаб `{}` ({}) на глубине {}",
@@ -448,23 +488,30 @@ impl GraphAnalytics {
             ));
         }
 
-        let risk_level = if target_is_god || !god_nodes_affected.is_empty() || affected_nodes.len() > 8 {
-            RiskLevel::High
-        } else if affected_nodes.len() > 2 {
-            RiskLevel::Medium
-        } else {
-            RiskLevel::Low
-        };
+        let risk_level =
+            if target_is_god || !god_nodes_affected.is_empty() || affected_nodes.len() > 8 {
+                RiskLevel::High
+            } else if affected_nodes.len() > 2 {
+                RiskLevel::Medium
+            } else {
+                RiskLevel::Low
+            };
 
         // 4. Построение Markdown-отчета
         let mut md = String::new();
         md.push_str("# 💥 Анализ радиуса изменений (Blast Radius)\n\n");
-        md.push_str(&format!("- **Целевой символ:** `{}` [{}]\n", target_label, target_type));
+        md.push_str(&format!(
+            "- **Целевой символ:** `{}` [{}]\n",
+            target_label, target_type
+        ));
         if let Some(ref f) = target_file {
             md.push_str(&format!("- **Файл:** `{}`\n", f));
         }
         md.push_str(&format!("- **Уровень риска:** {}\n", risk_level));
-        md.push_str(&format!("- **Затронутых зависимых узлов:** {}\n", affected_nodes.len()));
+        md.push_str(&format!(
+            "- **Затронутых зависимых узлов:** {}\n",
+            affected_nodes.len()
+        ));
         md.push_str(&format!("- **Глубина обхода графа:** {}\n\n", max_depth));
 
         if !risk_factors.is_empty() {
@@ -485,11 +532,22 @@ impl GraphAnalytics {
             }
             for d in 1..=max_depth {
                 if let Some(nodes) = by_depth.get(&d) {
-                    md.push_str(&format!("**Уровень {} ({}):**\n", d, if d == 1 { "Прямые потребители" } else { "Косвенное влияние" }));
+                    md.push_str(&format!(
+                        "**Уровень {} ({}):**\n",
+                        d,
+                        if d == 1 {
+                            "Прямые потребители"
+                        } else {
+                            "Косвенное влияние"
+                        }
+                    ));
                     for n in nodes {
                         let loc = n.file_path.as_deref().unwrap_or("-");
                         let god_mark = if n.is_god_node { " [👑 GodNode]" } else { "" };
-                        md.push_str(&format!("- `{}` [{}] ({}) через `{}`{}\n", n.label, n.node_type, loc, n.edge_label, god_mark));
+                        md.push_str(&format!(
+                            "- `{}` [{}] ({}) через `{}`{}\n",
+                            n.label, n.node_type, loc, n.edge_label, god_mark
+                        ));
                     }
                     md.push('\n');
                 }
@@ -525,7 +583,10 @@ impl GraphAnalytics {
     }
 
     /// Детектор циклических зависимостей алгоритмом Тарьяна (Tarjan's SCC).
-    pub fn find_circular_dependencies(conn: &Connection, project_id: &str) -> Result<Vec<CircularDependency>> {
+    pub fn find_circular_dependencies(
+        conn: &Connection,
+        project_id: &str,
+    ) -> Result<Vec<CircularDependency>> {
         let mut node_stmt = conn.prepare(
             r#"
             SELECT id, label, file_path
@@ -534,7 +595,11 @@ impl GraphAnalytics {
             "#,
         )?;
         let node_rows = node_stmt.query_map(params![project_id], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
         })?;
 
         let mut node_labels: HashMap<i64, String> = HashMap::new();
@@ -609,7 +674,10 @@ impl GraphAnalytics {
                     let is_cycle = if scc.len() > 1 {
                         true
                     } else if scc.len() == 1 {
-                        self.adj.get(&scc[0]).map(|nbrs| nbrs.contains(&scc[0])).unwrap_or(false)
+                        self.adj
+                            .get(&scc[0])
+                            .map(|nbrs| nbrs.contains(&scc[0]))
+                            .unwrap_or(false)
                     } else {
                         false
                     };
@@ -639,8 +707,14 @@ impl GraphAnalytics {
 
         let mut circular_deps = Vec::new();
         for scc in ctx.sccs {
-            let names: Vec<String> = scc.iter()
-                .map(|id| node_labels.get(id).cloned().unwrap_or_else(|| format!("node_{id}")))
+            let names: Vec<String> = scc
+                .iter()
+                .map(|id| {
+                    node_labels
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("node_{id}"))
+                })
                 .collect();
             let len = names.len();
             circular_deps.push(CircularDependency {
@@ -654,7 +728,10 @@ impl GraphAnalytics {
     }
 
     /// Вычисляет метрики связанности и стабильности пакетов Роберта Мартина (Ca, Ce, I).
-    pub fn compute_coupling_metrics(conn: &Connection, project_id: &str) -> Result<Vec<ComponentMetrics>> {
+    pub fn compute_coupling_metrics(
+        conn: &Connection,
+        project_id: &str,
+    ) -> Result<Vec<ComponentMetrics>> {
         let mut stmt = conn.prepare(
             r#"
             SELECT src.file_path, dst.file_path
@@ -681,7 +758,10 @@ impl GraphAnalytics {
             all_files.insert(src_file.clone());
             all_files.insert(dst_file.clone());
 
-            efferent.entry(src_file.clone()).or_default().insert(dst_file.clone());
+            efferent
+                .entry(src_file.clone())
+                .or_default()
+                .insert(dst_file.clone());
             afferent.entry(dst_file).or_default().insert(src_file);
         }
 
@@ -713,21 +793,35 @@ impl GraphAnalytics {
             });
         }
 
-        metrics.sort_by(|a, b| a.instability.partial_cmp(&b.instability).unwrap_or(std::cmp::Ordering::Equal));
+        metrics.sort_by(|a, b| {
+            a.instability
+                .partial_cmp(&b.instability)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         Ok(metrics)
     }
 
     /// Сборка сжатого блока `<project_context>` для системного промпта агента.
-    pub fn build_project_context(conn: &Connection, project_id: &str, task_query: Option<&str>) -> Result<String> {
+    pub fn build_project_context(
+        conn: &Connection,
+        project_id: &str,
+        task_query: Option<&str>,
+    ) -> Result<String> {
         let report = Self::generate_project_report(conn, project_id)?;
         let mut ctx = String::new();
         ctx.push_str(&format!("<project_context id=\"{}\">\n", project_id));
-        ctx.push_str(&format!("Project: {} (Root: {})\n", report.project_name, report.root_path));
-        
+        ctx.push_str(&format!(
+            "Project: {} (Root: {})\n",
+            report.project_name, report.root_path
+        ));
+
         ctx.push_str("Core Architecture Hubs (God Nodes):\n");
         for gn in report.god_nodes.iter().take(8) {
             let loc = gn.file_path.as_deref().unwrap_or("");
-            ctx.push_str(&format!("- {} [{}] ({}) -> {} connections\n", gn.label, gn.node_type, loc, gn.total_degree));
+            ctx.push_str(&format!(
+                "- {} [{}] ({}) -> {} connections\n",
+                gn.label, gn.node_type, loc, gn.total_degree
+            ));
         }
 
         if let Some(query) = task_query {
@@ -752,7 +846,10 @@ impl GraphAnalytics {
             })?;
             for row in rows {
                 let (lbl, ntype, fpath, desc) = row?;
-                ctx.push_str(&format!("- {} [{}] in {:?}: {:?}\n", lbl, ntype, fpath, desc));
+                ctx.push_str(&format!(
+                    "- {} [{}] in {:?}: {:?}\n",
+                    lbl, ntype, fpath, desc
+                ));
             }
         }
 

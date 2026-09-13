@@ -276,6 +276,30 @@ class Ob2hProvider(MemoryProvider):
             name="ob2h-prefetch",
         ).start()
 
+    def _fetch_blast_warn(self) -> str:
+        """Ф38.2: warn-блок edit-time blast radius (warn-only, fail-open).
+
+        Читается MCP-ресурс project://current/blast-radius; сервер сам гейтит
+        выдачу флагом OB2H_EDIT_BLAST=warn (дефолт off) и TTL 30 мин. Любая
+        ошибка RPC → пустая строка, prefetch не ломается.
+        """
+        try:
+            if not self._rpc:
+                return ""
+            resp = self._rpc.call(
+                "resources/read",
+                {"uri": "project://current/blast-radius"},
+                timeout=_PREFETCH_TIMEOUT,
+            )
+            contents = ((resp or {}).get("result") or {}).get("contents") or []
+            for c in contents:
+                text = (c.get("text") or "").strip()
+                if text:
+                    return f"<blast_radius>\n{text}\n</blast_radius>"
+        except Exception as e:
+            logger.debug("ob2h: blast-radius warn недоступен: %s", e)
+        return ""
+
     def _do_prefetch(self, query: str, sid: str) -> None:
         result: Tuple[str, int] = ("", 0)
         try:
@@ -303,6 +327,12 @@ class Ob2hProvider(MemoryProvider):
                     if hits and "ничего не найдено" not in hits:
                         n = len([l for l in hits.splitlines() if l.strip()])
                         result = (f"<agent_memory>\n{hits}\n</agent_memory>", n)
+                # Ф38.2: короткий warn-блок поверх памяти (2–4 строки, warn-only)
+                warn = self._fetch_blast_warn()
+                if warn:
+                    text, n = result
+                    merged = f"{text}\n{warn}".strip() if text else warn
+                    result = (merged, n + 2)
         except Exception as e:
             logger.debug("ob2h: prefetch не удался: %s", e)
         with self._prefetch_lock:

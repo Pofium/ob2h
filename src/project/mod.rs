@@ -369,7 +369,7 @@ impl ProjectService {
             std::collections::HashMap::new()
         };
 
-        let scan_res = self.ast_extractor.scan_directory(path_obj, if incremental { Some(&known_hashes) } else { None });
+        let mut scan_res = self.ast_extractor.scan_directory(path_obj, if incremental { Some(&known_hashes) } else { None });
         let now = Utc::now().to_rfc3339();
 
         // Поиск удалённых файлов
@@ -382,6 +382,13 @@ impl ProjectService {
         } else {
             Vec::new()
         };
+
+        // Ф39.1: type-pass — резолв простых вызовов (Rust/Python) по импортам
+        // и same-file; CALLS-рёбра получают provenance=RESOLVED
+        let resolved_calls = crate::project::ast::resolve_calls(&mut scan_res);
+        if resolved_calls > 0 {
+            info!("Type-pass: резолвлено {resolved_calls} вызовов (CALLS, provenance=RESOLVED)");
+        }
 
         // Если ничего не изменилось и нет удалённых файлов
         if incremental && scan_res.files_scanned == 0 && deleted_files.is_empty() {
@@ -517,13 +524,13 @@ impl ProjectService {
                         source_id, target_id, label, weight, contexts, created_at,
                         project_id, provenance, confidence, updated_at
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'ast', 1.0, ?6)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1.0, ?6)
                     ON CONFLICT(source_id, target_id, label) DO UPDATE SET
                         weight = excluded.weight,
                         contexts = excluded.contexts,
                         updated_at = excluded.updated_at,
                         project_id = excluded.project_id,
-                        provenance = 'ast',
+                        provenance = excluded.provenance,
                         confidence = 1.0
                     "#,
                     params![
@@ -534,6 +541,7 @@ impl ProjectService {
                         edge.context,
                         now,
                         project_id,
+                        edge.provenance,
                     ],
                 )?;
             }
@@ -737,7 +745,7 @@ pub fn detect_manifest_metadata(root: &Path) -> (String, Vec<String>, Option<Str
         if let Ok(content) = std::fs::read_to_string(&composer_json) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(n) = v.get("name").and_then(|x| x.as_str()) {
-                    let short_name = n.split('/').last().unwrap_or(n);
+                    let short_name = n.split('/').next_back().unwrap_or(n);
                     if !short_name.is_empty() && name == default_name {
                         name = short_name.to_string();
                     }
@@ -757,7 +765,7 @@ pub fn detect_manifest_metadata(root: &Path) -> (String, Vec<String>, Option<Str
                 let trimmed = line.trim();
                 if trimmed.starts_with("module ") {
                     let mod_path = trimmed.trim_start_matches("module ").trim();
-                    let short_name = mod_path.split('/').last().unwrap_or(mod_path);
+                    let short_name = mod_path.split('/').next_back().unwrap_or(mod_path);
                     if !short_name.is_empty() && name == default_name {
                         name = short_name.to_string();
                     }

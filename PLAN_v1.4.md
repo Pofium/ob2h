@@ -380,28 +380,62 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 ### Фаза 38 (C3) — Edit-time blast radius (warn-only) (Оценка: 1–2 дня)
 
-- [ ] **38.1** ProjectWatcher (v1.2) после инкрементального рескана детектит изменённые
+- [x] **38.1** ProjectWatcher (v1.2) после инкрементального рескана детектит изменённые
   символы → kv `blast_hint:<project>`: symbol, top-5 callers (логика project_impact),
   TTL 30 мин.
-- [ ] **38.2** Plugin-мост: prefetch при свежем hint добавляет короткий warn-блок
+- [x] **38.2** Plugin-мост: prefetch при свежем hint добавляет короткий warn-блок
   `[blast-radius] правка <symbol>: затронуты <callers>` (2–4 строки); warn-only,
   fail-open (ошибка RPC не ломает prefetch); флаг `OB2H_EDIT_BLAST=warn` (дефолт off).
-- [ ] **38.3** MCP-ресурс `project://current/blast-radius` — для агентов без плагина
+- [x] **38.3** MCP-ресурс `project://current/blast-radius` — для агентов без плагина
   (resources/read из v1.2).
-- [ ] **Тесты:** правка hub-символа → hint с callers; просроченный TTL → блока нет;
+- [x] **Тесты:** правка hub-символа → hint с callers; просроченный TTL → блока нет;
   недоступный RPC → prefetch без блока, без ошибки.
+
+  **РЕАЛИЗАЦИЯ (13.09.2026):** `src/graph/blast.rs` — hint вычисляется на read-path
+  из `graph_nodes.updated_at` (обновляются ресканом watcher'а/git-хуков) среди
+  символов с правкой в окне TTL 30 мин; предпочитается символ с callers (полезнее),
+  fallback — честное «входящих связей не найдено»; кэш kv `blast_hint:<project>`
+  с expires_at (лучшая запись, ошибки не роняют выдачу). Отличие от буквы плана:
+  watcher не пишет kv напрямую (ProjectService не отдаёт conn, файл — WIP другого
+  агента) — наблюдаемое поведение идентично (hint + TTL 30 мин по project).
+  38.2: `plugin/ob2h/__init__.py` `_fetch_blast_warn` — resources/read, обёртка
+  `<blast_radius>`, fail-open try/except, конкатенация с memory-блоком prefetch.
+  38.3: ресурс в resources/list + read_resource (гейт `OB2H_EDIT_BLAST=warn`).
+  Тесты `tests/test_blast.rs` (3): свежая правка → hint с 3 callers + kv-кэш,
+  флаг off/нет проекта/правки старше TTL → пусто, пустая БД fail-open. E2E на
+  живой копии: initialize → resources/read вернул warn-блок по свежескому
+  рескану (`Cli`, src/cli/mod.rs); RPC-сбой/флаг off — пусто без ошибок.
 
 ### Фаза 39 (C4) — Type-resolve lite + provenance (Оценка: 2–3 дня)
 
-- [ ] **39.1** Лёгкий semantic pass для Rust + Python (TS следом): resolve imports и
+- [x] **39.1** Лёгкий semantic pass для Rust + Python (TS следом): resolve imports и
   простых call targets (receiver types, алиасы импортов) на своём AST — без LSP-серверов;
   нерезолвленное — AMBIGUOUS, не выдумывать.
-- [ ] **39.2** Миграция M8 (§3): `provenance` на graph_edges; EXTRACTED при обычном скане,
+- [x] **39.2** Миграция M8 (§3): `provenance` на graph_edges; EXTRACTED при обычном скане,
   RESOLVED после type-pass, INFERRED для эвристик (Ф40).
-- [ ] **39.3** Provenance в выдаче `project_call_path`/`project_impact`/
+- [x] **39.3** Provenance в выдаче `project_call_path`/`project_impact`/
   `project_graph_search` — агент калибрует доверие к шуму.
-- [ ] **Тесты:** fixture с алиасами/реэкспортами — распределение RESOLVED vs AMBIGUOUS;
+- [x] **Тесты:** fixture с алиасами/реэкспортами — распределение RESOLVED vs AMBIGUOUS;
   переименование символа не роняет резолв; старые рёбра читаются (DEFAULT 'EXTRACTED').
+
+  **РЕАЛИЗАЦИЯ (13.09.2026):** `src/project/ast.rs`: AstScanResult += call_sites
+  (места `name(` — без `.`-методов и макросов, строки-определения скипаются) и
+  imports (use/import с алиасами); `resolve_calls` — same-file вызовы + вызовы
+  по импортам (модуль → файлы-кандидаты: `crate::a::b` → src/a.rs|a/b.rs|…,
+  `.mod` → mod.py|mod/__init__.py; `super::`/`self::` относительно файла);
+  вызов через алиас уходит строго в файл модуля алиаса (не same-file);
+  нерезолвленное — без ребра (AMBIGUOUS, честно). TS/Go/SQL — AMBIGUOUS до
+  отдельного захода (39.1 — Rust+Python по спеке). 39.2: AstEdge.provenance
+  (EXTRACTED сканер / RESOLVED type-pass / INFERRED для Ф40), INSERT использует
+  edge.provenance (колонка была с M5; легаси-рёбра читаются со своим значением —
+  DEFAULT колонки не трогали: SQLite не ALTER-ит DEFAULT, поведение то же).
+  scan_project запускает type-pass перед записью. 39.3: provenance в
+  project_call_path (`—CALLS(RESOLVED)→`) и project_impact (AffectedNode.provenance);
+  project_graph_search показывал узловой provenance ещё с Ф27.
+  Тесты `tests/test_typepass.rs` (4): Rust same-file+import+alias (unknown — без
+  ребра), Python from-import с алиасом, scan_project в БД (CALLS provenance=
+  RESOLVED + легаси 'ast' читается), переименование helper→helper2 переживается
+  инкрементальным ресканом.
 
 ### Фаза 40 (C5) — Communities, framework edges, связка с памятью (Оценка: 2 дня)
 

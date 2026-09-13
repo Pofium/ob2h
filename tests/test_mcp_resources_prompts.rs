@@ -71,12 +71,13 @@ async fn test_mcp_resources_and_prompts() -> anyhow::Result<()> {
     };
     let res_list_resp = server.handle_request(res_list_req).await.expect("res_list response");
     let resources = res_list_resp.result.unwrap().get("resources").unwrap().as_array().unwrap().clone();
-    assert_eq!(resources.len(), 4);
+    assert_eq!(resources.len(), 5);
 
     let uris: Vec<&str> = resources.iter().map(|r| r.get("uri").unwrap().as_str().unwrap()).collect();
     assert!(uris.contains(&"project://current/overview"));
     assert!(uris.contains(&"project://current/god-nodes"));
     assert!(uris.contains(&"project://current/schema"));
+    assert!(uris.contains(&"project://current/blast-radius")); // Ф38.3
     assert!(uris.contains(&"memory://context"));
 
     // 3. Тестируем resources/read

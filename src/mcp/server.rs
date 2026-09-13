@@ -5,11 +5,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tracing::info;
 
-use super::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpContent, McpToolCallResult};
+use super::protocol::{
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpContent, McpToolCallResult,
+};
 use super::tools::list_tools;
 use crate::backup::BackupManager;
 use crate::config::Settings;
-use crate::consolidator::{PendingSession, Consolidator};
+use crate::consolidator::{Consolidator, PendingSession};
 use crate::db::{utcnow, Database};
 use crate::dream::Dream;
 use crate::embedding::EmbeddingProvider;
@@ -73,7 +75,9 @@ fn parse_file_uri(uri: &str) -> Option<std::path::PathBuf> {
                 res.push(c2);
             } else {
                 res.push('%');
-                if let Some(c1) = h1 { res.push(c1); }
+                if let Some(c1) = h1 {
+                    res.push(c1);
+                }
             }
         } else {
             res.push(c);
@@ -174,7 +178,8 @@ impl McpServer {
 
                 if let Some(params) = &req.params {
                     // 1. Проверяем workspaceFolders
-                    if let Some(folders) = params.get("workspaceFolders").and_then(|v| v.as_array()) {
+                    if let Some(folders) = params.get("workspaceFolders").and_then(|v| v.as_array())
+                    {
                         for f in folders {
                             if let Some(uri) = f.get("uri").and_then(|u| u.as_str()) {
                                 if let Some(p) = parse_file_uri(uri) {
@@ -207,9 +212,13 @@ impl McpServer {
 
                 // Zero-Config: автодетект и регистрация проекта
                 if let Ok(project) = self.ctx.project.auto_register_or_detect(&target_dir) {
-                    *self.ctx.active_workspace.write().await = Some(std::path::PathBuf::from(&project.root_path));
+                    *self.ctx.active_workspace.write().await =
+                        Some(std::path::PathBuf::from(&project.root_path));
                     *self.ctx.active_project_id.write().await = Some(project.id.clone());
-                    info!("Zero-Config: MCP-сессия привязана к проекту '{}' ({})", project.name, project.id);
+                    info!(
+                        "Zero-Config: MCP-сессия привязана к проекту '{}' ({})",
+                        project.name, project.id
+                    );
 
                     if self.ctx.settings.watcher_enabled {
                         let watcher = self.ctx.watcher.clone();
@@ -217,7 +226,10 @@ impl McpServer {
                         let proot = std::path::PathBuf::from(&project.root_path);
                         tokio::spawn(async move {
                             if let Err(e) = watcher.switch_project(&pid, &proot).await {
-                                tracing::warn!("FileWatcher: не удалось активировать для {}: {e}", pid);
+                                tracing::warn!(
+                                    "FileWatcher: не удалось активировать для {}: {e}",
+                                    pid
+                                );
                             }
                         });
                     }
@@ -294,6 +306,12 @@ impl McpServer {
                             "mimeType": "text/markdown"
                         },
                         {
+                            "uri": "project://current/blast-radius",
+                            "name": "Edit-time blast radius (warn-only, Ф38)",
+                            "description": "Последний изменённый символ и его callers (TTL 30 мин). Пусто, если OB2H_EDIT_BLAST!=warn или hint протух",
+                            "mimeType": "text/plain"
+                        },
+                        {
                             "uri": "memory://context",
                             "name": "Долговременный контекст и профиль пользователя",
                             "description": "Ключевые системные знания агента, предпочтения разработчика и важные факты",
@@ -367,10 +385,15 @@ impl McpServer {
             "prompts/get" => {
                 let params = req.params.unwrap_or(serde_json::json!({}));
                 let prompt_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                let args = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
                 let active_proj = self.ctx.active_project_id.read().await.clone();
 
-                let prompt_result = self.get_prompt(prompt_name, &args, active_proj.as_deref()).await;
+                let prompt_result = self
+                    .get_prompt(prompt_name, &args, active_proj.as_deref())
+                    .await;
 
                 Some(JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
@@ -382,29 +405,57 @@ impl McpServer {
             "tools/call" => {
                 let params = req.params.unwrap_or(serde_json::json!({}));
                 let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let mut args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+                let mut args = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
 
                 // Автоматическая подстановка active_project_id, если аргумент не передан
                 if let Some(active_id) = self.ctx.active_project_id.read().await.as_ref() {
                     if let Some(obj) = args.as_object_mut() {
                         let needs_project_id = match tool_name {
-                            "memory_save" | "memory_search" | "memory_update" | "memory_context"
-                            | "session_log" | "session_ingest"
-                            | "knowledge_extract" | "graph_search" | "graph_reason" | "graph_stats"
-                            | "project_context" | "project_graph_search" | "project_report" => true,
+                            "memory_save"
+                            | "memory_search"
+                            | "memory_update"
+                            | "memory_context"
+                            | "session_log"
+                            | "session_ingest"
+                            | "knowledge_extract"
+                            | "graph_search"
+                            | "graph_reason"
+                            | "graph_stats"
+                            | "project_context"
+                            | "project_graph_search"
+                            | "project_report" => true,
                             "project_scan" => !obj.contains_key("id"),
                             _ => false,
                         };
 
                         if needs_project_id {
-                            let empty = obj.get("project_id").and_then(|v| v.as_str()).is_none_or(|s| s.is_empty());
+                            let empty = obj
+                                .get("project_id")
+                                .and_then(|v| v.as_str())
+                                .is_none_or(|s| s.is_empty());
                             if empty {
-                                obj.insert("project_id".to_string(), serde_json::Value::String(active_id.clone()));
+                                obj.insert(
+                                    "project_id".to_string(),
+                                    serde_json::Value::String(active_id.clone()),
+                                );
                             }
-                            if tool_name == "project_scan" || tool_name == "project_context" || tool_name == "project_graph_search" || tool_name == "project_report" {
-                                let id_empty = obj.get("id").and_then(|v| v.as_str()).is_none_or(|s| s.is_empty());
+                            if tool_name == "project_scan"
+                                || tool_name == "project_context"
+                                || tool_name == "project_graph_search"
+                                || tool_name == "project_report"
+                            {
+                                let id_empty = obj
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .is_none_or(|s| s.is_empty());
                                 if id_empty {
-                                    obj.insert("id".to_string(), serde_json::Value::String(active_id.clone()));
+                                    obj.insert(
+                                        "id".to_string(),
+                                        serde_json::Value::String(active_id.clone()),
+                                    );
                                 }
                             }
                         }
@@ -451,12 +502,26 @@ impl McpServer {
                     None => return "[Error] content is required".to_string(),
                 };
                 let key = args.get("key").and_then(|v| v.as_str());
-                let category = args.get("category").and_then(|v| v.as_str()).unwrap_or("general");
-                let importance = args.get("importance").and_then(|v| v.as_f64()).unwrap_or(0.5);
-                let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("chat");
+                let category = args
+                    .get("category")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("general");
+                let importance = args
+                    .get("importance")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.5);
+                let source = args
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("chat");
                 let project_id = args.get("project_id").and_then(|v| v.as_str());
 
-                match self.ctx.memory.save_with_project(content, key, category, importance, source, None, project_id).await {
+                match self
+                    .ctx
+                    .memory
+                    .save_with_project(content, key, category, importance, source, None, project_id)
+                    .await
+                {
                     Ok(k) => format!("saved key={k}"),
                     Err(e) => format!("[Error] {e}"),
                 }
@@ -467,34 +532,51 @@ impl McpServer {
                     None => return "[Error] query is required".to_string(),
                 };
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("hybrid");
+                let mode = args
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("hybrid");
 
                 let hits = match mode {
                     "fts" => {
                         let res = self.ctx.memory.search_fts(query, limit).unwrap_or_default();
                         res.into_iter()
                             .filter_map(|(id, score)| {
-                                self.ctx.memory.get_by_id(id).ok().flatten().map(|r| crate::memory::MemoryHit {
-                                    record: r,
-                                    score,
-                                    match_type: "fts".to_string(),
+                                self.ctx.memory.get_by_id(id).ok().flatten().map(|r| {
+                                    crate::memory::MemoryHit {
+                                        record: r,
+                                        score,
+                                        match_type: "fts".to_string(),
+                                    }
                                 })
                             })
                             .collect::<Vec<_>>()
                     }
                     "vector" => {
-                        let res = self.ctx.memory.search_vector(query, limit, 0.0).await.unwrap_or_default();
+                        let res = self
+                            .ctx
+                            .memory
+                            .search_vector(query, limit, 0.0)
+                            .await
+                            .unwrap_or_default();
                         res.into_iter()
                             .filter_map(|(id, score)| {
-                                self.ctx.memory.get_by_id(id).ok().flatten().map(|r| crate::memory::MemoryHit {
-                                    record: r,
-                                    score,
-                                    match_type: "vector".to_string(),
+                                self.ctx.memory.get_by_id(id).ok().flatten().map(|r| {
+                                    crate::memory::MemoryHit {
+                                        record: r,
+                                        score,
+                                        match_type: "vector".to_string(),
+                                    }
                                 })
                             })
                             .collect::<Vec<_>>()
                     }
-                    _ => self.ctx.memory.search_hybrid(query, limit, 0.0).await.unwrap_or_default(),
+                    _ => self
+                        .ctx
+                        .memory
+                        .search_hybrid(query, limit, 0.0)
+                        .await
+                        .unwrap_or_default(),
                 };
 
                 if hits.is_empty() {
@@ -521,8 +603,11 @@ impl McpServer {
                 // Ф23.5: related=true — 1-hop соседи по memory_links отдельным блоком.
                 // Ф33.3: mode=graph — PPR-расширение вместо 1-hop (fallback на 1-hop,
                 // если PPR недоступен или подграф пуст).
-                let want_related =
-                    args.get("related").and_then(|v| v.as_bool()).unwrap_or(false) || mode == "graph";
+                let want_related = args
+                    .get("related")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                    || mode == "graph";
                 if want_related {
                     let ids: Vec<i64> = hits.iter().map(|h| h.record.id).collect();
                     let related: Vec<(crate::db::models::MemoryRecord, f64)> = if mode == "graph" {
@@ -612,7 +697,12 @@ impl McpServer {
                 let importance = args.get("importance").and_then(|v| v.as_f64());
                 let category = args.get("category").and_then(|v| v.as_str());
 
-                match self.ctx.memory.update(key, content, importance, category).await {
+                match self
+                    .ctx
+                    .memory
+                    .update(key, content, importance, category)
+                    .await
+                {
                     Ok(true) => format!("updated key={key}"),
                     Ok(false) => format!("not found key={key}"),
                     Err(e) => format!("[Error] {e}"),
@@ -636,7 +726,10 @@ impl McpServer {
                 };
                 let verdict = match args.get("verdict").and_then(|v| v.as_str()) {
                     Some(v) => v,
-                    None => return "[Error] verdict is required (helpful|unhelpful|outdated)".to_string(),
+                    None => {
+                        return "[Error] verdict is required (helpful|unhelpful|outdated)"
+                            .to_string()
+                    }
                 };
                 let note = args.get("note").and_then(|v| v.as_str());
                 match self.ctx.memory.record_feedback(key, verdict, note) {
@@ -721,7 +814,10 @@ impl McpServer {
                     Some(v) => v,
                     None => return "[Error] verdict is required".to_string(),
                 };
-                let source = args.get("verdict_source").and_then(|v| v.as_str()).unwrap_or("manual");
+                let source = args
+                    .get("verdict_source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("manual");
                 match self.ctx.ralph.set_verdict(
                     args.get("iteration_id").and_then(|v| v.as_str()),
                     args.get("finding_id").and_then(|v| v.as_str()),
@@ -739,7 +835,10 @@ impl McpServer {
                 ) else {
                     return "[Error] run_id, task_id are required".to_string();
                 };
-                let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(6000) as usize;
+                let max_tokens = args
+                    .get("max_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(6000) as usize;
                 let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("full");
                 match self.ctx.ralph.context(run_id, task_id, max_tokens, mode) {
                     Ok(block) => block,
@@ -747,7 +846,11 @@ impl McpServer {
                 }
             }
             "ralph_report" => {
-                match self.ctx.ralph.report(args.get("run_id").and_then(|v| v.as_str())) {
+                match self
+                    .ctx
+                    .ralph
+                    .report(args.get("run_id").and_then(|v| v.as_str()))
+                {
                     Ok(report) => report,
                     Err(e) => format!("[Error] {e}"),
                 }
@@ -759,7 +862,11 @@ impl McpServer {
                 ) else {
                     return "[Error] project_id, from are required".to_string();
                 };
-                match self.ctx.ralph.ast_diff(project_id, from, args.get("to").and_then(|v| v.as_str())) {
+                match self.ctx.ralph.ast_diff(
+                    project_id,
+                    from,
+                    args.get("to").and_then(|v| v.as_str()),
+                ) {
                     Ok(diff) => diff,
                     Err(e) => format!("[Error] {e}"),
                 }
@@ -778,7 +885,10 @@ impl McpServer {
             }
             "memory_context" => {
                 let query = args.get("query").and_then(|v| v.as_str());
-                let limit = args.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
+                let limit = args
+                    .get("max_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(30) as usize;
                 // max_chars (Фаза 22): агент может сузить бюджет; по умолчанию — настройка.
                 let max_chars = args
                     .get("max_chars")
@@ -821,13 +931,23 @@ impl McpServer {
                     Some(c) => c,
                     None => return "[Error] content is required".to_string(),
                 };
-                let msg = args.get("commit_message").and_then(|v| v.as_str()).unwrap_or("");
+                let msg = args
+                    .get("commit_message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
                 match self.ctx.workspace.write_file(file, content) {
                     Ok(_) => {
-                        let commit_msg = if msg.is_empty() { format!("agent write: {file}") } else { msg.to_string() };
+                        let commit_msg = if msg.is_empty() {
+                            format!("agent write: {file}")
+                        } else {
+                            msg.to_string()
+                        };
                         let sha = self.ctx.gitstore.auto_commit(&commit_msg);
-                        format!("written {file}{}", sha.map(|s| format!(" commit={s}")).unwrap_or_default())
+                        format!(
+                            "written {file}{}",
+                            sha.map(|s| format!(" commit={s}")).unwrap_or_default()
+                        )
                     }
                     Err(e) => format!("[Error] {e}"),
                 }
@@ -841,14 +961,24 @@ impl McpServer {
                     Some(a) => a,
                     None => return "[Error] assistant_text is required".to_string(),
                 };
-                let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("hermes");
+                let source = args
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("hermes");
                 // Ф25.2: автор хода (turn_author) — в meta записи daily-лога
                 let mut meta = serde_json::json!({ "source": source });
-                if let Some(a) = args.get("author").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                if let Some(a) = args
+                    .get("author")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
                     meta["author"] = serde_json::Value::String(a.to_string());
                 }
 
-                let _ = self.ctx.workspace.log_daily_session(user_text, assistant_text, Some(meta));
+                let _ = self
+                    .ctx
+                    .workspace
+                    .log_daily_session(user_text, assistant_text, Some(meta));
 
                 let mut session = self.ctx.pending_session.lock().await;
                 session.append("user", user_text);
@@ -863,13 +993,27 @@ impl McpServer {
             "session_ingest" => {
                 let messages = match args.get("messages").and_then(|v| v.as_array()) {
                     Some(m) if !m.is_empty() => m,
-                    _ => return "[Error] messages is required (непустой массив {role, content})".to_string(),
+                    _ => {
+                        return "[Error] messages is required (непустой массив {role, content})"
+                            .to_string()
+                    }
                 };
-                let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("hermes");
-                let session_id = args.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+                let source = args
+                    .get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("hermes");
+                let session_id = args
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 // Ф25.2: автор хода — в meta записей daily-лога
-                let mut entry_meta = serde_json::json!({ "source": source, "session_id": session_id });
-                if let Some(a) = args.get("author").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                let mut entry_meta =
+                    serde_json::json!({ "source": source, "session_id": session_id });
+                if let Some(a) = args
+                    .get("author")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
                     entry_meta["author"] = serde_json::Value::String(a.to_string());
                 }
 
@@ -910,7 +1054,11 @@ impl McpServer {
                         pending_user.push_str(content);
                         has_user = true;
                     } else {
-                        let user_text = if has_user { pending_user.clone() } else { String::new() };
+                        let user_text = if has_user {
+                            pending_user.clone()
+                        } else {
+                            String::new()
+                        };
                         new_pairs.push((user_text, content.to_string()));
                         pending_user.clear();
                         has_user = false;
@@ -922,7 +1070,9 @@ impl McpServer {
                     if !session_id.is_empty() {
                         let _ = self.ctx.db.set_kv(&kv_key, &messages.len().to_string());
                     }
-                    return format!("ingested pairs=0 skipped_msgs={skipped} (новых сообщений нет)");
+                    return format!(
+                        "ingested pairs=0 skipped_msgs={skipped} (новых сообщений нет)"
+                    );
                 }
 
                 let mut written = 0usize;
@@ -931,11 +1081,10 @@ impl McpServer {
                 {
                     let mut session = self.ctx.pending_session.lock().await;
                     for (u, a) in &new_pairs {
-                        let _ = self.ctx.workspace.log_daily_session(
-                            u,
-                            a,
-                            Some(entry_meta.clone()),
-                        );
+                        let _ =
+                            self.ctx
+                                .workspace
+                                .log_daily_session(u, a, Some(entry_meta.clone()));
                         session.append("user", u);
                         session.append("assistant", a);
                         written += 1;
@@ -969,7 +1118,10 @@ impl McpServer {
             "knowledge_extract" => {
                 let text_arg = args.get("text").and_then(|v| v.as_str());
                 let file_path = args.get("file_path").and_then(|v| v.as_str());
-                let max_chunks = args.get("max_chunks").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+                let max_chunks = args
+                    .get("max_chunks")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(200) as usize;
 
                 let (text, title, meta) = if let Some(path) = file_path {
                     match read_document(path) {
@@ -1004,7 +1156,12 @@ impl McpServer {
 
                 let chunks = split_into_chunks(&text, 3000, 300);
                 let limited_chunks: Vec<String> = chunks.into_iter().take(max_chunks).collect();
-                let chunk_vecs = self.ctx.embedder.embed(&limited_chunks).await.unwrap_or_default();
+                let chunk_vecs = self
+                    .ctx
+                    .embedder
+                    .embed(&limited_chunks)
+                    .await
+                    .unwrap_or_default();
 
                 let _ = self.ctx.db.with_conn(|conn| {
                     for (ord, (chunk, vec)) in limited_chunks.iter().zip(chunk_vecs.iter()).enumerate() {
@@ -1020,7 +1177,12 @@ impl McpServer {
                 let extractor = Extractor::new(self.ctx.llm.clone(), max_chunks);
                 match extractor.extract(&text).await {
                     Ok(result) => {
-                        let (new_nodes, updated_nodes, new_edges) = self.ctx.graph.upsert_extraction(&result).await.unwrap_or_default();
+                        let (new_nodes, updated_nodes, new_edges) = self
+                            .ctx
+                            .graph
+                            .upsert_extraction(&result)
+                            .await
+                            .unwrap_or_default();
                         format!(
                             "doc_id={doc_id} chunks={}(+{} пропущено) entities={}новых+{}дублей relations={}новых",
                             result.chunks_processed, result.chunks_skipped, new_nodes, updated_nodes, new_edges
@@ -1035,11 +1197,17 @@ impl McpServer {
                     None => return "[Error] query is required".to_string(),
                 };
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("classic");
+                let mode = args
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("classic");
 
                 // Ф29.2: mode=ppr — PPR-ранжирование графа знаний (multi-hop поверх сидов).
                 if mode == "ppr" {
-                    let pid = match args.get("project_id").and_then(|v| v.as_str()).map(String::from)
+                    let pid = match args
+                        .get("project_id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
                     {
                         Some(p) => Some(p),
                         None => self.ctx.active_project_id.read().await.clone(),
@@ -1062,8 +1230,7 @@ impl McpServer {
                     {
                         Ok(hits) if hits.is_empty() => return "граф пуст по запросу".to_string(),
                         Ok(hits) => {
-                            let mut lines =
-                                vec![format!("узлов (ppr): {}", hits.len())];
+                            let mut lines = vec![format!("узлов (ppr): {}", hits.len())];
                             for h in &hits {
                                 lines.push(format!(
                                     "- {} ({}, val={}) ppr={:.4}{}",
@@ -1088,13 +1255,27 @@ impl McpServer {
                         if found.nodes.is_empty() {
                             return "граф пуст по запросу".to_string();
                         }
-                        let mut lines = vec![format!("узлов: {}, связей: {}", found.nodes.len(), found.edges.len())];
+                        let mut lines = vec![format!(
+                            "узлов: {}, связей: {}",
+                            found.nodes.len(),
+                            found.edges.len()
+                        )];
                         for n in found.nodes.iter().take(limit) {
-                            let desc = n.description.as_deref().map(|d| format!(" — {d}")).unwrap_or_default();
-                            lines.push(format!("- {} ({}, val={}){}", n.label, n.node_type, n.val, desc));
+                            let desc = n
+                                .description
+                                .as_deref()
+                                .map(|d| format!(" — {d}"))
+                                .unwrap_or_default();
+                            lines.push(format!(
+                                "- {} ({}, val={}){}",
+                                n.label, n.node_type, n.val, desc
+                            ));
                         }
                         for e in found.edges.iter().take(limit * 2) {
-                            lines.push(format!("- {} --[{}]--> {}", e.source_label, e.label, e.target_label));
+                            lines.push(format!(
+                                "- {} --[{}]--> {}",
+                                e.source_label, e.label, e.target_label
+                            ));
                         }
                         lines.join("\n")
                     }
@@ -1169,12 +1350,14 @@ impl McpServer {
                                     let lines: Vec<String> = hits
                                         .iter()
                                         .map(|h| {
-                                            format!("- {} ({}) ppr={:.4}", h.label, h.node_type, h.score)
+                                            format!(
+                                                "- {} ({}) ppr={:.4}",
+                                                h.label, h.node_type, h.score
+                                            )
                                         })
                                         .collect();
                                     if !lines.is_empty() {
-                                        ppr_docs =
-                                            format!("\nppr_docs:\n{}", lines.join("\n"));
+                                        ppr_docs = format!("\nppr_docs:\n{}", lines.join("\n"));
                                     }
                                 }
                             }
@@ -1197,11 +1380,17 @@ impl McpServer {
                 }
             }
             "graph_stats" => match self.ctx.graph.stats() {
-                Ok(s) => format!("nodes={} edges={} documents={} chunks={}", s.nodes, s.edges, s.documents, s.chunks),
+                Ok(s) => format!(
+                    "nodes={} edges={} documents={} chunks={}",
+                    s.nodes, s.edges, s.documents, s.chunks
+                ),
                 Err(e) => format!("[Error] {e}"),
             },
             "dream_run" => {
-                let background = args.get("background").and_then(|v| v.as_bool()).unwrap_or(false);
+                let background = args
+                    .get("background")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let lock = self.ctx.dream_lock.clone();
 
                 if background {
@@ -1257,23 +1446,53 @@ impl McpServer {
                 self.ctx.gitstore.restore(commit)
             }
             "omnes_stats" => {
-                let db_size = self.ctx.settings.db_path().metadata().map(|m| m.len()).unwrap_or(0);
+                let db_size = self
+                    .ctx
+                    .settings
+                    .db_path()
+                    .metadata()
+                    .map(|m| m.len())
+                    .unwrap_or(0);
                 // Ф25.1: активный бэкенд эмбеддингов (деградация видна в stats)
                 let backend = crate::embedding::active_backend();
-                let counts = self.ctx.db.with_conn(|conn| {
-                    let m: i64 = conn.query_row("SELECT count(*) FROM memories", [], |r| r.get(0)).unwrap_or(0);
-                    let r: i64 = conn.query_row("SELECT count(*) FROM memory_relations", [], |r| r.get(0)).unwrap_or(0);
-                    let d: i64 = conn.query_row("SELECT count(*) FROM documents", [], |r| r.get(0)).unwrap_or(0);
-                    let c: i64 = conn.query_row("SELECT count(*) FROM chunks", [], |r| r.get(0)).unwrap_or(0);
-                    let gn: i64 = conn.query_row("SELECT count(*) FROM graph_nodes", [], |r| r.get(0)).unwrap_or(0);
-                    let ge: i64 = conn.query_row("SELECT count(*) FROM graph_edges", [], |r| r.get(0)).unwrap_or(0);
-                    let dr: i64 = conn.query_row("SELECT count(*) FROM dream_runs", [], |r| r.get(0)).unwrap_or(0);
-                    // Ф28.3: блок Ralph
-                    let rr: i64 = conn.query_row("SELECT count(*) FROM ralph_runs", [], |r| r.get(0)).unwrap_or(0);
-                    let ri: i64 = conn.query_row("SELECT count(*) FROM ralph_iterations", [], |r| r.get(0)).unwrap_or(0);
-                    let rf: i64 = conn.query_row("SELECT count(*) FROM ralph_findings", [], |r| r.get(0)).unwrap_or(0);
-                    Ok((m, r, d, c, gn, ge, dr, rr, ri, rf))
-                }).unwrap_or_default();
+                let counts = self
+                    .ctx
+                    .db
+                    .with_conn(|conn| {
+                        let m: i64 = conn
+                            .query_row("SELECT count(*) FROM memories", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        let r: i64 = conn
+                            .query_row("SELECT count(*) FROM memory_relations", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        let d: i64 = conn
+                            .query_row("SELECT count(*) FROM documents", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        let c: i64 = conn
+                            .query_row("SELECT count(*) FROM chunks", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        let gn: i64 = conn
+                            .query_row("SELECT count(*) FROM graph_nodes", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        let ge: i64 = conn
+                            .query_row("SELECT count(*) FROM graph_edges", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        let dr: i64 = conn
+                            .query_row("SELECT count(*) FROM dream_runs", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        // Ф28.3: блок Ralph
+                        let rr: i64 = conn
+                            .query_row("SELECT count(*) FROM ralph_runs", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        let ri: i64 = conn
+                            .query_row("SELECT count(*) FROM ralph_iterations", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        let rf: i64 = conn
+                            .query_row("SELECT count(*) FROM ralph_findings", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        Ok((m, r, d, c, gn, ge, dr, rr, ri, rf))
+                    })
+                    .unwrap_or_default();
 
                 format!(
                     "memories={} relations={} documents={} chunks={} graph_nodes={} graph_edges={} dream_runs={} db={}KB backend={} ralph: runs={} iters={} findings={}",
@@ -1301,12 +1520,21 @@ impl McpServer {
                 let desc = args.get("description").and_then(|v| v.as_str());
                 let tech_stack: Option<Vec<String>> = args.get("tech_stack").and_then(|v| {
                     v.as_array().map(|arr| {
-                        arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect()
                     })
                 });
 
-                match self.ctx.project.register_project(id, name, path, desc, tech_stack.as_deref()) {
-                    Ok(p) => format!("project registered: id={} name='{}' root='{}'", p.id, p.name, p.root_path),
+                match self
+                    .ctx
+                    .project
+                    .register_project(id, name, path, desc, tech_stack.as_deref())
+                {
+                    Ok(p) => format!(
+                        "project registered: id={} name='{}' root='{}'",
+                        p.id, p.name, p.root_path
+                    ),
                     Err(e) => format!("[Error] {e}"),
                 }
             }
@@ -1316,7 +1544,10 @@ impl McpServer {
                     None => return "[Error] id is required".to_string(),
                 };
                 let path = args.get("path").and_then(|v| v.as_str());
-                let incremental = args.get("incremental").and_then(|v| v.as_bool()).unwrap_or(true);
+                let incremental = args
+                    .get("incremental")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
 
                 match self.ctx.project.scan_project(id, path, incremental) {
                     Ok(res) => {
@@ -1327,7 +1558,11 @@ impl McpServer {
                         let _ = self.ctx.project.embed_unembedded_nodes(id).await;
                         format!(
                             "project '{}' scanned: files={} nodes={} edges={} total_lines={}",
-                            id, res.files_scanned, res.nodes.len(), res.edges.len(), res.lines_total
+                            id,
+                            res.files_scanned,
+                            res.nodes.len(),
+                            res.edges.len(),
+                            res.lines_total
                         )
                     }
                     Err(e) => format!("[Error] {e}"),
@@ -1339,11 +1574,17 @@ impl McpServer {
                     None => return "[Error] id is required".to_string(),
                 };
                 let query = args.get("query").and_then(|v| v.as_str());
-                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("context");
+                let mode = args
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("context");
 
                 // Ф37: repo_map — компактная карта «файл → символы» под token budget
                 if mode == "repo_map" {
-                    let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(4096) as usize;
+                    let max_tokens = args
+                        .get("max_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(4096) as usize;
                     return match self.ctx.db.with_conn(|conn| {
                         crate::graph::repomap::build_repo_map(conn, id, query, max_tokens)
                     }) {
@@ -1352,7 +1593,9 @@ impl McpServer {
                     };
                 }
 
-                match self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::build_project_context(conn, id, query)) {
+                match self.ctx.db.with_conn(|conn| {
+                    crate::graph::GraphAnalytics::build_project_context(conn, id, query)
+                }) {
                     Ok(ctx) => ctx,
                     Err(e) => format!("[Error] {e}"),
                 }
@@ -1367,8 +1610,14 @@ impl McpServer {
                     None => return "[Error] query is required".to_string(),
                 };
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
-                let provenance = args.get("provenance").and_then(|v| v.as_str()).unwrap_or("all");
-                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("hybrid");
+                let provenance = args
+                    .get("provenance")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("all");
+                let mode = args
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("hybrid");
 
                 // Ф36.2: структурные режимы — callers/callees по query-символу
                 if mode == "callers" || mode == "callees" {
@@ -1379,14 +1628,19 @@ impl McpServer {
                     };
                     let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(2) as usize;
                     return match self.ctx.db.with_conn(|conn| {
-                        let Some(sym) = crate::graph::callpath::resolve_symbol(conn, id, query)? else {
+                        let Some(sym) = crate::graph::callpath::resolve_symbol(conn, id, query)?
+                        else {
                             return Ok(format!("[callers/callees] символ не найден: {query}"));
                         };
                         let links =
                             crate::graph::callpath::neighbors(conn, id, sym.id, dir, depth, limit)?;
                         let header = format!(
                             "{} `{}` ({})",
-                            if dir == crate::graph::callpath::Dir::Callers { "Callers" } else { "Callees" },
+                            if dir == crate::graph::callpath::Dir::Callers {
+                                "Callers"
+                            } else {
+                                "Callees"
+                            },
                             sym.label,
                             sym.location()
                         );
@@ -1397,7 +1651,12 @@ impl McpServer {
                     };
                 }
 
-                match self.ctx.graph.search_project_nodes_hybrid(id, query, mode, provenance, limit).await {
+                match self
+                    .ctx
+                    .graph
+                    .search_project_nodes_hybrid(id, query, mode, provenance, limit)
+                    .await
+                {
                     Ok(nodes) => {
                         if nodes.is_empty() {
                             "совпадений в графе проекта не найдено".to_string()
@@ -1412,9 +1671,13 @@ impl McpServer {
                                 let god_mark = if n.is_god_node { " [👑 GodNode]" } else { "" };
                                 lines.push(format!(
                                     "- `{}` [{}] ({}) score={:.4} prov={}{}: {}",
-                                    n.label, n.node_type, loc, n.score,
+                                    n.label,
+                                    n.node_type,
+                                    loc,
+                                    n.score,
                                     n.provenance.as_deref().unwrap_or("ast"),
-                                    god_mark, n.description.as_deref().unwrap_or("")
+                                    god_mark,
+                                    n.description.as_deref().unwrap_or("")
                                 ));
                             }
                             lines.join("\n")
@@ -1430,13 +1693,20 @@ impl McpServer {
                     None => return "[Error] from_symbol is required".to_string(),
                 };
                 let active_proj = self.ctx.active_project_id.read().await.clone();
-                let id = match args.get("id").and_then(|v| v.as_str()).or(active_proj.as_deref()) {
+                let id = match args
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .or(active_proj.as_deref())
+                {
                     Some(i) => i.to_string(),
                     None => return "[Error] id is required (no active project)".to_string(),
                 };
                 let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(25) as usize;
-                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("callees");
+                let mode = args
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("callees");
 
                 match self.ctx.db.with_conn(|conn| {
                     let Some(from) = crate::graph::callpath::resolve_symbol(conn, &id, from_symbol)? else {
@@ -1478,12 +1748,18 @@ impl McpServer {
             }
             "project_report" => {
                 let active_proj = self.ctx.active_project_id.read().await.clone();
-                let id = match args.get("id").and_then(|v| v.as_str()).or(active_proj.as_deref()) {
+                let id = match args
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .or(active_proj.as_deref())
+                {
                     Some(i) => i,
                     None => return "[Error] id is required".to_string(),
                 };
 
-                match self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::generate_project_report(conn, id)) {
+                match self.ctx.db.with_conn(|conn| {
+                    crate::graph::GraphAnalytics::generate_project_report(conn, id)
+                }) {
                     Ok(rep) => rep.markdown_summary,
                     Err(e) => format!("[Error] {e}"),
                 }
@@ -1494,13 +1770,19 @@ impl McpServer {
                     None => return "[Error] symbol_or_path is required".to_string(),
                 };
                 let active_proj = self.ctx.active_project_id.read().await.clone();
-                let id = match args.get("id").and_then(|v| v.as_str()).or(active_proj.as_deref()) {
+                let id = match args
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .or(active_proj.as_deref())
+                {
                     Some(i) => i,
                     None => return "[Error] id is required (no active project)".to_string(),
                 };
                 let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
 
-                match self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::analyze_impact(conn, id, symbol_or_path, depth)) {
+                match self.ctx.db.with_conn(|conn| {
+                    crate::graph::GraphAnalytics::analyze_impact(conn, id, symbol_or_path, depth)
+                }) {
                     Ok(imp) => imp.markdown_summary,
                     Err(e) => format!("[Error] {e}"),
                 }
@@ -1511,14 +1793,35 @@ impl McpServer {
 
     async fn read_resource(&self, uri: &str, active_proj: Option<&str>) -> (String, &'static str) {
         match uri {
+            // Ф38.3: edit-time blast radius (warn-only, дефолт off)
+            "project://current/blast-radius" => {
+                let enabled = crate::graph::blast::warn_enabled_from_env();
+                let text = self
+                    .ctx
+                    .db
+                    .with_conn(|conn| {
+                        Ok::<String, rusqlite::Error>(crate::graph::blast::warn_block(
+                            conn,
+                            active_proj,
+                            enabled,
+                        ))
+                    })
+                    .unwrap_or_default();
+                (text, "text/plain")
+            }
             "project://current/overview" => {
                 if let Some(pid) = active_proj {
-                    match self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::generate_project_report(conn, pid)) {
+                    match self.ctx.db.with_conn(|conn| {
+                        crate::graph::GraphAnalytics::generate_project_report(conn, pid)
+                    }) {
                         Ok(rep) => (rep.markdown_summary, "text/markdown"),
                         Err(e) => (format!("Ошибка генерации отчета: {e}"), "text/markdown"),
                     }
                 } else {
-                    ("Активный проект не привязан к сессии.".to_string(), "text/markdown")
+                    (
+                        "Активный проект не привязан к сессии.".to_string(),
+                        "text/markdown",
+                    )
                 }
             }
             "project://current/god-nodes" => {
@@ -1554,7 +1857,10 @@ impl McpServer {
                     }).unwrap_or_else(|e| format!("Ошибка: {e}"));
                     (text, "text/markdown")
                 } else {
-                    ("Активный проект не привязан к сессии.".to_string(), "text/markdown")
+                    (
+                        "Активный проект не привязан к сессии.".to_string(),
+                        "text/markdown",
+                    )
                 }
             }
             "project://current/schema" => {
@@ -1587,7 +1893,10 @@ impl McpServer {
                     }).unwrap_or_else(|e| format!("Ошибка: {e}"));
                     (text, "text/markdown")
                 } else {
-                    ("Активный проект не привязан к сессии.".to_string(), "text/markdown")
+                    (
+                        "Активный проект не привязан к сессии.".to_string(),
+                        "text/markdown",
+                    )
                 }
             }
             "memory://context" => {
@@ -1598,17 +1907,28 @@ impl McpServer {
                 };
                 match self.ctx.memory.build_context(20, None, &opts).await {
                     Ok(ctx) => (ctx, "text/markdown"),
-                    Err(e) => (format!("Ошибка получения контекста памяти: {e}"), "text/markdown"),
+                    Err(e) => (
+                        format!("Ошибка получения контекста памяти: {e}"),
+                        "text/markdown",
+                    ),
                 }
             }
             _ => (format!("Ресурс не найден: {uri}"), "text/plain"),
         }
     }
 
-    async fn get_prompt(&self, name: &str, args: &serde_json::Value, active_proj: Option<&str>) -> serde_json::Value {
+    async fn get_prompt(
+        &self,
+        name: &str,
+        args: &serde_json::Value,
+        active_proj: Option<&str>,
+    ) -> serde_json::Value {
         match name {
             "explain_component" => {
-                let comp_name = args.get("component_name").and_then(|v| v.as_str()).unwrap_or("");
+                let comp_name = args
+                    .get("component_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let pid = active_proj.unwrap_or("");
 
                 let mut context_lines = Vec::new();
@@ -1715,11 +2035,18 @@ impl McpServer {
                 })
             }
             "plan_feature" => {
-                let task = args.get("task_description").and_then(|v| v.as_str()).unwrap_or("");
+                let task = args
+                    .get("task_description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let pid = active_proj.unwrap_or("");
 
                 let overview = if !pid.is_empty() {
-                    self.ctx.db.with_conn(|conn| crate::graph::GraphAnalytics::generate_project_report(conn, pid))
+                    self.ctx
+                        .db
+                        .with_conn(|conn| {
+                            crate::graph::GraphAnalytics::generate_project_report(conn, pid)
+                        })
                         .map(|r| r.markdown_summary)
                         .unwrap_or_default()
                 } else {

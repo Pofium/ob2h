@@ -1,11 +1,11 @@
 //! Фоновый наблюдатель за изменениями файлов проекта (File Watcher).
 //! Использует notify и debouncer для реактивного инкрементального обновления графа кодовой базы.
 
+use notify::RecursiveMode;
+use notify_debouncer_mini::new_debouncer;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use notify::RecursiveMode;
-use notify_debouncer_mini::new_debouncer;
 use tracing::{error, info, warn};
 
 use crate::project::ProjectService;
@@ -16,7 +16,17 @@ pub fn is_code_file(path: &Path) -> bool {
         let name = comp.as_os_str().to_string_lossy();
         if matches!(
             name.as_ref(),
-            ".git" | "target" | "node_modules" | "dist" | "build" | "venv" | ".venv" | "data" | "logs" | "backups" | "__pycache__"
+            ".git"
+                | "target"
+                | "node_modules"
+                | "dist"
+                | "build"
+                | "venv"
+                | ".venv"
+                | "data"
+                | "logs"
+                | "backups"
+                | "__pycache__"
         ) {
             return false;
         }
@@ -26,8 +36,20 @@ pub fn is_code_file(path: &Path) -> bool {
         let ext_lower = ext.to_lowercase();
         matches!(
             ext_lower.as_str(),
-            "rs" | "py" | "ts" | "tsx" | "js" | "jsx" | "go" | "sql"
-            | "c" | "cpp" | "h" | "hpp" | "php" | "dart" | "java"
+            "rs" | "py"
+                | "ts"
+                | "tsx"
+                | "js"
+                | "jsx"
+                | "go"
+                | "sql"
+                | "c"
+                | "cpp"
+                | "h"
+                | "hpp"
+                | "php"
+                | "dart"
+                | "java"
         )
     } else {
         false
@@ -90,12 +112,22 @@ impl ProjectWatcher {
                     }
                 };
 
-                if let Err(e) = debouncer.watcher().watch(&r_path_for_thread, RecursiveMode::Recursive) {
-                    warn!("FileWatcher: не удалось подписаться на каталог {}: {e}", r_path_for_thread.display());
+                if let Err(e) = debouncer
+                    .watcher()
+                    .watch(&r_path_for_thread, RecursiveMode::Recursive)
+                {
+                    warn!(
+                        "FileWatcher: не удалось подписаться на каталог {}: {e}",
+                        r_path_for_thread.display()
+                    );
                     return;
                 }
 
-                info!("FileWatcher: запущено наблюдение за '{}' ({})", p_id_for_thread, r_path_for_thread.display());
+                info!(
+                    "FileWatcher: запущено наблюдение за '{}' ({})",
+                    p_id_for_thread,
+                    r_path_for_thread.display()
+                );
 
                 loop {
                     match sync_rx.recv() {
@@ -106,7 +138,9 @@ impl ProjectWatcher {
                                 .filter(|p| is_code_file(p))
                                 .collect();
 
-                            if !relevant_paths.is_empty() && event_tx.blocking_send(relevant_paths).is_err() {
+                            if !relevant_paths.is_empty()
+                                && event_tx.blocking_send(relevant_paths).is_err()
+                            {
                                 break; // получатель закрыт
                             }
                         }
@@ -139,6 +173,10 @@ impl ProjectWatcher {
                                         Ok(res) => {
                                             info!("FileWatcher: инкрементальное сканирование завершено: scanned={}, nodes={}, edges={}",
                                                 res.files_scanned, res.nodes.len(), res.edges.len());
+                                            // Ф38.1: blast-hint не пишется отсюда напрямую —
+                                            // он вычисляется на read-path (blast::warn_block)
+                                            // из updated_at, обновлённых этим ресканом,
+                                            // и кэшируется в kv `blast_hint:<project>` (TTL 30 мин)
                                         }
                                         Err(e) => {
                                             warn!("FileWatcher: ошибка инкрементального сканирования: {e}");

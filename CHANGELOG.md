@@ -6,6 +6,17 @@
 ## [Не выпущено]
 
 ### Added
+- **Type-resolve lite + provenance (Фаза 39 / трек C PLAN_v1.4)**: лёгкий semantic
+  pass Rust+Python на своём AST — резолв простых вызовов (same-file, импорты,
+  алиасы `use x as y`/`from .m import x as y`) в CALLS-рёбра с provenance=RESOLVED;
+  нерезолвленное остаётся без ребра (AMBIGUOUS). M8: provenance на graph_edges
+  (EXTRACTED/RESOLVED/INFERRED; легаси-рёбра читаются как есть). Provenance в
+  выдаче `project_call_path` и `project_impact`. +4 теста (`tests/test_typepass.rs`).
+- **Edit-time blast radius, warn-only (Фаза 38 / трек C PLAN_v1.4)**: MCP-ресурс
+  `project://current/blast-radius` + plugin-мост в prefetch — короткий warn-блок
+  «правка `<symbol>`: затронуты <callers>» по последним изменённым символам
+  (TTL 30 мин, kv-кэш `blast_hint:<project>`); флаг `OB2H_EDIT_BLAST=warn`
+  (дефолт off), fail-open. Модуль `src/graph/blast.rs`; +3 теста (`tests/test_blast.rs`).
 - **Repo-map под token budget (Фаза 37 / трек C PLAN_v1.4)**: `project_context
   mode=repo_map` — карта «файл → сигнатуры символов», уложенная в бюджет токенов
   (2k/4k/8k): PPR-ранжирование по file-dependency графу (прямые file→file IMPORTS +
