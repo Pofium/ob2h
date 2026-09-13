@@ -3,8 +3,9 @@
 > **Версия плана:** 1.4.0
 > **Статус:** Черновик rev.2 — правки по ревью (2026-09-13); на утверждение
 > **Обновлён:** 2026-09-13 — rev.2 по ревью: dual-сигнал гейта Ф30 (recall@5 или MRR), timeout ≠ rollback, supersedes в вердиктах LLM (Ф31), лимиты compaction, обе стороны в conflict-разметке (Ф32), soft-delete рёбер (миграция M7), meta.conflict_versions в синке (Ф34), §8 исследование ревью (MELD/Hindsight/Governed Memory/StateFuse); явное предусловие — закрытый DoD v1.3
+> **Обновлён (rev.3):** 2026-09-13 — добавлен опциональный **трек C «Coding Graph»** (Фазы 36–40: structural queries, repo-map под token budget, edit-time blast radius, type-resolve + provenance, communities/framework edges/связка с памятью) из ревью coding-части; контракт 34→35 инструментов; миграция M8 (provenance)
 > **Предыдущие этапы:** v0.8/0.9 (Ядро, Память, Дриминг, Синк), v1.0/1.1 (AST-граф, God Nodes, мультиагентность), v1.2 (Zero-Config проекты, инкрементальный AST, AutoSync, семантика кода), v1.3 rev.2 (bench, честный prefetch, trust-петля, квантование/бэкапы, Ralph Knowledge Layer, опциональный PPR)
-> **Принцип совместимости:** 100% обратная совместимость (Zero Breaking Changes) для всех 33 инструментов MCP. Изменения аддитивные (§5), с записью в `CHANGELOG.md`.
+> **Принцип совместимости:** 100% обратная совместимость (Zero Breaking Changes) для всех 34 инструментов MCP (33 из v1.3 + memory_merge). Изменения аддитивные (§5), с записью в `CHANGELOG.md`; трек C добавляет №35.
 > **База:** кандидаты взяты из §8/бэклога утверждённого PLAN_v1.3 (rev.2, коммит 5a3e32f) — sqlite-vec-rescore, typed edges, compaction/contradiction-check, LLM-merge; нумерация фаз продолжается после Фазы 29 (Ralph-трек + PPR).
 > **Предусловие старта:** v1.4 не стартовать до закрытия DoD v1.3 (Фазы 21–25, включая 23.5 и 24) — иначе ночной гейт будет мерить «старый» importance-only `build_context`, а Ф31–33 зависят от M5 (trust, memory_links). На main сейчас v1.2.0 — план валиден как post-v1.3.
 
@@ -28,6 +29,7 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 **Порядок:** Ф30 сразу (глоток безопасности) → Ф31/Ф32 (консолидация) → Ф33 → Ф34/Ф35 параллельно.
 **Максимальный ROI:** Ф30 → Ф31.1/31.2 → Ф34; Ф33 и Ф35 можно параллелить после.
+**Трек C (Ф36–40, coding-граф)** — опциональный: Ф36–37 не зависят от ядра v1.4 (хватает AST-графа v1.2), Ф40 требует M5; параллелится с Ф34/Ф35.
 
 ---
 
@@ -76,9 +78,13 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 ## 3. Модель данных и файлы
 
-**Одна аддитивная миграция M7:** `ALTER TABLE memory_links ADD COLUMN deleted_at TEXT;`
-(soft-delete рёбер при forget стороны — чтобы sync v2 реплицировал удаление, как tombstones
-записей). Остальное — kv и файлы; typed kind уже зарезервированы в 23.5.
+**Аддитивные миграции M7/M8:**
+- M7: `ALTER TABLE memory_links ADD COLUMN deleted_at TEXT;` — soft-delete рёбер при
+  forget стороны (sync v2 реплицирует удаление, как tombstones записей);
+- M8 (трек C, Ф39): `ALTER TABLE graph_edges ADD COLUMN provenance TEXT NOT NULL DEFAULT 'EXTRACTED';`
+  — происхождение рёбер: EXTRACTED (AST, confidence=1.0) | RESOLVED (type-pass) |
+  INFERRED (LLM/эвристика) | AMBIGUOUS.
+Остальное — kv и файлы; typed kind уже зарезервированы в 23.5.
 
 - kv: `bench:baseline`, `bench:last`, `bench:runs` (счётчик прогонов для гейта Ф35.2),
   `sync_cursor:<peer>` (max `updated_at` отправленного), `vec:index_stats` (для Ф35.1).
@@ -246,20 +252,96 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 ---
 
-## 5. Итоговый контракт инструментов MCP (34 инструмента)
+**Трек C — Coding Graph (опциональный; из ревью coding-части, 2026-09-13, §8 таблица 2).**
+Идея: «coding memory», а не только structural map — всё поверх существующих `graph_edges`
+и PPR (Ф29/Ф33), без новых СУБД (ADR-1) и без tree-sitter-на-всё (§7). Ф36–37 не зависят
+от ядра v1.4 (хватает AST-графа v1.2), Ф40 требует M5; трек параллелится с Ф34/Ф35.
 
-Существующие 33 инструмента сохраняют 100% совместимость сигнатур. Изменения аддитивные:
+### Фаза 36 (C1) — Structural queries: call-path, callers, dead code (Оценка: 1.5–2 дня)
+
+- [ ] **36.1** Новый MCP-инструмент **`project_call_path` (№35)**:
+  `project_call_path(project_id?, from_symbol, to_symbol?, depth?)` — явная цепочка
+  вызовов/зависимостей по `graph_edges` (CALLS/IMPORTS/INHERITS); без `to_symbol` —
+  кто вызывает from (callers) / что вызывает сам from (callees) с глубиной.
+- [ ] **36.2** `project_graph_search` — режимы `mode=callers|callees` (аддитивно):
+  быстрый ответ без нового инструмента.
+- [ ] **36.3** Dead-code report: CLI `ob2h project dead-code [--id]` + секция в
+  `project_report` — символы с in-degree 0, кроме entrypoints (main, #[test]/tests,
+  pub API, kind=ROUTE из Ф40).
+- [ ] **Тесты:** fixture-репо: цепочка A→B→C находится; мёртвый символ — в отчёте;
+  entrypoints не попадают.
+
+### Фаза 37 (C2) — Repo-map под token budget (Aider-паттерн) (Оценка: 1–1.5 дня)
+
+- [ ] **37.1** `project_context(id?, query?, max_tokens?, mode?)`: `mode=repo_map` —
+  компактная карта «файл/символ + сигнатура», ранжирование PPR по file-dependency graph
+  (переиспользование `pagerank.rs` Ф29/Ф33), binary-search fit под бюджет (2k/4k/8k);
+  сигнатуры + 1–2 ключевые строки, не целые файлы.
+- [ ] **37.2** Дефолтный `project_context` без mode — прежнее поведение (совместимость).
+- [ ] **Тесты:** на fixture-репо карта ≤ бюджета в ≥ 95% прогонов; God Nodes попадают
+  раньше хвостов; детерминизм при той же БД.
+
+### Фаза 38 (C3) — Edit-time blast radius (warn-only) (Оценка: 1–2 дня)
+
+- [ ] **38.1** ProjectWatcher (v1.2) после инкрементального рескана детектит изменённые
+  символы → kv `blast_hint:<project>`: symbol, top-5 callers (логика project_impact),
+  TTL 30 мин.
+- [ ] **38.2** Plugin-мост: prefetch при свежем hint добавляет короткий warn-блок
+  `[blast-radius] правка <symbol>: затронуты <callers>` (2–4 строки); warn-only,
+  fail-open (ошибка RPC не ломает prefetch); флаг `OB2H_EDIT_BLAST=warn` (дефолт off).
+- [ ] **38.3** MCP-ресурс `project://current/blast-radius` — для агентов без плагина
+  (resources/read из v1.2).
+- [ ] **Тесты:** правка hub-символа → hint с callers; просроченный TTL → блока нет;
+  недоступный RPC → prefetch без блока, без ошибки.
+
+### Фаза 39 (C4) — Type-resolve lite + provenance (Оценка: 2–3 дня)
+
+- [ ] **39.1** Лёгкий semantic pass для Rust + Python (TS следом): resolve imports и
+  простых call targets (receiver types, алиасы импортов) на своём AST — без LSP-серверов;
+  нерезолвленное — AMBIGUOUS, не выдумывать.
+- [ ] **39.2** Миграция M8 (§3): `provenance` на graph_edges; EXTRACTED при обычном скане,
+  RESOLVED после type-pass, INFERRED для эвристик (Ф40).
+- [ ] **39.3** Provenance в выдаче `project_call_path`/`project_impact`/
+  `project_graph_search` — агент калибрует доверие к шуму.
+- [ ] **Тесты:** fixture с алиасами/реэкспортами — распределение RESOLVED vs AMBIGUOUS;
+  переименование символа не роняет резолв; старые рёбра читаются (DEFAULT 'EXTRACTED').
+
+### Фаза 40 (C5) — Communities, framework edges, связка с памятью (Оценка: 2 дня)
+
+- [ ] **40.1** Louvain/модулярность pure-Rust по graph_edges проекта → «зоны» в
+  `project_report`/`project_context` (усиливает ralph_context, Ф27).
+- [ ] **40.2** Framework-aware edges выборочно: kind=ROUTE (axum/actix, FastAPI),
+  kind=QUERIES_TABLE (SQL ↔ ORM) — эвристики в AST-экстракторе; kind-набор расширяется
+  данными, схема не меняется.
+- [ ] **40.3** Связка graph ↔ memory: `memory_save` с project_id — автолинк kind=code_symbol
+  на упомянутые God Nodes/символы (OneKE-lite); `project_context(mode=repo_map,
+  with_memory=true)` подмешивает high-trust memories проекта; ADR-записи (category=adr)
+  линкуются на символы из текста.
+- [ ] **40.4** Dead-code (36.3) учитывает kind=ROUTE/HANDLES — маршрут живой entrypoint.
+- [ ] **Тесты:** fixture axum/FastAPI — ROUTE найден и исключён из dead-code; зоны на
+  fixture из двух модулей; memory↔symbol линк появляется при save с project_id.
+
+---
+
+## 5. Итоговый контракт инструментов MCP (35 инструментов)
+
+Существующие 34 инструмента сохраняют 100% совместимость сигнатур. Изменения аддитивные:
 
 1–33. — без изменений (см. PLAN_v1.3 §5);
 34. **`memory_merge(keys[], canonical_key?, note?)`** — НОВЫЙ (Ф31): подтверждённое
     слияние почти-дублей; tombstone + redirect для links.
     - `graph_reason(query, project_id?, scope?)` — добавлен опциональный `scope: docs|memory|all` (Ф33);
-    - `memory_search(..., mode?)` — добавлено значение `mode=graph` (Ф33, fallback 1-hop).
+    - `memory_search(..., mode?)` — добавлено значение `mode=graph` (Ф33, fallback 1-hop);
+35. **`project_call_path(project_id?, from_symbol, to_symbol?, depth?)`** — НОВЫЙ (Ф36,
+    трек C): явная цепочка вызовов/зависимостей; без `to_symbol` — callers/callees.
+    - `project_graph_search(..., mode?)` — режимы `callers|callees` (Ф36, трек C);
+    - `project_context(..., mode?, with_memory?)` — `mode=repo_map`, `with_memory` (Ф37/Ф40, трек C).
 
 Новые CLI-подкоманды: `ob2h bench history`, `ob2h memory dedup`, `ob2h sync verify`,
-`ob2h sync push --full`; флаги `OB2H_BENCH_GATE`, `OB2H_BENCH_GATE_TIMEOUT_MS`,
-`OB2H_PPR_WEIGHTS`, `OB2H_DREAM_BELIEF`, `OB2H_SYNC_KEEP_LOSERS`, `OB2H_VEC0`,
-`OB2H_RERANK` (решение по дефолту — 35.2), `OB2H_LOG_RETENTION_DAYS`.
+`ob2h sync push --full`, `ob2h project dead-code` (трек C); флаги `OB2H_BENCH_GATE`,
+`OB2H_BENCH_GATE_TIMEOUT_MS`, `OB2H_PPR_WEIGHTS`, `OB2H_DREAM_BELIEF`,
+`OB2H_SYNC_KEEP_LOSERS`, `OB2H_VEC0`, `OB2H_RERANK` (решение по дефолту — 35.2),
+`OB2H_LOG_RETENTION_DAYS`, `OB2H_EDIT_BLAST` (трек C).
 Изменения контракта — с записью в `CHANGELOG.md` (§6 AGENTS.md).
 
 ---
@@ -290,6 +372,12 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
   не фазы.
 - **Веб-дашборд памяти** — требует изменения ADR «Сеть — только LLM/embedding API»;
   кандидат в бэклог, не фаза.
+- **Полный tree-sitter на 150+ языков** — свои парсеры дают контроль и минимум
+  зависимостей; tree-sitter-rust — опция позже для «хвоста» языков (бэклог).
+- **Тяжёлый Hybrid LSP на все языки сразу** — начинаем с resolve-lite на 2–3 языках (Ф39),
+  без LSP-серверов.
+- **Cloud indexing кода (Cursor-style)** — приватность + offline.
+- **3D graph UI** — не core; опциональный export JSON для внешних визуализаторов (бэклог).
 
 ---
 
@@ -305,6 +393,16 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 | **StateFuse / conflict-preserving CRDT** — сохранение проигравшей версии | `meta.conflict_versions` в Ф34.2 — за флагом, вместо pure LWW |
 | **DiskANN** — до 17–100×, но дорогой insert | Бэклог: только если sqlite-vec rescore не хватит (Ф35.1) |
 | **sqlite-vec rescore, 2026-цифры** — int8 os=2 ≈ 2.6× (recall@10 ≈ 1.0); bit os=8 ≈ 5.8× (recall ≈ 0.988) | Ф35.1: обосновывает гейт 80–100 мс — после int8 brute force на ~600K×384d часто ещё укладывается в 50–100 мс на CPU |
+
+**Трек C — coding-граф (ревью 2026-09-13):**
+
+| Технология | Вердикт для трека C |
+|---|---|
+| **codebase-memory-mcp** (DeusData; arXiv 2603.27277) — tree-sitter KG, 14 MCP tools, Louvain в SQLite, Hybrid LSP | Идеи в Ф36/Ф40: structural queries, communities; полный tree-sitter/LSP — нет (§7) |
+| **Aider RepoMap** — PageRank + token budget (проверен на SWE-bench) | Ф37: PPR по file-dependency + binary-fit — `pagerank.rs` уже в плане (Ф29/Ф33) |
+| **codegraph (Doublehead)** — blast-radius в момент edit, warn-only fail-open | Ф38: hook через ProjectWatcher → prefetch-блок + MCP-ресурс |
+| **Graphify** — provenance EXTRACTED/RESOLVED/INFERRED, path/explain | Ф39: provenance на graph_edges (M8), в выдаче path-инструментов |
+| **Sonar Vortex** (−36% tokens) / **RustCodeGraph** — semantic navigation, ближайший Rust/MCP аналог | Ориентиры token-economy для Ф36–37; не порт |
 
 ---
 
@@ -330,6 +428,10 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 - [ ] **Латентность (Ф35):** p95 `memory_search` замерен (отдельно memories/graph_nodes)
       и записан; ADR-запись в `PLAN.md`/`docs/` с цифрами p95 до/после — независимо от
       решения по sqlite-vec; решение по реранкеру зафиксировано в bench-отчёте с числами.
+- [ ] **Трек C (при принятии; Ф36–40):** на fixture-репо call-path A→B→C найден,
+      dead-code без entrypoints; repo_map ≤ бюджета в ≥ 95% прогонов; blast-hint
+      warn-only и fail-open; provenance-метки в выдаче path-инструментов; ROUTE
+      исключён из dead-code; memory↔symbol линк создаётся при save с project_id.
 - [ ] `CHANGELOG.md` обновлён (memory_merge, scope, mode=graph, sync v2, bench history,
       tool annotations); README/ARCHITECTURE/HERMES_INTEGRATION/SYNC.md актуализированы;
       при подключении sqlite-vec — запись в `PLAN.md` §6 (журнал решений).
