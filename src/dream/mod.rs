@@ -2,6 +2,7 @@
 
 pub mod autodream;
 pub mod bench_gate;
+pub mod consolidate;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,6 +61,10 @@ pub struct DreamStats {
     pub graph_edges: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_revision: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bench_gate: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consolidation: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,6 +144,8 @@ impl Dream {
                     graph_entities: None,
                     graph_edges: None,
                     memory_revision: None,
+                    bench_gate: None,
+                    consolidation: None,
                     note: None,
                     error: Some(e.to_string()),
                 };
@@ -175,6 +182,8 @@ impl Dream {
                 graph_entities: None,
                 graph_edges: None,
                 memory_revision: None,
+                bench_gate: None,
+                consolidation: None,
                 note: Some("нет новых записей с прошлого дрима".to_string()),
                 error: None,
             });
@@ -194,6 +203,21 @@ impl Dream {
             warn!("Dream-ревизия памяти не удалась: {e}");
             Vec::new()
         });
+
+        // Ф31: офлайн-консолидация — LLM-вердикты по merge-кандидатам + compaction
+        let consolidation = match self.consolidate_memory().await {
+            Ok(r) => {
+                let nontrivial = !r["merges"].as_array().unwrap_or(&vec![]).is_empty()
+                    || !r["edges"].as_array().unwrap_or(&vec![]).is_empty()
+                    || !r["digests"].as_array().unwrap_or(&vec![]).is_empty()
+                    || !r["keep_both"].as_array().unwrap_or(&vec![]).is_empty();
+                if nontrivial { Some(r) } else { None }
+            }
+            Err(e) => {
+                warn!("Консолидация памяти не удалась: {e}");
+                None
+            }
+        };
 
         let new_cursor = new_records.iter().map(|r| r.cursor).max().unwrap_or(dream_cursor);
         self.workspace.set_dream_cursor(new_cursor)?;
@@ -220,6 +244,8 @@ impl Dream {
             graph_entities: Some(graph_entities),
             graph_edges: Some(graph_edges),
             memory_revision: if revisions.is_empty() { None } else { Some(revisions) },
+            bench_gate: None,
+            consolidation,
             note: None,
             error: None,
         })

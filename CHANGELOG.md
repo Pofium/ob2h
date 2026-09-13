@@ -6,6 +6,20 @@
 ## [Не выпущено]
 
 ### Added
+- **Офлайн-консолидация в дриме (Фаза 31 PLAN_v1.4, частично — 31.2/31.3/31.5)**:
+  модуль `src/dream/consolidate.rs` — LLM-вердикты по группам `meta.merge_candidate`
+  (`merge | keep_both | contradicts | supersedes`, исходы MELD; ≤5 групп за дрим):
+  merge — union meta / max importance / sum access на канонической записи, tombstone
+  поглощённой с `meta.merged_into` и редиректом memory_links; supersedes/contradicts —
+  обе записи живы + typed edge (резерв 23.5 начинает работать, повторный дрим не
+  дублирует рёбра). Отчёт — в `dream_status` (поле `consolidation` в stats дрима).
+  Compaction раз в 30 дней (kv `compaction:last`): кластеры слабых записей
+  (Jaccard ключей + косинус, ≤8, без high-trust/high-access) → summary-узел
+  `hmem-digest/<дата>`, kind=summary на членов; оригиналы не трогаются. CLI
+  `ob2h memory dedup [--dry-run]`: топ-1 косинусный сосед (0.98 identity / 0.75
+  подозрение), без --dry-run ставит маркеры `merge_candidate` — слияние решает дрим
+  или `memory_merge` (31.4, файлы mcp/* ждут коммита WIP Ф25). +6 тестов
+  (test_consolidation.rs).
 - **Ночной bench-гейт дрима (Фаза 30 PLAN_v1.4)**: после успешного автодрима прогон
   quick-набора golden set (15 кейсов, mode=context, бюджет `OB2H_BENCH_GATE_TIMEOUT_MS=3000`);
   относительное падение recall@5 >10% или MRR >15% против kv `bench:last` →

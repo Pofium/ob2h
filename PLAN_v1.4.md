@@ -138,30 +138,36 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
   +1 access_count); cos 0.75–0.95 → пометка `meta.merge_candidate=<key>` — кандидат в
   дрим-ревизию. Пороги согласованы с практикой Governed Memory (write 0.92 / background
   0.95 — §8); identity-дубль отличаем от state-update (см. 31.2).
-- [ ] **31.2** LLM-merge офлайн (бэклог §8 v1.3, строка Mem0): в дриме для групп
+  *(ждёт файл `src/memory/service.rs` — в рабочем дереве WIP Ф25; дрим и CLI уже
+  читают/ставят маркеры — см. 31.2/31.5)*
+- [x] **31.2** LLM-merge офлайн (бэклог §8 v1.3, строка Mem0): в дриме для групп
   `merge_candidate` один вызов `llm_client` с вердиктом
   `merge | keep_both | contradicts | supersedes` (исходы MELD — §8):
   identity-дубль → `merge` (UPDATE канонической записи, остальные — tombstone +
   `meta.merged_into`); state-update («раньше Postgres, теперь MySQL») → `supersedes` —
   обе записи живы, ребро kind=supersedes из Ф32 (история не теряется);
-  на горячем пути save LLM нет.
-- [ ] **31.3** Compaction (OMEGA-style, §8 v1.3): в дриме раз в 30 дней кластеризация
+  на горячем пути save LLM нет. *(модуль `src/dream/consolidate.rs`, отчёт —
+  `DreamStats.consolidation` в dream_status; ≤5 групп за дрим)*
+- [x] **31.3** Compaction (OMEGA-style, §8 v1.3): в дриме раз в 30 дней кластеризация
   (Jaccard по ключам + косинус) записей с низким trust/давним доступом → LLM пишет
   summary-node `hmem-digest/<cluster>`, связанную kind=summary с членами. Ограничения:
   кластер ≤ 8 записей (иначе дайджест теряет конкретику); high-trust (≥ 0.7) и
   high-access записи в кластеры не попадают. Оригиналы не трогаются (дополнение к
-  `candidate_for_forget`, не замена).
+  `candidate_for_forget`, не замена). *(троттлинг kv `compaction:last`)*
 - [ ] **31.4** MCP-инструмент **`memory_merge` (№34)**: `memory_merge(keys[], canonical_key?, note?)`
   — явное подтверждённое слияние (то же, что решает LLM, но рукой агента); перед
   применением дрим печатает dry-run план в отчёте (как `ob2h memory dedup`).
   Авто-слияние запрещено (правило №1): только инструмент или дрим-вердикт с записью
-  в отчёте.
-- [ ] **31.5** CLI `ob2h memory dedup [--dry-run]` — отчёт: группы-кандидаты, предлагаемый
-  канонический ключ, план слияния.
+  в отчёте. *(ждёт файлы `src/mcp/*` — в рабочем дереве WIP Ф25; движок слияния готов в consolidate.rs)*
+- [x] **31.5** CLI `ob2h memory dedup [--dry-run]` — отчёт: группы-кандидаты, предлагаемый
+  канонический ключ, план слияния. *(топ-1 косинусный сосед, пороги 0.98/0.75; без
+  --dry-run ставит маркеры merge_candidate — слияние решает дрим или memory_merge)*
 - [ ] **Тесты:** детерминированный пре-чек на фиксированных векторах (0.98/0.95/0.75
   границы); merge сохраняет max importance, sum access, перенос links; tombstone вне
   search; вердикт `supersedes` — обе записи живы + ребро; high-trust кластер не сжимается;
   дайджест не заменяет оригиналы; FakeLLM-вердикты `keep_both` ничего не меняют.
+  *(закрыто для 31.2/31.3/31.5 — tests/test_consolidation.rs, 6 тестов; за 31.1 останется
+  save-time-путь)*
 
 ### Фаза 32 — Typed edges в dream-ревизии (Оценка: 1.5–2 дня)
 

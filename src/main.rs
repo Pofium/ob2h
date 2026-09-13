@@ -108,6 +108,18 @@ async fn main() -> anyhow::Result<()> {
                 ob2h::cli::db::run_quantize(&ctx, dry_run)?;
             }
         },
+        Some(Commands::Memory { command }) => match command {
+            ob2h::cli::MemoryCommands::Dedup { dry_run } => {
+                let pairs = ob2h::cli::dedup::collect_pairs(&ctx.db)?;
+                if !dry_run {
+                    let marked = ob2h::cli::dedup::apply_markers(&ctx.db, &pairs)?;
+                    if marked > 0 {
+                        println!("помечено записей merge_candidate: {marked}");
+                    }
+                }
+                ob2h::cli::dedup::print_report(&pairs, dry_run);
+            }
+        },
         Some(Commands::Stats) => {
             let output = McpServer::new(ctx)
                 .call_tool("omnes_stats", serde_json::json!({}))

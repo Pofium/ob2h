@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod bench;
 pub mod db;
+pub mod dedup;
 pub mod doctor;
 
 pub use agent::{AgentManager, AgentTarget};
@@ -42,6 +43,11 @@ pub enum Commands {
     Db {
         #[command(subcommand)]
         command: DbCommands,
+    },
+    /// Операции с памятью (дедуп почти-дублей, Ф31)
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
     },
     /// Вывести статистику хранилища
     Stats,
@@ -101,6 +107,17 @@ pub enum BenchCommands {
         /// Сколько последних строк показать
         #[arg(long, default_value_t = 20)]
         last: usize,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MemoryCommands {
+    /// Отчёт о почти-дублях памяти (косинус ≥ 0.75; без LLM). Без --dry-run
+    /// помечает пары meta.merge_candidate — слияние решает дрим (Ф31.5)
+    Dedup {
+        /// Только отчёт, маркеры не ставить
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
