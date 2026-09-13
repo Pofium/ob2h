@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -99,6 +99,86 @@ CREATE TABLE IF NOT EXISTS memory_links (
 );
 CREATE INDEX IF NOT EXISTS idx_memlink_from ON memory_links(from_id);
 CREATE INDEX IF NOT EXISTS idx_memlink_to   ON memory_links(to_id);
+"#;
+
+/// M6 (v1.3, Фазы 26–27): Ralph Knowledge Layer — циклы разработки.
+/// Аддитивно; graph_nodes НЕ пересоздаётся (ручная колонка confidence — спека §4.1).
+pub const MIGRATION_V6: &str = r#"
+CREATE TABLE IF NOT EXISTS ralph_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  feature_slug TEXT NOT NULL,
+  goal TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'proposed',
+  autonomy TEXT NOT NULL DEFAULT 'L1',
+  max_iterations_per_task INTEGER NOT NULL DEFAULT 5,
+  max_total_iterations INTEGER NOT NULL DEFAULT 60,
+  budget_tokens INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  finished_at TEXT,
+  stop_reason TEXT,
+  UNIQUE (project_id, feature_slug)
+);
+
+CREATE TABLE IF NOT EXISTS ralph_iterations (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES ralph_runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL,
+  n INTEGER NOT NULL,
+  git_before TEXT,
+  git_after TEXT,
+  hypothesis TEXT,
+  plan TEXT,
+  result TEXT,
+  tests_summary TEXT,
+  verdict TEXT NOT NULL DEFAULT 'unconfirmed'
+    CHECK (verdict IN ('verified','failed','unconfirmed','overturned','stale')),
+  verdict_source TEXT,
+  ladder_rung TEXT,
+  context_ref TEXT,
+  tokens_used INTEGER,
+  duration_ms INTEGER,
+  created_at TEXT NOT NULL,
+  UNIQUE (run_id, task_id, n)
+);
+CREATE INDEX IF NOT EXISTS idx_ralph_iterations_run ON ralph_iterations(run_id, task_id, n);
+
+CREATE TABLE IF NOT EXISTS ralph_findings (
+  id TEXT PRIMARY KEY,
+  run_id TEXT REFERENCES ralph_runs(id) ON DELETE SET NULL,
+  iteration_id TEXT REFERENCES ralph_iterations(id) ON DELETE SET NULL,
+  project_id TEXT REFERENCES projects(id),
+  kind TEXT NOT NULL,
+  content TEXT NOT NULL,
+  symbols TEXT NOT NULL DEFAULT '[]',
+  verdict TEXT NOT NULL DEFAULT 'unconfirmed'
+    CHECK (verdict IN ('verified','failed','unconfirmed','overturned','stale')),
+  verdict_source TEXT,
+  embedding BLOB,
+  meta TEXT,
+  created_at TEXT NOT NULL,
+  stale_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ralph_findings_proj ON ralph_findings(project_id, verdict);
+
+CREATE TABLE IF NOT EXISTS ast_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  run_id TEXT REFERENCES ralph_runs(id) ON DELETE SET NULL,
+  iteration_id TEXT REFERENCES ralph_iterations(id) ON DELETE SET NULL,
+  path TEXT NOT NULL,
+  node_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  node_type TEXT NOT NULL,
+  change_type TEXT NOT NULL,
+  sig_before TEXT,
+  sig_after TEXT,
+  loc_delta INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ast_changes_proj ON ast_changes(project_id, path);
+CREATE INDEX IF NOT EXISTS idx_ast_changes_iter ON ast_changes(iteration_id);
 "#;
 
 /// Текущая версия схемы БД (0 — свежая, ещё без таблиц).
@@ -247,6 +327,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V3)?;
         conn.execute_batch(MIGRATION_V4)?;
         conn.execute_batch(MIGRATION_V5)?;
+        conn.execute_batch(MIGRATION_V6)?;
     } else {
         if current_version < 2 {
             conn.execute_batch(MIGRATION_V2)?;
@@ -259,6 +340,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         }
         if current_version < 5 {
             conn.execute_batch(MIGRATION_V5)?;
+        }
+        if current_version < 6 {
+            conn.execute_batch(MIGRATION_V6)?;
         }
     }
 

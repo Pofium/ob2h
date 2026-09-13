@@ -37,6 +37,7 @@ pub struct AppContext {
     pub dream: Arc<Dream>,
     pub backup: Arc<BackupManager>,
     pub sync: Arc<crate::sync::SyncManager>,
+    pub ralph: Arc<crate::ralph::RalphService>,
     pub dream_lock: Arc<Mutex<()>>,
     pub active_workspace: Arc<tokio::sync::RwLock<Option<std::path::PathBuf>>>,
     pub active_project_id: Arc<tokio::sync::RwLock<Option<String>>>,
@@ -505,20 +506,60 @@ impl McpServer {
                     .join("\n");
 
                 // Ф23.5: related=true — 1-hop соседи по memory_links отдельным блоком.
-                if args.get("related").and_then(|v| v.as_bool()).unwrap_or(false) {
+                // Ф33.3: mode=graph — PPR-расширение вместо 1-hop (fallback на 1-hop,
+                // если PPR недоступен или подграф пуст).
+                let want_related =
+                    args.get("related").and_then(|v| v.as_bool()).unwrap_or(false) || mode == "graph";
+                if want_related {
                     let ids: Vec<i64> = hits.iter().map(|h| h.record.id).collect();
-                    if let Ok(related) = self.ctx.memory.related_records(&ids, 5) {
-                        let rel_lines = related
-                            .iter()
-                            .map(|r| {
-                                let preview: String = r.content.chars().take(120).collect();
-                                format!("- key={} cat={} | {preview}", r.key, r.category)
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        if !rel_lines.is_empty() {
-                            out = format!("{out}\n[related]\n{rel_lines}");
+                    let related: Vec<(crate::db::models::MemoryRecord, f64)> = if mode == "graph" {
+                        let seeds: Vec<(i64, f64)> =
+                            hits.iter().map(|h| (h.record.id, h.score)).collect();
+                        match self.ctx.memory.ppr_expand_records(
+                            &seeds,
+                            5,
+                            &self.ctx.settings.ppr_weights,
+                            self.ctx.settings.ppr_damping,
+                            self.ctx.settings.graph_reason_memory_max_nodes,
+                            Some(query),
+                        ) {
+                            Ok(rows) if !rows.is_empty() => rows,
+                            _ => self
+                                .ctx
+                                .memory
+                                .related_records(&ids, 5)
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|r| (r, 0.0))
+                                .collect(),
                         }
+                    } else {
+                        self.ctx
+                            .memory
+                            .related_records(&ids, 5)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|r| (r, 0.0))
+                            .collect()
+                    };
+                    let rel_lines = related
+                        .iter()
+                        .map(|(r, score)| {
+                            let preview: String = r.content.chars().take(120).collect();
+                            if *score > 0.0 {
+                                format!(
+                                    "- key={} cat={} ppr={:.4} | {preview}",
+                                    r.key, r.category, score
+                                )
+                            } else {
+                                format!("- key={} cat={} | {preview}", r.key, r.category)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !rel_lines.is_empty() {
+                        let label = if mode == "graph" { "ppr" } else { "related" };
+                        out = format!("{out}\n[{label}]\n{rel_lines}");
                     }
                 }
                 // Ф25.1: деградация эмбеддингов не молчит
@@ -570,6 +611,137 @@ impl McpServer {
                 match self.ctx.memory.record_feedback(key, verdict, note) {
                     Ok(Some(trust)) => format!("feedback recorded key={key} trust={trust:.2}"),
                     Ok(None) => format!("not found key={key}"),
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            // 34. memory_merge (Ф31.4): явное подтверждённое слияние
+            "memory_merge" => {
+                let keys: Vec<String> = args
+                    .get("keys")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if keys.len() < 2 {
+                    return "[Error] keys: нужно ≥2 ключа для слияния [Подсказка] memory_merge(keys=[\"k-a\",\"k-b\"], canonical_key?, note?)".to_string();
+                }
+                let canonical = args.get("canonical_key").and_then(|v| v.as_str());
+                let note = args.get("note").and_then(|v| v.as_str());
+                match self.ctx.memory.merge_records(&keys, canonical, note) {
+                    Ok(report) => report,
+                    Err(e) => format!("[Error] {e} [Подсказка] проверьте, что ключи живые (не tombstone) — memory_search или memory dedup"),
+                }
+            }
+            "ralph_start" => {
+                let (Some(project_id), Some(feature_slug), Some(goal)) = (
+                    args.get("project_id").and_then(|v| v.as_str()),
+                    args.get("feature_slug").and_then(|v| v.as_str()),
+                    args.get("goal").and_then(|v| v.as_str()),
+                ) else {
+                    return "[Error] project_id, feature_slug, goal are required".to_string();
+                };
+                match self.ctx.ralph.start(
+                    project_id,
+                    feature_slug,
+                    goal,
+                    args.get("autonomy").and_then(|v| v.as_str()),
+                    args.get("max_iterations_per_task").and_then(|v| v.as_i64()),
+                    args.get("max_total_iterations").and_then(|v| v.as_i64()),
+                    args.get("budget_tokens").and_then(|v| v.as_i64()),
+                ) {
+                    Ok(id) => format!("run_id={id} status=applying"),
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "ralph_iteration" => {
+                let (Some(run_id), Some(task_id), Some(n)) = (
+                    args.get("run_id").and_then(|v| v.as_str()),
+                    args.get("task_id").and_then(|v| v.as_str()),
+                    args.get("n").and_then(|v| v.as_i64()),
+                ) else {
+                    return "[Error] run_id, task_id, n are required".to_string();
+                };
+                let g = |k: &str| args.get(k).and_then(|v| v.as_str());
+                match self.ctx.ralph.iteration(
+                    run_id,
+                    task_id,
+                    n,
+                    g("hypothesis"),
+                    g("plan"),
+                    g("result"),
+                    g("tests_summary"),
+                    g("ladder_rung"),
+                    g("git_before"),
+                    g("git_after"),
+                    args.get("findings"),
+                ) {
+                    Ok(o) => format!(
+                        "iteration_id={} project={} verdict={} (source={}) ast_changes={} stale_marked={} findings={}",
+                        o.iteration_id, o.project_id, o.verdict, o.verdict_source, o.ast_changes, o.stale_marked, o.findings
+                    ),
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "ralph_verdict" => {
+                let verdict = match args.get("verdict").and_then(|v| v.as_str()) {
+                    Some(v) => v,
+                    None => return "[Error] verdict is required".to_string(),
+                };
+                let source = args.get("verdict_source").and_then(|v| v.as_str()).unwrap_or("manual");
+                match self.ctx.ralph.set_verdict(
+                    args.get("iteration_id").and_then(|v| v.as_str()),
+                    args.get("finding_id").and_then(|v| v.as_str()),
+                    verdict,
+                    source,
+                ) {
+                    Ok(msg) => msg,
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "ralph_context" => {
+                let (Some(run_id), Some(task_id)) = (
+                    args.get("run_id").and_then(|v| v.as_str()),
+                    args.get("task_id").and_then(|v| v.as_str()),
+                ) else {
+                    return "[Error] run_id, task_id are required".to_string();
+                };
+                let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(6000) as usize;
+                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("full");
+                match self.ctx.ralph.context(run_id, task_id, max_tokens, mode) {
+                    Ok(block) => block,
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "ralph_report" => {
+                match self.ctx.ralph.report(args.get("run_id").and_then(|v| v.as_str())) {
+                    Ok(report) => report,
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "ast_diff" => {
+                let (Some(project_id), Some(from)) = (
+                    args.get("project_id").and_then(|v| v.as_str()),
+                    args.get("from").and_then(|v| v.as_str()),
+                ) else {
+                    return "[Error] project_id, from are required".to_string();
+                };
+                match self.ctx.ralph.ast_diff(project_id, from, args.get("to").and_then(|v| v.as_str())) {
+                    Ok(diff) => diff,
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "ast_history" => {
+                let (Some(project_id), Some(symbol)) = (
+                    args.get("project_id").and_then(|v| v.as_str()),
+                    args.get("symbol").and_then(|v| v.as_str()),
+                ) else {
+                    return "[Error] project_id, symbol are required".to_string();
+                };
+                match self.ctx.ralph.ast_history(project_id, symbol) {
+                    Ok(history) => history,
                     Err(e) => format!("[Error] {e}"),
                 }
             }
@@ -856,17 +1028,60 @@ impl McpServer {
                     Some(q) => q,
                     None => return "[Error] query is required".to_string(),
                 };
+                // Ф33.2: scope=docs|memory|all. Отсутствие scope — прежнее поведение
+                // (граф знаний), регресс-тест контракта сохранён; scope=memory —
+                // PPR-подграф по памяти, scope=all — граф знаний + память.
+                let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("docs");
+                let mut memory_block = String::new();
+                if scope == "memory" || scope == "all" {
+                    if let Ok(pc) = self
+                        .ctx
+                        .memory
+                        .ppr_context(
+                            query,
+                            8,
+                            &self.ctx.settings.ppr_weights,
+                            self.ctx.settings.ppr_damping,
+                            self.ctx.settings.graph_reason_memory_max_nodes,
+                            self.ctx.settings.graph_reason_memory_timeout_ms,
+                        )
+                        .await
+                    {
+                        if !pc.records.is_empty() {
+                            memory_block = format!(
+                                "memory_confidence: {:.3}\nmemory_nodes: {} (truncated={}, {} ms)\n{}",
+                                pc.confidence,
+                                pc.nodes,
+                                pc.truncated,
+                                pc.elapsed_ms,
+                                pc.facts.join("\n")
+                            );
+                        }
+                    }
+                }
+                if scope == "memory" {
+                    return if memory_block.is_empty() {
+                        "В памяти нет данных по запросу.".to_string()
+                    } else {
+                        format!("scope: memory\n{memory_block}")
+                    };
+                }
 
                 match self.ctx.graph.reason(query, self.ctx.llm.clone()).await {
                     Ok(res) => {
                         let steps = res.reasoning_steps.join("; ");
                         let entities = res.used_entities.join(", ");
                         format!(
-                            "answer: {}\nconfidence: {}\nentities: {}\nsteps: {}",
+                            "answer: {}\nconfidence: {}\nentities: {}\nsteps: {}{}",
                             res.answer,
                             res.confidence,
                             if entities.is_empty() { "-" } else { &entities },
-                            if steps.is_empty() { "-" } else { &steps }
+                            if steps.is_empty() { "-" } else { &steps },
+                            if memory_block.is_empty() {
+                                String::new()
+                            } else {
+                                format!("\nscope: all\n{memory_block}")
+                            }
                         )
                     }
                     Err(e) => format!("[Error] {e}"),

@@ -1,4 +1,4 @@
-//! 26 инструментов MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты).
+//! 33 инструмента MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты, Ralph).
 
 use super::protocol::McpToolDef;
 
@@ -24,15 +24,15 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 2. memory_search
         McpToolDef {
             name: "memory_search".to_string(),
-            description: "Поиск по памяти: hybrid (по умолчанию, FTS+вектор RRF) | fts | vector. project_id фильтрует по проекту. related=true добавляет 1-hop соседей по автосвязям отдельным блоком [related].".to_string(),
+            description: "Поиск по памяти: hybrid (по умолчанию, FTS+вектор RRF) | fts | vector | graph (PPR-расширение по memory_links, Ф33). project_id фильтрует по проекту. related=true добавляет соседей отдельным блоком: [related] — 1-hop по автосвязям, [ppr] — Personalized PageRank (mode=graph, fallback на 1-hop).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Поисковый запрос" },
                     "limit": { "type": "integer", "description": "Количество результатов (дефолт: 5)" },
-                    "mode": { "type": "string", "enum": ["hybrid", "fts", "vector"], "description": "Режим поиска" },
+                    "mode": { "type": "string", "enum": ["hybrid", "fts", "vector", "graph"], "description": "Режим поиска; graph — гибридные хиты + PPR-расширение (Ф33)" },
                     "project_id": { "type": "string", "description": "Идентификатор проекта для фильтрации (опционально)" },
-                    "related": { "type": "boolean", "description": "Добавить связанные записи (1-hop по memory_links), дефолт: false" }
+                    "related": { "type": "boolean", "description": "Добавить связанные записи (1-hop по memory_links; при mode=graph — PPR-подграф), дефолт: false" }
                 },
                 "required": ["query"]
             }),
@@ -154,12 +154,13 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 11. graph_reason
         McpToolDef {
             name: "graph_reason".to_string(),
-            description: "Ответ по графу знаний с уверенностью и цепочкой рассуждения (KAG).".to_string(),
+            description: "Ответ по графу знаний с уверенностью и цепочкой рассуждения (KAG). scope=docs|memory|all: memory — PPR-подграф по памяти (Ф33), all — граф знаний + память; без scope — только граф знаний (совместимость).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Вопрос к графу знаний" },
-                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" }
+                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" },
+                    "scope": { "type": "string", "enum": ["docs", "memory", "all"], "description": "Область ответа: docs (граф знаний, дефолт) | memory (PPR по памяти) | all (оба)" }
                 },
                 "required": ["query"]
             }),
@@ -355,6 +356,129 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "note": { "type": "string", "description": "Комментарий (опционально)" }
                 },
                 "required": ["key", "verdict"]
+            }),
+        },
+        // 27–33. Ralph Knowledge Layer (v1.3, Фазы 26–27; контракт — спека §5)
+        McpToolDef {
+            name: "ralph_start".to_string(),
+            description: "Начать цикл разработки (run): один активный run на (project, feature). Спека дожна жить в openspec/changes/<slug>/ репозитория.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Идентификатор проекта" },
+                    "feature_slug": { "type": "string", "description": "Слаг фичи (openspec/changes/<slug>)" },
+                    "goal": { "type": "string", "description": "Цель цикла" },
+                    "autonomy": { "type": "string", "description": "Уровень автономии (информационно, дефолт L1)" },
+                    "max_iterations_per_task": { "type": "integer", "description": "Лимит итераций на задачу (дефолт 5)" },
+                    "max_total_iterations": { "type": "integer", "description": "Общий лимит итераций (дефолт 60)" },
+                    "budget_tokens": { "type": "integer", "description": "Токенный бюджет (опционально)" }
+                },
+                "required": ["project_id", "feature_slug", "goal"]
+            }),
+        },
+        McpToolDef {
+            name: "ralph_iteration".to_string(),
+            description: "Записать итерацию цикла: гипотеза/план/результат/tests_summary → авто-вердикт (только по объективным сигналам тестов, ADR-K4), AST-рескан с дельтой и staleness-pass. Идемпотентно по (run, task, n).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "run_id": { "type": "string", "description": "ID цикла" },
+                    "task_id": { "type": "string", "description": "ID задачи (T-003 из tasks.md)" },
+                    "n": { "type": "integer", "description": "Номер итерации в рамках задачи" },
+                    "hypothesis": { "type": "string", "description": "Размышление: почему не работало / как решаем" },
+                    "plan": { "type": "string", "description": "JSON: шаги" },
+                    "result": { "type": "string", "description": "JSON: итог, ошибки (self_assessment НЕ влияет на вердикт)" },
+                    "tests_summary": { "type": "string", "description": "JSON: {passed, failed, fingerprint}" },
+                    "ladder_rung": { "type": "string", "description": "Ступень лестницы минимальности (reuse|stdlib|platform|dep|one-line|minimal)" },
+                    "git_before": { "type": "string", "description": "SHA до итерации (опционально)" },
+                    "git_after": { "type": "string", "description": "SHA после итерации (опционально)" },
+                    "findings": {
+                        "type": "array",
+                        "description": "Findings итерации: [{kind: hypothesis|gotcha|decision|constraint|deferred, content, symbols?: [\"fn:name\"], meta?: {...}}]; deferred = Ponytail-маркер {ceiling, upgrade_trigger}",
+                        "items": { "type": "object", "properties": { "kind": { "type": "string" }, "content": { "type": "string" }, "symbols": { "type": "array", "items": { "type": "string" } }, "meta": { "type": "object" } }, "required": ["kind", "content"] }
+                    }
+                },
+                "required": ["run_id", "task_id", "n"]
+            }),
+        },
+        McpToolDef {
+            name: "ralph_verdict".to_string(),
+            description: "Сменить вердикт итерации или finding'а (человек/дрим/агент): verified|failed|unconfirmed|overturned|stale.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "iteration_id": { "type": "string", "description": "ID итерации (или finding_id)" },
+                    "finding_id": { "type": "string", "description": "ID finding'а (или iteration_id)" },
+                    "verdict": { "type": "string", "enum": ["verified", "failed", "unconfirmed", "overturned", "stale"] },
+                    "verdict_source": { "type": "string", "description": "Кто поставил: auto_tests|auto_verify|human|dream" }
+                }
+            }),
+        },
+        McpToolDef {
+            name: "ralph_context".to_string(),
+            description: "Контекст-пакет на задачу цикла: фрагмент спеки → негативный опыт → reuse-кандидаты из AST-графа → инварианты → god nodes. mode=lite — короче, без архитектурной зоны.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "run_id": { "type": "string", "description": "ID цикла" },
+                    "task_id": { "type": "string", "description": "ID задачи" },
+                    "max_tokens": { "type": "integer", "description": "Бюджет пакета в токенах (дефолт 6000)" },
+                    "mode": { "type": "string", "enum": ["lite", "full"], "description": "Режим пакета (дефолт full)" }
+                },
+                "required": ["run_id", "task_id"]
+            }),
+        },
+        McpToolDef {
+            name: "ralph_report".to_string(),
+            description: "Сводка цикла(ов): прогресс, вердикты, debt-леджер (deferred/no-trigger), gain-метрики (reuse-hit rate).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "run_id": { "type": "string", "description": "ID цикла (опционально — все)" }
+                }
+            }),
+        },
+        McpToolDef {
+            name: "ast_diff".to_string(),
+            description: "Symbol-level дифф кода между итерациями цикла (по AST-дельтам, не git-дифф).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Идентификатор проекта" },
+                    "from": { "type": "string", "description": "iteration_id | commit | timestamp" },
+                    "to": { "type": "string", "description": "до (опционально, дефолт: сейчас)" }
+                },
+                "required": ["project_id", "from"]
+            }),
+        },
+        McpToolDef {
+            name: "ast_history".to_string(),
+            description: "Хронология изменений символа по итерациям цикла.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Идентификатор проекта" },
+                    "symbol": { "type": "string", "description": "Имя символа (функция/структура/...)" }
+                },
+                "required": ["project_id", "symbol"]
+            }),
+        },
+        // 34. memory_merge (v1.4, Фаза 31) — явное подтверждённое слияние
+        McpToolDef {
+            name: "memory_merge".to_string(),
+            description: "Явное подтверждённое слияние почти-дублей памяти: каноническая запись получает union meta / max importance / sum access, остальные — tombstone с meta.merged_into, links перенаправляются. Авто-слияние запрещено — только вызов агента или дрим-вердикт.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "keys": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Сливаемые ключи (≥2, все живые)"
+                    },
+                    "canonical_key": { "type": "string", "description": "Канонический ключ (дефолт: максимум trust/importance)" },
+                    "note": { "type": "string", "description": "Причина слияния — попадает в meta обеих сторон" }
+                },
+                "required": ["keys"]
             }),
         },
     ]

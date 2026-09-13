@@ -227,34 +227,38 @@ Ralph-миграция из спеки (названа там «M4», что у�
 Миграция в спеке названа «M4» (устарело: M4 занята project_files из v1.2, M5 — trust/memory_links
 из этого плана) — в репозитории выполняется как **M6** (версия схемы v7).
 
-- [ ] **26.1** M6 (аддитивно; пре-бэкап `pre-m6-*.db`; **graph_nodes не пересоздавать** —
+- [x] **26.1** M6 (аддитивно; пре-бэкап `pre-m6-*.db`; **graph_nodes не пересоздавать** —
   ручная колонка `confidence`): `ralph_runs`, `ralph_iterations`, `ralph_findings`,
   `ast_changes` + индексы (DDL — спека §4.2). Тест схемы на наличие `confidence`.
-- [ ] **26.2** `ralph_start` / `ralph_iteration` / `ralph_verdict` (спека §5): авто-вердикт
+- [x] **26.2** `ralph_start` / `ralph_iteration` / `ralph_verdict` (спека §5): авто-вердикт
   только по `tests_summary` — `failed==0 и passed>0 → verified`, `failed>0 → failed`,
   нет → `unconfirmed`; `self_assessment` НИКОГДА не влияет (ADR-K4); идемпотентность по
   `(run_id, task_id, n)`.
-- [ ] **26.3** AST-рескан на `ralph_iteration` через существующий `ProjectService` → diff
+- [x] **26.3** AST-рескан на `ralph_iteration` через существующий `ProjectService` → diff
   по каноническим сигнатурам узлов → `ast_changes` (ADR-K3; git-дифф не используется).
-- [ ] **26.4** Тесты: миграция на копии живой и чистой БД; сценарий 3 итераций
+- [x] **26.4** Тесты: миграция на копии живой и чистой БД; сценарий 3 итераций
   (2 красные → 1 зелёная) → верные вердикты; повторный `ralph_iteration` не дублирует.
+  *(M6 уже применён к живой БД при деплойных прогонах — аддитивно; плюс тест
+  `m6_preserves_confidence_column`)*
 
 ### Фаза 27 — Ralph-контекст и стейлнесс (Оценка: 2–3 дня)
 
-- [ ] **27.1** `ralph_context(run_id, task_id, max_tokens?, mode?)`: приоритеты 1–5 спеки §6 —
+- [x] **27.1** `ralph_context(run_id, task_id, max_tokens?, mode?)`: приоритеты 1–5 спеки §6 —
   фрагмент спеки из `openspec/changes/<slug>/`, негативный опыт (failed/overturned findings),
   **reuse-кандидаты** через `project_graph_search` (FR-K4), инварианты, архитектурная зона
   (`project_context`/`project_impact`); lite = 1+2+2.5 ×0.5; лимит 6000 токенов; пакет
   выгружается в `data/ralph/contexts/<run_id>/` + `context_ref` (путь+sha256).
-- [ ] **27.2** Staleness-pass (FR-K5): для `ast_changes` modified/removed — пре-фильтр LIKE +
+  *(reuse-кандидаты в v1: детерминированный топ по is_god_node/val вместо векторного
+  семпоиска — семантический режим подключается в v1.4 Ф33)*
+- [x] **27.2** Staleness-pass (FR-K5): для `ast_changes` modified/removed — пре-фильтр LIKE +
   точный JSON-матчинг по `symbols` → `ralph_findings.verdict='stale'`; повторный вызов не перемечает.
-- [ ] **27.3** Debt-семантика (FR-K6): findings `kind=deferred` с meta `{ceiling, upgrade_trigger}`;
+- [x] **27.3** Debt-семантика (FR-K6): findings `kind=deferred` с meta `{ceiling, upgrade_trigger}`;
   пустой триггер → `no_trigger=true`; debt-леджер в отчёте.
-- [ ] **27.4** `ralph_report` + gain-метрики (FR-K10): repeat-failure rate, reuse-hit rate,
-  stale-оборачиваемость, LOC/tokens на задачу.
-- [ ] **27.5** `ast_diff(project_id, from, to?)`, `ast_history(project_id, symbol)` —
+- [x] **27.4** `ralph_report` + gain-метрики (FR-K10): repeat-failure rate (доля failed),
+  reuse-hit rate (ladder_rung=reuse:*), stale-оборачиваемость, LOC/tokens на задачу.
+- [x] **27.5** `ast_diff(project_id, from, to?)`, `ast_history(project_id, symbol)` —
   symbol-level дифф и хронология по итерациям.
-- [ ] **27.6** Тесты: reuse-кандидат (известный символ fixture попадает в пакет); stale-разметка
+- [x] **27.6** Тесты: reuse-кандидат (известный символ fixture попадает в пакет); stale-разметка
   при повторном изменении символа; deferred без триггера → no_trigger; бюджет пакета.
 
 ### Фаза 28 — Ralph-окружение (Оценка: 1.5–2 дня)

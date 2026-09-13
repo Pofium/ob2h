@@ -15,6 +15,7 @@ pub mod llm;
 pub mod mcp;
 pub mod memory;
 pub mod project;
+pub mod ralph;
 pub mod sync;
 pub mod vector;
 pub mod workspace;
@@ -32,6 +33,7 @@ use graph::GraphService;
 use llm::make_llm;
 use mcp::AppContext;
 use project::ProjectService;
+use ralph::RalphService;
 use sync::SyncManager;
 use memory::MemoryService;
 use workspace::{GitStore, Workspace};
@@ -66,6 +68,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         embedder.clone(),
         backup.clone(),
     ));
+    let ralph = Arc::new(RalphService::new(db.clone(), project.clone(), settings.data_dir.clone()));
     let dream_lock = Arc::new(Mutex::new(()));
     let active_workspace = Arc::new(tokio::sync::RwLock::new(None));
     let active_project_id = Arc::new(tokio::sync::RwLock::new(None));
@@ -89,6 +92,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         dream,
         backup,
         sync,
+        ralph,
         dream_lock,
         active_workspace,
         active_project_id,

@@ -4,7 +4,7 @@ use ob2h::mcp::McpServer;
 use ob2h::mcp::tools::list_tools;
 use tempfile::tempdir;
 
-/// Снапшот контракта: 26 инструментов (25 базовых v1.2 + memory_feedback v1.3).
+/// Снапшот контракта: 33 инструмента (26 базовых v1.3 + 7 Ralph, Фазы 26–27).
 #[test]
 fn test_tools_list_contract_snapshot() {
     let names: Vec<String> = list_tools().into_iter().map(|t| t.name).collect();
@@ -38,8 +38,18 @@ fn test_tools_list_contract_snapshot() {
         "project_impact",
         // v1.3: Trust и feedback-петля (Фаза 23)
         "memory_feedback",
+        // v1.3: Ralph Knowledge Layer (Фазы 26–27)
+        "ralph_start",
+        "ralph_iteration",
+        "ralph_verdict",
+        "ralph_context",
+        "ralph_report",
+        "ast_diff",
+        "ast_history",
+        // v1.4: Явное слияние дублей (Фаза 31)
+        "memory_merge",
     ];
-    assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.3.md");
+    assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.4.md");
 }
 
 #[tokio::test]
