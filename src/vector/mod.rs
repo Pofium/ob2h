@@ -2,6 +2,7 @@
 
 pub mod rrf;
 pub mod similarity;
+pub mod vec0;
 
 pub use rrf::{rrf_merge, RankedItem};
 pub use similarity::{cosine, deserialize, deserialize_f32, deserialize_q, normalize, serialize, serialize_q, top_k};

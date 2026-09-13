@@ -4,7 +4,7 @@ use clap::Parser;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use ob2h::cli::{BenchCommands, Cli, Commands, DbCommands, DreamCommands, PluginCommands, SyncCommands};
+use ob2h::cli::{BenchCommands, Cli, Commands, DbCommands, DreamCommands, PluginCommands, SyncCommands, Vec0Commands};
 use ob2h::config::Settings;
 use ob2h::mcp::McpServer;
 use ob2h::{init_app, start_background_workers};
@@ -211,6 +211,37 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&stats)?);
             }
         },
+        Some(Commands::Vec0 { command }) => match command {
+            Vec0Commands::Build { rebuild } => {
+                let dim = ctx.embedder.dim();
+                let added = ctx
+                    .db
+                    .with_conn(|conn| ob2h::vector::vec0::build_index(conn, dim, ob2h::vector::vec0::mode(), rebuild))?;
+                let st = ctx
+                    .db
+                    .with_conn(|conn| ob2h::vector::vec0::stats(conn, dim))?;
+                println!(
+                    "vec0: добавлено {added}, проиндексировано {} из {} (dim {dim}, os {})",
+                    st.indexed, st.nodes_with_embedding, st.oversample
+                );
+            }
+            Vec0Commands::Stats => {
+                let dim = ctx.embedder.dim();
+                let st = ctx
+                    .db
+                    .with_conn(|conn| ob2h::vector::vec0::stats(conn, dim))?;
+                println!(
+                    "vec0: проиндексировано {} из {} узлов с эмбеддингом (dim {dim}, os {}, флаг {})",
+                    st.indexed,
+                    st.nodes_with_embedding,
+                    st.oversample,
+                    if ob2h::vector::vec0::enabled() { "on" } else { "off" }
+                );
+            }
+            Vec0Commands::Recall { k, limit, golden } => {
+                run_vec0_recall(&ctx, k, limit, golden.as_deref()).await?;
+            }
+        },
         Some(Commands::SkillInstall) => {
             skill_install()?;
         }
@@ -286,6 +317,99 @@ fn format_import_stats(stats: &ob2h::sync::ImportStats) -> String {
         stats.links_applied, stats.conflicts_lost, stats.conflicts_journaled,
         stats.skipped_missing_ref
     )
+}
+
+/// Ф35.1: recall@k vec0+рескоринг против полного перебора на golden-запросах.
+/// Критерий приёмки — recall@10 ≥ 0.99; печатает recall, число запросов и индекса.
+async fn run_vec0_recall(
+    ctx: &ob2h::mcp::AppContext,
+    k: usize,
+    limit: Option<usize>,
+    golden: Option<&str>,
+) -> anyhow::Result<()> {
+    use ob2h::cli::bench::load_golden;
+
+    let golden_path = match golden {
+        Some(p) => std::path::PathBuf::from(p),
+        None => ctx.settings.data_dir.join("bench").join("golden.jsonl"),
+    };
+    let mut cases = load_golden(&golden_path)?;
+    if let Some(n) = limit {
+        cases.truncate(n);
+    }
+    let dim = ctx.embedder.dim();
+    let os = ob2h::vector::vec0::oversample();
+    let st = ctx
+        .db
+        .with_conn(|conn| ob2h::vector::vec0::stats(conn, dim)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into())))?;
+    if st.indexed == 0 {
+        anyhow::bail!("vec0-индекс пуст — сначала `ob2h vec0 build`");
+    }
+
+    let mut recalls = Vec::new();
+    let mut t_brute = 0.0f64;
+    let mut t_vec0 = 0.0f64;
+    for case in &cases {
+        let embs = ctx.embedder.embed(std::slice::from_ref(&case.query)).await?;
+        let Some(q) = embs.first() else { continue };
+
+        // ground truth: полный перебор (прежний путь)
+        let brute: Vec<i64> = {
+            let started = std::time::Instant::now();
+            let cands = ctx.db.with_conn(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, embedding FROM graph_nodes WHERE embedding IS NOT NULL AND deleted_at IS NULL",
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+                })?;
+                let mut list = Vec::new();
+                for r in rows.flatten() {
+                    list.push(r);
+                }
+                Ok(list)
+            })?;
+            let refs: Vec<(i64, Option<&[u8]>)> =
+                cands.iter().map(|(id, b)| (*id, Some(b.as_slice()))).collect();
+            let out: Vec<i64> = ob2h::vector::top_k(q, &refs, k, 0.0)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            t_brute += started.elapsed().as_secs_f64() * 1000.0;
+            out
+        };
+
+        let approx: Vec<i64> = {
+            let started = std::time::Instant::now();
+            let hits = ctx
+                .db
+                .with_conn(|conn| ob2h::vector::vec0::search(conn, q, k, os))?;
+            t_vec0 += started.elapsed().as_secs_f64() * 1000.0;
+            hits.into_iter().map(|(id, _)| id).collect()
+        };
+
+        recalls.push(ob2h::vector::vec0::recall_at_k(&brute, &approx, k));
+    }
+
+    let n = recalls.len().max(1) as f64;
+    let recall = recalls.iter().sum::<f64>() / n;
+    println!(
+        "vec0 recall@{k} = {recall:.4} (запросов {}, os {os}, индекс {} из {})",
+        recalls.len(),
+        st.indexed,
+        st.nodes_with_embedding
+    );
+    println!(
+        "средняя латентность: перебор {:.1} мс, vec0+рескоринг {:.1} мс (без эмбеддинга запроса)",
+        t_brute / n,
+        t_vec0 / n
+    );
+    println!(
+        "критерий приёмки recall@{k} ≥ 0.99: {}",
+        if recall >= 0.99 { "ВЫПОЛНЕН" } else { "НЕ выполнен" }
+    );
+    Ok(())
 }
 
 // -- MemoryProvider-плагин (docs/PLAN_v0.8.md §7.3) -------------------------

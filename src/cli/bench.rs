@@ -204,6 +204,76 @@ pub async fn run_bench(
     })
 }
 
+/// Ф35.1: латентность по хранилищам — memories и graph_nodes отдельно.
+pub struct LatencyResult {
+    pub cases: usize,
+    pub mem_vectors: i64,
+    pub graph_vectors: i64,
+    /// Ф35.1: эмбеддинг запроса локальной моделью — нижняя граница любой выдачи
+    /// (векторный скан не может быть быстрее, чем подготовка вектора запроса).
+    pub embed_p50_ms: f64,
+    pub embed_p95_ms: f64,
+    pub mem_p50_ms: f64,
+    pub mem_p95_ms: f64,
+    pub graph_p50_ms: f64,
+    pub graph_p95_ms: f64,
+}
+
+/// Ф35.1: замер p50/p95 поиска на живой БД — отдельно memories (search_hybrid)
+/// и graph_nodes (graph.search), плюс отдельно эмбеддинг запроса (пол).
+/// Метрики — только латентность (recall по графу требует отдельного golden'а),
+/// но оба хранилища меряются на одних запросах.
+pub async fn run_latency(
+    memory: &MemoryService,
+    graph: &crate::graph::GraphService,
+    embedder: &std::sync::Arc<dyn crate::embedding::EmbeddingProvider>,
+    db: &crate::db::Database,
+    cases: &[GoldenCase],
+) -> anyhow::Result<LatencyResult> {
+    // прогрев: локальная модель эмбеддингов и кэши не должны попасть в метрики
+    let _ = memory.search_hybrid("прогрев", 5, 0.0).await?;
+    let _ = graph.search("прогрев", 5, false).await?;
+
+    let mut embed_d = Vec::with_capacity(cases.len());
+    let mut mem_d = Vec::with_capacity(cases.len());
+    let mut graph_d = Vec::with_capacity(cases.len());
+    for case in cases {
+        // пол: только эмбеддинг запроса (то же, что делают оба поиска внутри)
+        let t = Instant::now();
+        let _ = embedder.embed(std::slice::from_ref(&case.query)).await?;
+        embed_d.push(t.elapsed().as_secs_f64() * 1000.0);
+
+        let t = Instant::now();
+        let _ = memory.search_hybrid(&case.query, 5, 0.0).await?;
+        mem_d.push(t.elapsed().as_secs_f64() * 1000.0);
+
+        let t = Instant::now();
+        let _ = graph.search(&case.query, 5, false).await?;
+        graph_d.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+
+    let (mem_vectors, graph_vectors) = db.with_conn(|conn| {
+        let m: i64 = conn.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))?;
+        let g: i64 = conn.query_row("SELECT COUNT(*) FROM graph_nodes", [], |r| r.get(0))?;
+        Ok((m, g))
+    })?;
+
+    Ok(LatencyResult {
+        cases: cases.len(),
+        mem_vectors,
+        graph_vectors,
+        embed_p50_ms: percentile(&mut embed_d, 50.0),
+        embed_p95_ms: percentile(&mut embed_d, 95.0),
+        mem_p50_ms: percentile(&mut mem_d, 50.0),
+        mem_p95_ms: percentile(&mut mem_d, 95.0),
+        graph_p50_ms: percentile(&mut graph_d, 50.0),
+        graph_p95_ms: percentile(&mut graph_d, 95.0),
+    })
+}
+
+/// Порог гейта владельца (35.1): p95 > 80–100 мс на ~600K векторов → эксперимент sqlite-vec.
+pub const LATENCY_GATE_P95_MS: f64 = 100.0;
+
 /// Полный прогон CLI: печать таблицы, --json, --save-baseline.
 pub async fn cli_run(
     ctx: &crate::mcp::AppContext,
@@ -213,8 +283,8 @@ pub async fn cli_run(
     as_json: bool,
     save_baseline: bool,
 ) -> anyhow::Result<()> {
-    if mode != "search" && mode != "context" {
-        anyhow::bail!("mode должен быть search|context, получено: {mode}");
+    if mode != "search" && mode != "context" && mode != "latency" {
+        anyhow::bail!("mode должен быть search|context|latency, получено: {mode}");
     }
     let ks: Vec<usize> = k_spec
         .split(',')
@@ -238,6 +308,69 @@ pub async fn cli_run(
     let cases = load_golden(&golden_path)?;
     if cases.is_empty() {
         anyhow::bail!("golden-набор пуст: {}", golden_path.display());
+    }
+
+    if mode == "latency" {
+        // Ф35.1: p50/p95 отдельно по memories и graph_nodes (recall не считается —
+        // golden-набор привязан к ключам памяти).
+        let lat = run_latency(&ctx.memory, &ctx.graph, &ctx.embedder, &ctx.db, &cases).await?;
+        if as_json {
+            println!(
+                "{}",
+                json!({
+                    "mode": "latency",
+                    "cases": lat.cases,
+                    "embed_query": {
+                        "p50_ms": (lat.embed_p50_ms * 10.0).round() / 10.0,
+                        "p95_ms": (lat.embed_p95_ms * 10.0).round() / 10.0,
+                    },
+                    "memories": {
+                        "vectors": lat.mem_vectors,
+                        "p50_ms": (lat.mem_p50_ms * 10.0).round() / 10.0,
+                        "p95_ms": (lat.mem_p95_ms * 10.0).round() / 10.0,
+                    },
+                    "graph_nodes": {
+                        "vectors": lat.graph_vectors,
+                        "p50_ms": (lat.graph_p50_ms * 10.0).round() / 10.0,
+                        "p95_ms": (lat.graph_p95_ms * 10.0).round() / 10.0,
+                    },
+                    "gate_p95_ms": LATENCY_GATE_P95_MS,
+                    "gate_over": lat.mem_p95_ms > LATENCY_GATE_P95_MS
+                        || lat.graph_p95_ms > LATENCY_GATE_P95_MS,
+                })
+            );
+        } else {
+            println!("Латентность поиска (Ф35.1), кейсов: {}", lat.cases);
+            println!("{:<14} {:>10} {:>10} {:>10}", "хранилище", "векторов", "p50, мс", "p95, мс");
+            println!(
+                "{:<14} {:>10} {:>10.1} {:>10.1}",
+                "embed(query)", "-", lat.embed_p50_ms, lat.embed_p95_ms
+            );
+            println!(
+                "{:<14} {:>10} {:>10.1} {:>10.1}",
+                "memories", lat.mem_vectors, lat.mem_p50_ms, lat.mem_p95_ms
+            );
+            println!(
+                "{:<14} {:>10} {:>10.1} {:>10.1}",
+                "graph_nodes", lat.graph_vectors, lat.graph_p50_ms, lat.graph_p95_ms
+            );
+            println!(
+                "порог гейта p95 = {LATENCY_GATE_P95_MS:.0} мс: {}",
+                if lat.mem_p95_ms > LATENCY_GATE_P95_MS
+                    || lat.graph_p95_ms > LATENCY_GATE_P95_MS
+                {
+                    "ПРЕВЫШЕН — нужен эксперимент sqlite-vec"
+                } else {
+                    "не превышен — эксперимент откладывается, решение фиксируется цифрами"
+                }
+            );
+        }
+        if save_baseline {
+            let out = std::path::PathBuf::from("docs").join("bench_baseline.md");
+            write_latency_baseline(&lat, &out)?;
+            println!("latency-секция сохранена: {}", out.display());
+        }
+        return Ok(());
     }
 
     let memory = ctx.memory.clone();
@@ -336,6 +469,78 @@ fn write_baseline(result: &BenchResult, out: &Path) -> anyhow::Result<()> {
     ));
     md.push_str("\n> Гейт (ADR-13): изменения формул релевантности/квантования принимаются,\n");
     md.push_str("> пока recall@k не ниже baseline − 2 п.п.\n");
+    // Ф35.1: latency-секцию соседнего прогона не затираем
+    md.push_str(&read_latency_section(out));
+    std::fs::create_dir_all(out.parent().unwrap_or(Path::new(".")))?;
+    std::fs::write(out, md)?;
+    Ok(())
+}
+
+/// Заголовок latency-секции (Ф35.1) — по нему секция отделяется от recall-части.
+const LATENCY_SECTION_TITLE: &str = "## Латентность поиска (Ф35.1)";
+
+/// Вырезать из существующего baseline ранее записанную latency-секцию.
+fn read_latency_section(path: &Path) -> String {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    match existing.find(LATENCY_SECTION_TITLE) {
+        Some(pos) => format!("\n{}", existing[pos..].trim_end_matches('\n')),
+        None => String::new(),
+    }
+}
+
+/// Ф35.1: записать/обновить latency-секцию baseline (recall-часть сохраняется).
+fn write_latency_baseline(lat: &LatencyResult, out: &Path) -> anyhow::Result<()> {
+    let existing = std::fs::read_to_string(out).unwrap_or_default();
+    let head = match existing.find(LATENCY_SECTION_TITLE) {
+        Some(pos) => existing[..pos].trim_end().to_string(),
+        None => existing.trim_end().to_string(),
+    };
+
+    let over = lat.mem_p95_ms > LATENCY_GATE_P95_MS || lat.graph_p95_ms > LATENCY_GATE_P95_MS;
+    let mut md = String::new();
+    if head.is_empty() {
+        md.push_str("# OB2H bench baseline\n");
+    } else {
+        md.push_str(&head);
+        md.push('\n');
+    }
+    md.push('\n');
+    md.push_str(&format!("{LATENCY_SECTION_TITLE}\n\n"));
+    md.push_str(&format!(
+        "- Дата: {}\n",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M UTC")
+    ));
+    md.push_str(&format!("- Версия ob2h: {}\n", env!("CARGO_PKG_VERSION")));
+    md.push_str(&format!("- Кейсов (golden): {}\n", lat.cases));
+    md.push_str(&format!(
+        "- Порог гейта владельца: p95 ≤ {LATENCY_GATE_P95_MS:.0} мс\n\n"
+    ));
+    md.push_str("| Хранилище | векторов | p50, мс | p95, мс |\n");
+    md.push_str("|---|---|---|---|\n");
+    md.push_str(&format!(
+        "| эмбеддинг запроса (пол) | — | {:.1} | {:.1} |\n",
+        lat.embed_p50_ms, lat.embed_p95_ms
+    ));
+    md.push_str(&format!(
+        "| memories (search_hybrid) | {} | {:.1} | {:.1} |\n",
+        lat.mem_vectors, lat.mem_p50_ms, lat.mem_p95_ms
+    ));
+    md.push_str(&format!(
+        "| graph_nodes (graph.search) | {} | {:.1} | {:.1} |\n",
+        lat.graph_vectors, lat.graph_p50_ms, lat.graph_p95_ms
+    ));
+    md.push_str(&format!(
+        "\n> Решение (35.1): p95 {} порога — эксперимент `OB2H_VEC0=1` (sqlite-vec rescore,\n",
+        if over { "ПРЕВЫШАЕТ" } else { "не превышает" }
+    ));
+    md.push_str("> int8 + oversample + full-precision re-rank) ");
+    if over {
+        md.push_str("запускается: критерий recall@10 ≥ 0.99 и p95 < 50 мс.\n");
+    } else {
+        md.push_str("откладывается; остаёмся на собственном brute force.\n");
+    }
+    md.push_str("> Метрики — только латентность (recall по графу требует отдельного golden'а).\n");
+
     std::fs::create_dir_all(out.parent().unwrap_or(Path::new(".")))?;
     std::fs::write(out, md)?;
     Ok(())
@@ -358,8 +563,8 @@ pub fn cli_history(settings: &crate::config::Settings, last: usize) -> anyhow::R
     );
     println!();
     println!(
-        "{:<20} {:<10} {:>9} {:>8} {:>9} {:>7} {:>9} {:<6} {}",
-        "ts", "gate", "recall@5", "Δr@5", "recall@10", "MRR", "p95, мс", "БД,МБ", "dream_sha"
+        "{:<20} {:<10} {:>9} {:>8} {:>9} {:>7} {:>9} {:<6} dream_sha",
+        "ts", "gate", "recall@5", "Δr@5", "recall@10", "MRR", "p95, мс", "БД,МБ"
     );
     let mut prev_recall: Option<f64> = None;
     for row in &rows {

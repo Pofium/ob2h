@@ -106,12 +106,16 @@ async fn delta_transfers_exactly_changed_rows() {
     let n = node("pc");
     save(&n, "s-1", "первая запись", 0.5).await;
     save(&n, "s-2", "вторая запись", 0.5).await;
-    // уводим базовый батч в прошлое: таймстемпы записей — секунды, watermark = max_ts;
-    // чтобы неизменённая s-2 не попадала в дельту (`>=` граница), её ts строго меньше
+    // базовый батч строго старше будущих правок: курсор дельты = updated_at
+    // (секундная гранулярность), поэтому нетронутая s-2 должна быть МЕНЬШЕ курсора
     n.db
         .with_conn(|conn| {
             conn.execute(
-                "UPDATE memories SET updated_at = '2026-09-13T00:00:00Z' WHERE key IN ('s-1','s-2')",
+                "UPDATE memories SET updated_at = '2026-09-12T00:00:00Z' WHERE key = 's-1'",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE memories SET updated_at = '2026-09-11T00:00:00Z' WHERE key = 's-2'",
                 [],
             )?;
             Ok(())

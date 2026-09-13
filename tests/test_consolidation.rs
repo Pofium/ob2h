@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use ob2h::config::Settings;
 use ob2h::db::Database;
-use ob2h::dream::consolidate;
 use ob2h::dream::Dream;
 use ob2h::embedding::FakeEmbedding;
 use ob2h::llm::FakeLLM;
@@ -131,7 +130,7 @@ impl ob2h::embedding::EmbeddingProvider for ScriptedEmbedding {
 
 #[tokio::test]
 async fn save_identity_duplicate_updates_existing_silently() {
-    let tmp = tempdir().expect("tempdir");
+    let _tmp = tempdir().expect("tempdir");
     let db = Database::in_memory().expect("db");
     let embedder = Arc::new(ScriptedEmbedding::new(&[
         ("Пользователь работает в Яндексе", vec![1.0, 0.0, 0.0]),
@@ -155,7 +154,7 @@ async fn save_identity_duplicate_updates_existing_silently() {
 
     let count: i64 = db
         .with_conn(|conn| {
-            Ok(conn.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))?)
+            conn.query_row("SELECT COUNT(*) FROM memories", [], |r| r.get(0))
         })
         .expect("count");
     assert_eq!(count, 1, "дубль не создал вторую строку");
@@ -168,7 +167,7 @@ async fn save_identity_duplicate_updates_existing_silently() {
 
 #[tokio::test]
 async fn save_suspect_marks_merge_candidate() {
-    let tmp = tempdir().expect("tempdir");
+    let _tmp = tempdir().expect("tempdir");
     let db = Database::in_memory().expect("db");
     let embedder = Arc::new(ScriptedEmbedding::new(&[
         ("База данных проекта: Postgres", vec![1.0, 0.0, 0.0]),
@@ -195,7 +194,7 @@ async fn save_suspect_marks_merge_candidate() {
 
 #[tokio::test]
 async fn merge_records_explicit_canonical_and_links() {
-    let tmp = tempdir().expect("tempdir");
+    let _tmp = tempdir().expect("tempdir");
     let db = Database::in_memory().expect("db");
     let memory = Arc::new(MemoryService::new(
         db.clone(),
@@ -240,36 +239,36 @@ async fn merge_records_explicit_canonical_and_links() {
 
     let stale: i64 = db
         .with_conn(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM memory_links l JOIN memories t ON t.id = l.to_id \
                  WHERE t.key = 'm-b' AND l.deleted_at IS NULL",
                 [],
                 |r| r.get(0),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(stale, 0, "живых ссылок на поглощённую нет");
     // M7 (Ф32.4): tombstone рёбер остался — не жёсткое удаление
     let tombstones: i64 = db
         .with_conn(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM memory_links l JOIN memories t ON t.id = l.to_id \
                  WHERE t.key = 'm-b' AND l.deleted_at IS NOT NULL",
                 [],
                 |r| r.get(0),
-            )?)
+            )
         })
         .unwrap();
     assert!(tombstones >= 1, "рёбра на поглощённую soft-deleted (M7)");
     let redirected: i64 = db
         .with_conn(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM memory_links l \
                  JOIN memories f ON f.id = l.from_id JOIN memories t ON t.id = l.to_id \
                  WHERE f.key = 'm-c' AND t.key = 'm-a'",
                 [],
                 |r| r.get(0),
-            )?)
+            )
         })
         .unwrap();
     assert_eq!(redirected, 2, "оба ребра на m-b (manual + автосвязь category) переправлены на m-a");
@@ -335,25 +334,25 @@ async fn merge_absorbs_updates_canonical_and_redirects_links() {
     let redirected: i64 = env
         .db
         .with_conn(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM memory_links l \
                  JOIN memories f ON f.id = l.from_id JOIN memories t ON t.id = l.to_id \
                  WHERE f.key = 'k-c' AND t.key = 'k-a' AND l.kind = 'manual'",
                 [],
                 |r| r.get(0),
-            )?)
+            )
         })
         .expect("links");
     assert_eq!(redirected, 1, "ссылка перепривязана к канонической");
     let stale: i64 = env
         .db
         .with_conn(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM memory_links l JOIN memories t ON t.id = l.to_id \
                  WHERE t.key = 'k-b' AND l.deleted_at IS NULL",
                 [],
                 |r| r.get(0),
-            )?)
+            )
         })
         .expect("links");
     assert_eq!(stale, 0, "живых ссылок на поглощённую запись не осталось (M7: tombstone)");
@@ -394,11 +393,11 @@ async fn supersedes_keeps_both_alive_with_edge() {
     let edges: i64 = env
         .db
         .with_conn(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM memory_links WHERE kind = 'supersedes'",
                 [],
                 |r| r.get(0),
-            )?)
+            )
         })
         .expect("edges");
     assert_eq!(edges, 1);
@@ -423,11 +422,11 @@ async fn contradicts_creates_edge_once_on_rerun() {
     let edges: i64 = env
         .db
         .with_conn(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM memory_links WHERE kind = 'contradicts'",
                 [],
                 |r| r.get(0),
-            )?)
+            )
         })
         .expect("edges");
     assert_eq!(edges, 1);
@@ -489,9 +488,9 @@ async fn compaction_clusters_low_trust_skips_high_trust_and_throttles() {
     let digest_id: i64 = env
         .db
         .with_conn(|conn| {
-            Ok(conn.query_row("SELECT id FROM memories WHERE key = ?1", params![digest_key], |r| {
+            conn.query_row("SELECT id FROM memories WHERE key = ?1", params![digest_key], |r| {
                 r.get(0)
-            })?)
+            })
         })
         .expect("digest");
     for k in ["hmem-old-fact-a", "hmem-old-fact-b", "hmem-old-fact-c", "hmem-old-fact-z"] {
@@ -502,11 +501,11 @@ async fn compaction_clusters_low_trust_skips_high_trust_and_throttles() {
     let linked: i64 = env
         .db
         .with_conn(|conn| {
-            Ok(conn.query_row(
+            conn.query_row(
                 "SELECT COUNT(*) FROM memory_links WHERE kind = 'summary' AND from_id = ?1",
                 params![digest_id],
                 |r| r.get(0),
-            )?)
+            )
         })
         .expect("summary links");
     assert_eq!(linked, 3);

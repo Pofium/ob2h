@@ -6,7 +6,7 @@ description = "Автономное MCP-хранилище знаний и до�
 
 [dependencies]
 tokio = { version = "1.43", features = ["full"] }
-rusqlite = { version = "0.33", features = ["bundled", "hooks", "chrono"] }
+rusqlite = { version = "0.33", features = ["bundled", "hooks", "chrono", "load_extension"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -33,6 +33,7 @@ hf-hub = "0.4"
 ignore = "0.4"
 notify = "6.1"
 notify-debouncer-mini = "0.4.1"
+sqlite-vec = "0.1.9"
 
 [dev-dependencies]
 tempfile = "3.17"

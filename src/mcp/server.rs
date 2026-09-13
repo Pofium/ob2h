@@ -251,6 +251,19 @@ impl McpServer {
             }),
             "tools/list" => {
                 let tools = list_tools();
+                // Ф35.3: аннотации (readOnlyHint/destructiveHint) — harness-подсказки;
+                // добавляются на сериализацию, структура McpToolDef не меняется.
+                let tools: Vec<serde_json::Value> = tools
+                    .iter()
+                    .map(|t| {
+                        let mut v =
+                            serde_json::to_value(t).unwrap_or_else(|_| serde_json::json!({}));
+                        if let Some(ann) = super::tools::annotations_for(&t.name) {
+                            v["annotations"] = ann;
+                        }
+                        v
+                    })
+                    .collect();
                 let result = serde_json::json!({ "tools": tools });
                 Some(JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),

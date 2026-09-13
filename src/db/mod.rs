@@ -21,6 +21,9 @@ pub struct Database {
 
 impl Database {
     pub fn new<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        // Ф35.1: расширение sqlite-vec регистрируется ДО открытия соединения
+        // (auto_extension действует только на соединения, открытые после вызова).
+        crate::vector::vec0::register_once();
         let p = path.as_ref();
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
@@ -58,6 +61,8 @@ impl Database {
     }
 
     pub fn in_memory() -> anyhow::Result<Self> {
+        // Ф35.1: регистрация vec0 до открытия соединения (см. Database::new)
+        crate::vector::vec0::register_once();
         let conn = Connection::open_in_memory()?;
         conn.busy_timeout(std::time::Duration::from_millis(5000))?;
         schema::migrate(&conn)?;

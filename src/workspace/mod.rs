@@ -104,6 +104,72 @@ impl Workspace {
         Ok(())
     }
 
+    /// Ф35.4: daily-логи старше `retention_days` упаковываются в
+    /// `archive/YYYY-MM.jsonl.gz` — **архивация, не удаление**: строки целиком
+    /// переезжают в месячный сжатый архив, исходный файл после успешной упаковки
+    /// удаляется. Свежие логи и файлы с именами не вида `YYYY-MM-DD.jsonl`
+    /// (чужие писатели) не трогаются. Идемпотентно: повторный вызов — no-op.
+    pub fn archive_old_logs(&self, retention_days: u32) -> anyhow::Result<Vec<String>> {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        let cutoff = (Utc::now() - chrono::Duration::days(retention_days as i64))
+            .format("%Y-%m-%d")
+            .to_string();
+        let archive_dir = self.root.join("archive");
+        let mut archived = Vec::new();
+
+        let entries = match fs::read_dir(self.daily_dir()) {
+            Ok(e) => e,
+            Err(_) => return Ok(archived),
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            // только канонические daily-логи log_daily_session: строго YYYY-MM-DD.jsonl
+            let stem = match name.strip_suffix(".jsonl") {
+                Some(s) if s.len() == 10 => s.to_string(),
+                _ => continue,
+            };
+            if chrono::NaiveDate::parse_from_str(&stem, "%Y-%m-%d").is_err() {
+                continue;
+            }
+            // лексикографическое сравнение дат YYYY-MM-DD = хронологическое
+            if stem.as_str() >= cutoff.as_str() {
+                continue;
+            }
+
+            let month = &stem[..7];
+            fs::create_dir_all(&archive_dir)?;
+            let target = archive_dir.join(format!("{month}.jsonl.gz"));
+
+            // gzip дописывать нельзя — распаковываем существующий месячный архив,
+            // добавляем строки дня и упаковываем заново
+            let mut buf: Vec<u8> = Vec::new();
+            if target.exists() {
+                let f = fs::File::open(&target)?;
+                let mut dec = flate2::read::GzDecoder::new(f);
+                std::io::Read::read_to_end(&mut dec, &mut buf)?;
+            }
+            buf.extend_from_slice(&fs::read(&path)?);
+
+            let f = fs::File::create(&target)?;
+            let mut enc = GzEncoder::new(f, Compression::default());
+            enc.write_all(&buf)?;
+            enc.finish()?;
+
+            fs::remove_file(&path)?;
+            archived.push(name);
+        }
+        Ok(archived)
+    }
+
     pub fn append_history(&self, content: &str) -> anyhow::Result<i64> {
         let history_file = self.memory_dir().join("history.jsonl");
         let last_cursor = self.get_cursor()?.unwrap_or(0);

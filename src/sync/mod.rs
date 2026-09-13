@@ -277,8 +277,19 @@ impl SyncManager {
             },
         )?;
 
+        // Курсор (watermark) — максимум по времени ИЗМЕНЕНИЯ строк. У записей/узлов/
+        // рёбер это updated_at (deleted_at — для tombstones); у memory_links (mlink)
+        // updated_at нет вовсе — их изменение фиксирует created_at/deleted_at.
+        // ВАЖНО: created_at остальных типов в курсор не берём — иначе курсор прыгает
+        // на «сейчас» (created_at свежих записей) и правки с более старым updated_at
+        // выпадают из следующей дельты (регресс-тест test_lww_conflict_resolution).
         for r in &rows {
-            for key in ["updated_at", "deleted_at", "created_at"] {
+            let keys: &[&str] = if r["type"].as_str() == Some("mlink") {
+                &["created_at", "deleted_at"]
+            } else {
+                &["updated_at", "deleted_at"]
+            };
+            for key in keys {
                 if let Some(ts) = r.get(key).and_then(|v| v.as_str()) {
                     if ts > max_ts.as_str() {
                         max_ts = ts.to_string();

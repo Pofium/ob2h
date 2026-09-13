@@ -2,6 +2,38 @@
 
 use super::protocol::McpToolDef;
 
+/// Ф35.3: MCP tool annotations — подсказки harness'ам (контракт аргументов не трогается).
+/// `readOnlyHint` — инструмент ничего не меняет; `destructiveHint` — может затирать данные.
+/// Прочие (пишущие, но не разрушительные) остаются без аннотаций — «неизвестно» честнее.
+pub fn annotations_for(name: &str) -> Option<serde_json::Value> {
+    const READ_ONLY: &[&str] = &[
+        "memory_search",
+        "memory_context",
+        "graph_search",
+        "graph_reason",
+        "graph_stats",
+        "omnes_stats",
+        "ast_history",
+        "dream_log",
+        "dream_status",
+        "project_context",
+        "project_graph_search",
+        "project_impact",
+        "project_report",
+        "ralph_report",
+        "workspace_read",
+    ];
+    const DESTRUCTIVE: &[&str] = &["memory_forget", "dream_restore"];
+
+    if READ_ONLY.contains(&name) {
+        return Some(serde_json::json!({ "readOnlyHint": true, "destructiveHint": false }));
+    }
+    if DESTRUCTIVE.contains(&name) {
+        return Some(serde_json::json!({ "readOnlyHint": false, "destructiveHint": true }));
+    }
+    None
+}
+
 pub fn list_tools() -> Vec<McpToolDef> {
     vec![
         // 1. memory_save

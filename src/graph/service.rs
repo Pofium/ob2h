@@ -277,22 +277,40 @@ impl GraphService {
         // 2. Векторный скоринг
         if let Ok(q_embs) = self.embedder.embed(&[query.to_string()]).await {
             if let Some(q_vec) = q_embs.first() {
-                let candidates = self.db.with_conn(|conn| {
-                    let mut stmt = conn.prepare("SELECT id, embedding FROM graph_nodes WHERE embedding IS NOT NULL AND deleted_at IS NULL")?;
-                    let rows = stmt.query_map([], |row| {
-                        let id: i64 = row.get(0)?;
-                        let blob: Vec<u8> = row.get(1)?;
-                        Ok((id, blob))
-                    })?;
-                    let mut list = Vec::new();
-                    for r in rows.flatten() {
-                        list.push(r);
-                    }
-                    Ok(list)
-                })?;
+                // Ф35.1: при OB2H_VEC0=1 — vec0 (binary-первый проход + рескоринг
+                // настоящими векторами); индекс не готов/пуст → прежний полный
+                // перебор (флаг off — поведение не меняется вовсе).
+                let vec0_hits: Vec<(i64, f32)> = if crate::vector::vec0::enabled() {
+                    let os = crate::vector::vec0::oversample();
+                    self.db
+                        .with_conn(|conn| crate::vector::vec0::search(conn, q_vec, limit, os))
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
 
-                let cand_refs: Vec<(i64, Option<&[u8]>)> = candidates.iter().map(|(id, b)| (*id, Some(b.as_slice()))).collect();
-                for (nid, vscore) in top_k(q_vec, &cand_refs, limit, 0.0) {
+                let ranked: Vec<(i64, f32)> = if !vec0_hits.is_empty() {
+                    vec0_hits
+                } else {
+                    let candidates = self.db.with_conn(|conn| {
+                        let mut stmt = conn.prepare("SELECT id, embedding FROM graph_nodes WHERE embedding IS NOT NULL AND deleted_at IS NULL")?;
+                        let rows = stmt.query_map([], |row| {
+                            let id: i64 = row.get(0)?;
+                            let blob: Vec<u8> = row.get(1)?;
+                            Ok((id, blob))
+                        })?;
+                        let mut list = Vec::new();
+                        for r in rows.flatten() {
+                            list.push(r);
+                        }
+                        Ok(list)
+                    })?;
+
+                    let cand_refs: Vec<(i64, Option<&[u8]>)> = candidates.iter().map(|(id, b)| (*id, Some(b.as_slice()))).collect();
+                    top_k(q_vec, &cand_refs, limit, 0.0)
+                };
+
+                for (nid, vscore) in ranked {
                     let entry = scored.entry(nid).or_insert(0.0);
                     *entry += (vscore as f64) * 5.0;
                 }
@@ -373,7 +391,7 @@ impl GraphService {
         if expand_hops {
             for edge in &edges {
                 for nid in [edge.source_id, edge.target_id] {
-                    if !nodes_map.contains_key(&nid) {
+                    if let std::collections::hash_map::Entry::Vacant(e) = nodes_map.entry(nid) {
                         if let Ok(neighbor) = self.db.with_conn(|conn| {
                             conn.query_row(
                                 "SELECT id, node_id, label, node_type, description, val FROM graph_nodes WHERE id = ?1",
@@ -390,7 +408,7 @@ impl GraphService {
                                 },
                             )
                         }) {
-                            nodes_map.insert(nid, neighbor);
+                            e.insert(neighbor);
                         }
                     }
                 }

@@ -43,9 +43,25 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
     settings.ensure_dirs()?;
 
     let db = Database::new(settings.db_path())?;
+    // Ф35.1: регистрация расширения sqlite-vec до открытия соединений
+    // (auto_extension действует на соединения, открытые после вызова).
+    crate::vector::vec0::register_once();
     let embedder = provider_for(&settings);
     let memory = Arc::new(MemoryService::new(db.clone(), embedder.clone()));
     let workspace = Arc::new(Workspace::new(settings.workspace_dir()));
+    // Ф35.4: ретеншн daily-логов — старые упаковываются в archive/YYYY-MM.jsonl.gz
+    // (архивация, не удаление); ошибки не валят старт.
+    match workspace.archive_old_logs(settings.log_retention_days) {
+        Ok(files) if !files.is_empty() => {
+            eprintln!(
+                "ob2h: workspace-архив: упаковано {} daily-логов ({:?})",
+                files.len(),
+                files
+            );
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("ob2h: workspace-архив не удался: {e}"),
+    }
     let gitstore = Arc::new(GitStore::new(settings.workspace_dir()));
     let llm = make_llm(&settings);
     let consolidator = Arc::new(Consolidator::new(workspace.clone(), llm.clone(), settings.clone()));

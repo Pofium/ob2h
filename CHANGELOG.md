@@ -6,6 +6,24 @@
 ## [Не выпущено]
 
 ### Added
+- **Латентность и гигиена (Фаза 35 PLAN_v1.4)**: bench-режим `--mode latency` —
+  p50/p95 отдельно по `memories`, `graph_nodes` и эмбеддингу запроса (пол);
+  автосохранение latency-секции в `docs/bench_baseline.md` (`--save-baseline`,
+  recall-часть не затирается). **Эксперимент sqlite-vec** (35.1, флаг `OB2H_VEC0`):
+  vec0-индекс над `graph_nodes` (`src/vector/vec0.rs`, `sqlite-vec 0.1.9`, режимы
+  `int8`/`bit` через `OB2H_VEC0_MODE`, oversample `OB2H_VEC0_OS`), первый проход
+  + рескоринг нашими векторами, CLI `ob2h vec0 build|stats|recall`. На копии живой
+  БД: **recall@10 = 1.0000** при os=2 (критерий ≥ 0.99 выполнен), векторный скан
+  566 → 192 мс (**2.9×**), end-to-end p95 2408 → 2093 мс (доминирует лексический
+  полный скан, а не вектор) → флаг оставлен opt-in, разбор в
+  `docs/ADR-35.1-sqlite-vec.md`. MCP tool annotations (35.3): `readOnlyHint` на 15
+  read-only инструментов, `destructiveHint` на `memory_forget`/`dream_restore` —
+  видны в `tools/list`, контракт аргументов не тронут. Ретеншн workspace-логов (35.4):
+  daily-логи старше `OB2H_LOG_RETENTION_DAYS=90` упаковываются в
+  `data/workspace/archive/YYYY-MM.jsonl.gz` при старте (архивация, не удаление;
+  свежие и «чужие» файлы не трогаются). +5 тестов (`tests/test_f35.rs`) и
+  +5 тестов vec0 (`tests/test_vec0.rs`, синтетика 10K: recall@10 int8 = 1.0000,
+  bit = 0.30–0.54 — зафиксировано честно).
 - **Sync v2 (Фаза 34 PLAN_v1.4)**: дельта-экспорт по курсору пира (`sync_state.last_export_at`)
   + `ob2h sync push --full` — полный бандл; заголовок несёт `version: 2`. В v2-бандл входят
   `memory_links` (с M7 soft-delete), `trust`, `last_feedback_at` — v1 их не возил; `ralph_*`/

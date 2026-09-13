@@ -67,6 +67,11 @@ pub enum Commands {
     },
     /// Установить/обновить скилл ob2h в Hermes (пути темплейтятся под эту машину)
     SkillInstall,
+    /// Ф35.1: эксперимент sqlite-vec — vec0-индекс над graph_nodes (флаг OB2H_VEC0=1)
+    Vec0 {
+        #[command(subcommand)]
+        command: Vec0Commands,
+    },
     /// Управление интеграциями с AI-агентами (Claude, Cursor, Windsurf, ZCode, Gemini, Qwen, OpenCode)
     Agent {
         #[command(subcommand)]
@@ -87,7 +92,7 @@ pub enum Commands {
         /// Подкоманда (напр. history — тренд ночных прогонов, Ф30)
         #[command(subcommand)]
         command: Option<BenchCommands>,
-        /// Режим: search (memory_search hybrid) | context (memory_context / build_context)
+        /// Режим: search (memory_search hybrid) | context (build_context) | latency (p50/p95 по memories и graph_nodes, Ф35.1)
         #[arg(short, long, default_value = "search")]
         mode: String,
         /// Уровни k для recall@k, через запятую
@@ -242,6 +247,31 @@ pub enum SyncCommands {
     },
     /// Ф34.4: статистика этой стороны в JSON (вызывается удалённой стороной по ssh)
     LocalStats,
+}
+
+/// Ф35.1: команды эксперимента vec0.
+#[derive(Subcommand, Debug)]
+pub enum Vec0Commands {
+    /// Построить/догнать индекс над graph_nodes
+    Build {
+        /// Полная перестройка индекса
+        #[arg(long)]
+        rebuild: bool,
+    },
+    /// Статистика индекса (узлов с эмбеддингом / проиндексировано)
+    Stats,
+    /// Recall@k vec0+рескоринг против полного перебора на golden-запросах
+    Recall {
+        /// Уровень k (критерий приёмки — recall@10 ≥ 0.99)
+        #[arg(long, default_value = "10")]
+        k: usize,
+        /// Ограничить число golden-запросов (по умолчанию — все)
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Путь к golden-набору (по умолчанию data/bench/golden.jsonl)
+        #[arg(long)]
+        golden: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

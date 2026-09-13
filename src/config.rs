@@ -48,6 +48,10 @@ pub struct Settings {
     /// Бюджет quick-прогона bench; таймаут ≠ rollback (Ф30.2).
     pub bench_gate_timeout_ms: u64,
 
+    // --- Ф35.4: ретеншн workspace-логов ---
+    /// Daily-логи старше N дней упаковываются в archive/YYYY-MM.jsonl.gz (архивация, не удаление).
+    pub log_retention_days: u32,
+
     // --- Ф33: Personalized PageRank по памяти ---
     /// Веса рёбер по типу (JSON `{"kind": weight}`); неизвестный kind → 0.5 (33.1).
     pub ppr_weights: crate::graph::pagerank::PprWeights,
@@ -174,6 +178,12 @@ impl Settings {
             .and_then(|v| v.parse().ok())
             .unwrap_or(3000);
 
+        // Ф35.4: ретеншн daily-логов (архивация в archive/YYYY-MM.jsonl.gz, не удаление).
+        let log_retention_days = env::var("OB2H_LOG_RETENTION_DAYS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(90);
+
         // Ф33: Personalized PageRank по памяти (веса рёбер по типу + damping).
         let ppr_weights = crate::graph::pagerank::parse_ppr_weights(
             &env::var("OB2H_PPR_WEIGHTS")
@@ -252,6 +262,7 @@ impl Settings {
             dream_ralph_revision,
             bench_gate_enabled,
             bench_gate_timeout_ms,
+            log_retention_days,
             ppr_weights,
             ppr_damping,
             graph_reason_memory_max_nodes,
