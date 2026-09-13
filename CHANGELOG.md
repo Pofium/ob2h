@@ -6,6 +6,19 @@
 ## [Не выпущено]
 
 ### Added
+- **PPR по памяти / движок Personalized PageRank (Фаза 33 PLAN_v1.4 + 29.1 v1.3)**:
+  новый `src/graph/pagerank.rs` — generic итеративный PPR без новых зависимостей
+  (damping клампится 0.5–0.85, ≤20 итераций, сходимость по L1, degree-normalization
+  для hub-защиты, масса висячих узлов возвращается в персонализацию, веса по типу ребра
+  `OB2H_PPR_WEIGHTS`, `normalize_entity` для схлопывания форм сущностей).
+  Память как граф: `MemoryService::ppr_rank` (узлы — живые записи, рёбра — `memory_links`
+  с весом kind × вес ребра, dual-seed: гибридные хиты + entity-фразы),
+  `ppr_expand_records` и `ppr_context`. MCP: `memory_search mode=graph` (блок `[ppr]`
+  вместо 1-hop, фолбэк на 1-hop) и `graph_reason scope=memory|all` (PPR-подграф памяти,
+  уверенность по trust × PPR-массе, лимиты 500 узлов / 1 с; без `scope` — прежний ответ
+  по графу знаний). Новые настройки: `OB2H_PPR_WEIGHTS`, `OB2H_PPR_DAMPING`,
+  `OB2H_GRAPH_REASON_MEMORY_MAX_NODES`, `OB2H_GRAPH_REASON_MEMORY_TIMEOUT_MS`.
+  +9 юнит-тестов движка и 5 интеграционных (`tests/test_pagerank.rs`).
 - **Save-time дедуп + `memory_merge` (Фаза 31 PLAN_v1.4, завершение — 31.1/31.4)**:
   `memory_save` без LLM находит топ-1 косинусного соседа — cos ≥ 0.98: identity-дубль,
   тихий UPDATE существующей записи (union meta, max importance, +1 access_count, свежая

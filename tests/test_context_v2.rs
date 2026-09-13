@@ -46,20 +46,24 @@ fn long_rule(head: &str) -> String {
 async fn setup() -> (MemoryService, Vec<String>) {
     let db = Database::in_memory().expect("db");
     let mut emb = FixedEmbedder::new(2);
-    let coffee = [1.0f32, 0.0];
+    // Векторы записей различны (Ф31.1: cos ≥ 0.98 = identity-дубль → слияние при save),
+    // но все в положительной полуплоскости запроса «кофе», чтобы попасть в пул.
+    let coffee_a = [1.0f32, 0.0];
+    let coffee_b = [0.9f32, 0.435889]; // cos(a, b) ≈ 0.9 — не дубль
     let other = [0.0f32, 1.0];
     let opposite = [-1.0f32, 0.0];
+    let query = [1.0f32, 0.0];
 
     let a = long_rule("Кофе правило номер один");
     let b = long_rule("Кофе правило номер два");
     let c = "Независимая запись про VPS и бэкапы".to_string();
     let d = "Сторонний факт без пересечений по теме".to_string();
 
-    emb.put(&a, coffee.to_vec());
-    emb.put(&b, coffee.to_vec());
+    emb.put(&a, coffee_a.to_vec());
+    emb.put(&b, coffee_b.to_vec());
     emb.put(&c, other.to_vec());
     emb.put(&d, opposite.to_vec());
-    emb.put("кофе", coffee.to_vec());
+    emb.put("кофе", query.to_vec());
 
     let embedder = Arc::new(emb);
     let service = MemoryService::new(db, embedder);

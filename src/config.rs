@@ -44,6 +44,16 @@ pub struct Settings {
     /// Бюджет quick-прогона bench; таймаут ≠ rollback (Ф30.2).
     pub bench_gate_timeout_ms: u64,
 
+    // --- Ф33: Personalized PageRank по памяти ---
+    /// Веса рёбер по типу (JSON `{"kind": weight}`); неизвестный kind → 0.5 (33.1).
+    pub ppr_weights: crate::graph::pagerank::PprWeights,
+    /// Damping PPR (клампится в 0.5–0.85, старт 0.85 — подбирается на bench).
+    pub ppr_damping: f64,
+    /// Предел узлов memory-подграфа в `graph_reason(scope=memory)` (33.2).
+    pub graph_reason_memory_max_nodes: usize,
+    /// Бюджет времени PPR-подграфа в `graph_reason(scope=memory)`, мс (33.2).
+    pub graph_reason_memory_timeout_ms: u64,
+
     // --- Ретеншн ---
     pub retention_days: i64,
     /// Ротация полных бэкапов (Ф24).
@@ -152,6 +162,24 @@ impl Settings {
             .and_then(|v| v.parse().ok())
             .unwrap_or(3000);
 
+        // Ф33: Personalized PageRank по памяти (веса рёбер по типу + damping).
+        let ppr_weights = crate::graph::pagerank::parse_ppr_weights(
+            &env::var("OB2H_PPR_WEIGHTS")
+                .unwrap_or_else(|_| crate::graph::pagerank::DEFAULT_PPR_WEIGHTS.to_string()),
+        );
+        let ppr_damping = env::var("OB2H_PPR_DAMPING")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.85);
+        let graph_reason_memory_max_nodes = env::var("OB2H_GRAPH_REASON_MEMORY_MAX_NODES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(500);
+        let graph_reason_memory_timeout_ms = env::var("OB2H_GRAPH_REASON_MEMORY_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000);
+
         let retention_days = env::var("OB2H_RETENTION_DAYS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -210,6 +238,10 @@ impl Settings {
             dream_memory_revision,
             bench_gate_enabled,
             bench_gate_timeout_ms,
+            ppr_weights,
+            ppr_damping,
+            graph_reason_memory_max_nodes,
+            graph_reason_memory_timeout_ms,
             retention_days,
             backup_keep_full,
             backup_keep_quick,

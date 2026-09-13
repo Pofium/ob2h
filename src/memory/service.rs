@@ -1,6 +1,6 @@
 //! Реализация MemoryService.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,10 @@ use sha2::{Digest, Sha256};
 
 use crate::db::{models::MemoryRecord, utcnow, Database};
 use crate::embedding::EmbeddingProvider;
+use crate::graph::pagerank::{
+    normalize_entity, personalized_pagerank, weight_for, PprEdge, PprGraph, PprWeights, DEFAULT_TOL,
+    MAX_ITER,
+};
 use crate::vector::{rrf_merge, serialize_q, similarity::{cosine, deserialize}, top_k};
 
 /// Ф31.1: порог identity-дубля при save («одно и то же» → тихий UPDATE).
@@ -912,6 +916,260 @@ impl MemoryService {
         Ok(count)
     }
 
+}
+
+// --- Ф33: Personalized PageRank по памяти -----------------------------------
+
+/// Ф33.2: контекст памяти для `graph_reason(scope=memory)`.
+pub struct PprContext {
+    /// (запись, PPR-score) по убыванию score.
+    pub records: Vec<(MemoryRecord, f64)>,
+    /// Факт-блок для LLM.
+    pub facts: Vec<String>,
+    /// Уверенность: PPR-масса × trust вершин (см. `ppr_context`).
+    pub confidence: f64,
+    /// Узлов/рёбер в построенном подграфе.
+    pub nodes: usize,
+    pub edges: usize,
+    pub elapsed_ms: u128,
+    /// Граф или время урезаны лимитом (33.2: 500 узлов / 1 с).
+    pub truncated: bool,
+}
+
+/// Ф33.1/33.3: движок PPR поверх памяти. Узлы — живые записи, рёбра — `memory_links`.
+impl MemoryService {
+    /// Ф33.1: ранжирование записей по Personalized PageRank.
+    ///
+    /// Граф: узлы — живые записи (топ-`max_nodes` по importance/recency), рёбра —
+    /// `memory_links` с весом по типу (`OB2H_PPR_WEIGHTS`, неизвестный kind → 0.5) × вес
+    /// ребра. Сиды — **dual-seed** (HippoRAG/2, §8): гибридные хиты + «entity-фразы» —
+    /// записи, чей нормализованный ключ пересекается с токенами запроса (33.4).
+    /// Hub-защита — degree-normalization внутри `personalized_pagerank` (29.1).
+    pub fn ppr_rank(
+        &self,
+        seed_ids: &[(i64, f64)],
+        weights: &PprWeights,
+        damping: f64,
+        max_nodes: usize,
+        query: Option<&str>,
+    ) -> anyhow::Result<Vec<(i64, f64)>> {
+        if seed_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = max_nodes.max(2) as i64;
+        let nodes: Vec<(i64, String)> = self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, key FROM memories WHERE deleted_at IS NULL \
+                 ORDER BY importance DESC, updated_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![limit], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.flatten().collect::<Vec<_>>())
+        })?;
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut index: HashMap<i64, usize> = HashMap::with_capacity(nodes.len());
+        for (i, (id, _)) in nodes.iter().enumerate() {
+            index.insert(*id, i);
+        }
+
+        // Рёбра внутри подграфа. Подзапрос повторяет выбор узлов — так `memory_links`
+        // не вычитывается целиком на большой БД (лимит 500 узлов из 33.2).
+        let edges: Vec<(i64, i64, String, f64)> = self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT l.from_id, l.to_id, l.kind, l.weight FROM memory_links l \
+                 WHERE l.from_id IN (SELECT id FROM memories WHERE deleted_at IS NULL \
+                                     ORDER BY importance DESC, updated_at DESC LIMIT ?1)",
+            )?;
+            let rows = stmt.query_map(params![limit], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, f64>(3).unwrap_or(1.0),
+                ))
+            })?;
+            Ok(rows.flatten().collect::<Vec<_>>())
+        })?;
+
+        let mut ppr_edges = Vec::with_capacity(edges.len());
+        for (from, to, kind, link_w) in edges {
+            let (Some(&f), Some(&t)) = (index.get(&from), index.get(&to)) else {
+                continue; // ребро за пределы подграфа — отбрасываем
+            };
+            let w = weight_for(weights, &kind) * if link_w > 0.0 { link_w } else { 1.0 };
+            ppr_edges.push(PprEdge { from: f, to: t, weight: w });
+        }
+        let graph = PprGraph::new(nodes.len(), &ppr_edges);
+
+        // Dual-seed: гибридные хиты (вес = их score) + entity-фразы (вес 0.5).
+        let mut seeds: Vec<(usize, f64)> = Vec::new();
+        for &(id, w) in seed_ids {
+            if let Some(&i) = index.get(&id) {
+                seeds.push((i, if w > 0.0 { w } else { 1.0 }));
+            }
+        }
+        if let Some(q) = query {
+            let q_tokens: HashSet<String> = normalize_entity(q)
+                .split_whitespace()
+                .filter(|t| t.chars().count() > 2)
+                .map(|t| t.to_string())
+                .collect();
+            if !q_tokens.is_empty() {
+                let already: HashSet<usize> = seeds.iter().map(|(i, _)| *i).collect();
+                for (i, (_, key)) in nodes.iter().enumerate() {
+                    if already.contains(&i) {
+                        continue;
+                    }
+                    if normalize_entity(key)
+                        .split_whitespace()
+                        .any(|t| t.chars().count() > 2 && q_tokens.contains(t))
+                    {
+                        seeds.push((i, 0.5));
+                    }
+                }
+            }
+        }
+
+        let ranked = personalized_pagerank(&graph, &seeds, damping, MAX_ITER, DEFAULT_TOL);
+        Ok(ranked
+            .into_iter()
+            .filter_map(|(i, s)| nodes.get(i).map(|(id, _)| (*id, s)))
+            .collect())
+    }
+
+    /// Ф33.3: PPR-расширение выдачи — записи в порядке PPR-score.
+    pub fn ppr_expand_records(
+        &self,
+        seed_ids: &[(i64, f64)],
+        limit: usize,
+        weights: &PprWeights,
+        damping: f64,
+        max_nodes: usize,
+        query: Option<&str>,
+    ) -> anyhow::Result<Vec<(MemoryRecord, f64)>> {
+        let ranked = self.ppr_rank(seed_ids, weights, damping, max_nodes, query)?;
+        let seed_set: HashSet<i64> = seed_ids.iter().map(|(id, _)| *id).collect();
+        let mut out = Vec::new();
+        for (id, score) in ranked {
+            if out.len() >= limit {
+                break;
+            }
+            if seed_set.contains(&id) {
+                continue; // сиды уже в основной выдаче
+            }
+            if let Some(rec) = self.get_by_id(id)? {
+                out.push((rec, score));
+            }
+        }
+        Ok(out)
+    }
+
+    /// trust-карта по списку id (для уверенности 33.2: trust — свойство записи,
+    /// в `MemoryRecord` не сериализуется).
+    pub fn trust_map(&self, ids: &[i64]) -> anyhow::Result<HashMap<i64, f64>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!("SELECT id, trust FROM memories WHERE id IN ({placeholders})");
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))
+            })?;
+            let mut map = HashMap::new();
+            for (id, trust) in rows.flatten() {
+                map.insert(id, trust);
+            }
+            Ok(map)
+        })
+    }
+
+    /// Ф33.2: контекст памяти для `graph_reason(scope=memory)` — PPR-подграф по памяти.
+    ///
+    /// Сиды — гибридные хиты + entity-фразы (33.1). Уверенность: PPR-score нормируется
+    /// по максимуму и усредняется по массе с trust вершины — «произведение trust вершин
+    /// на вес пути», свёрнутое PPR-ом в один скор (PPR уже суммирует веса путей).
+    /// Лимиты 33.2: `max_nodes` узлов и `timeout_ms` — при превышении времени выдача
+    /// урезается до топ-3 с флагом `truncated`.
+    pub async fn ppr_context(
+        &self,
+        query: &str,
+        limit: usize,
+        weights: &PprWeights,
+        damping: f64,
+        max_nodes: usize,
+        timeout_ms: u64,
+    ) -> anyhow::Result<PprContext> {
+        let started = std::time::Instant::now();
+        let hits = self.search_hybrid_hits(query, limit.max(1) * 2, 0.0, false).await?;
+        let seeds: Vec<(i64, f64)> = hits.iter().map(|h| (h.record.id, h.score)).collect();
+
+        let nodes_total: i64 = self.db.with_conn(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+        })?;
+
+        let ranked = self.ppr_rank(&seeds, weights, damping, max_nodes, Some(query))?;
+        let mut records: Vec<(MemoryRecord, f64)> = Vec::new();
+        for (id, score) in ranked {
+            if records.len() >= limit {
+                break;
+            }
+            if let Some(rec) = self.get_by_id(id)? {
+                records.push((rec, score));
+            }
+        }
+
+        let elapsed_ms = started.elapsed().as_millis();
+        let mut truncated = nodes_total as usize > max_nodes || elapsed_ms as u64 > timeout_ms;
+        if elapsed_ms as u64 > timeout_ms && records.len() > 3 {
+            records.truncate(3); // жёсткий бюджет времени (33.2)
+            truncated = true;
+        }
+
+        let ids: Vec<i64> = records.iter().map(|(r, _)| r.id).collect();
+        let trust = self.trust_map(&ids)?;
+        let max_score = records.iter().map(|(_, s)| *s).fold(0.0f64, f64::max);
+        let (mut weighted, mut mass) = (0.0f64, 0.0f64);
+        for (rec, score) in &records {
+            let norm = if max_score > 0.0 { score / max_score } else { 0.0 };
+            weighted += norm * trust.get(&rec.id).copied().unwrap_or(0.5);
+            mass += norm;
+        }
+        let confidence = if mass > 0.0 { weighted / mass } else { 0.0 };
+
+        let mut facts = vec!["Память (PPR-подграф):".to_string()];
+        for (rec, score) in &records {
+            let preview: String = rec.content.chars().take(200).collect();
+            facts.push(format!(
+                "- [{}] {} (cat={}, ppr={:.4}, trust={:.2}) {preview}",
+                rec.key,
+                rec.category,
+                rec.id,
+                score,
+                trust.get(&rec.id).copied().unwrap_or(0.5),
+            ));
+        }
+
+        Ok(PprContext {
+            records: records.clone(),
+            facts,
+            confidence,
+            nodes: nodes_total.min(max_nodes as i64) as usize,
+            edges: 0,
+            elapsed_ms,
+            truncated,
+        })
+    }
+}
+
+impl MemoryService {
     /// Очистка слабых воспоминаний (tombstone, реплицируется синком).
     pub fn purge_weak(&self, threshold: f64, max_access: i64) -> anyhow::Result<usize> {
         let now = utcnow();

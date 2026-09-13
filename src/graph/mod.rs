@@ -1,8 +1,13 @@
 //! Сервис графа знаний (KAG-lite) без внешних серверов баз данных (ADR-6).
 
 pub mod analytics;
+pub mod pagerank;
 pub mod service;
 
+pub use pagerank::{
+    normalize_entity, parse_ppr_weights, personalized_pagerank, weight_for, PprEdge, PprGraph,
+    PprWeights, DEFAULT_PPR_WEIGHTS, PPR_UNKNOWN_WEIGHT,
+};
 pub use analytics::{
     AffectedNode, CircularDependency, ComponentMetrics, GodNodeInfo, GraphAnalytics, ImpactReport,
     ProjectReport, RiskLevel,
