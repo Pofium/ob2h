@@ -3,9 +3,9 @@
 > **Версия плана:** 1.4.0
 > **Статус:** Черновик rev.2 — правки по ревью (2026-09-13); на утверждение
 > **Обновлён:** 2026-09-13 — rev.2 по ревью: dual-сигнал гейта Ф30 (recall@5 или MRR), timeout ≠ rollback, supersedes в вердиктах LLM (Ф31), лимиты compaction, обе стороны в conflict-разметке (Ф32), soft-delete рёбер (миграция M7), meta.conflict_versions в синке (Ф34), §8 исследование ревью (MELD/Hindsight/Governed Memory/StateFuse); явное предусловие — закрытый DoD v1.3
-> **Обновлён (rev.3):** 2026-09-13 — добавлен опциональный **трек C «Coding Graph»** (Фазы 36–40: structural queries, repo-map под token budget, edit-time blast radius, type-resolve + provenance, communities/framework edges/связка с памятью) из ревью coding-части; контракт 34→35 инструментов; миграция M8 (provenance)
+> **Обновлён (rev.3):** 2026-09-13 — добавлен опциональный **трек C «Coding Graph»** (Фазы 36–40: structural queries, repo-map под token budget, edit-time blast radius, type-resolve + provenance, communities/framework edges/связка с памятью) из ревью coding-части; контракт 34→35 инструментов; миграция M8 (provenance); полировка: scope релиза в DoD (core = Ф30–35, трек C = v1.4.x/v1.5), итоговая нумерация контракта в шапке, формат OB2H_PPR_WEIGHTS (JSON), порог тестов 75/90
 > **Предыдущие этапы:** v0.8/0.9 (Ядро, Память, Дриминг, Синк), v1.0/1.1 (AST-граф, God Nodes, мультиагентность), v1.2 (Zero-Config проекты, инкрементальный AST, AutoSync, семантика кода), v1.3 rev.2 (bench, честный prefetch, trust-петля, квантование/бэкапы, Ralph Knowledge Layer, опциональный PPR)
-> **Принцип совместимости:** 100% обратная совместимость (Zero Breaking Changes) для всех 34 инструментов MCP (33 из v1.3 + memory_merge). Изменения аддитивные (§5), с записью в `CHANGELOG.md`; трек C добавляет №35.
+> **Принцип совместимости:** 100% обратная совместимость (Zero Breaking Changes). Итоговый контракт: 33 инструмента v1.3 + `memory_merge` (Ф31) = 34, + `project_call_path` (Ф36, трек C) = 35 — полный список в §5. Изменения аддитивные, с записью в `CHANGELOG.md`.
 > **База:** кандидаты взяты из §8/бэклога утверждённого PLAN_v1.3 (rev.2, коммит 5a3e32f) — sqlite-vec-rescore, typed edges, compaction/contradiction-check, LLM-merge; нумерация фаз продолжается после Фазы 29 (Ralph-трек + PPR).
 > **Предусловие старта:** v1.4 не стартовать до закрытия DoD v1.3 (Фазы 21–25, включая 23.5 и 24) — иначе ночной гейт будет мерить «старый» importance-only `build_context`, а Ф31–33 зависят от M5 (trust, memory_links). На main сейчас v1.2.0 — план валиден как post-v1.3.
 
@@ -185,8 +185,9 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 - [ ] **33.1** Переиспользование `src/graph/pagerank.rs` (Ф29 v1.3): память как отдельный
   граф (`memory_links`), **dual-seed** — гибридные хиты + entity-фразы записей (OneKE-lite),
-  **edge-type-aware** веса в конфиге `OB2H_PPR_WEIGHTS` с дефолтами, зафиксированными
-  тестом: manual=1.0, contradicts/causes=0.8, category=0.5, same_project=0.3.
+  **edge-type-aware** веса в конфиге `OB2H_PPR_WEIGHTS` — формат JSON `{"kind": weight}`,
+  дефолт `{"manual":1.0,"contradicts":0.8,"causes":0.8,"category":0.5,"same_project":0.3}`
+  (зафиксирован тестом; неизвестный kind — вес 0.5).
   Hub-protection обязательно: damping + degree-normalization — иначе PPR залипает
   на записи-хабе.
 - [ ] **33.2** `graph_reason(query, project_id?, scope?)` — опциональный
@@ -267,7 +268,7 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
   быстрый ответ без нового инструмента.
 - [ ] **36.3** Dead-code report: CLI `ob2h project dead-code [--id]` + секция в
   `project_report` — символы с in-degree 0, кроме entrypoints (main, #[test]/tests,
-  pub API, kind=ROUTE из Ф40).
+  pub API; список entrypoints расширяется в Ф40 — kind=ROUTE/HANDLES).
 - [ ] **Тесты:** fixture-репо: цепочка A→B→C находится; мёртвый символ — в отчёте;
   entrypoints не попадают.
 
@@ -408,8 +409,12 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 ## 9. Definition of Done (Критерии завершения v1.4)
 
-- [ ] `cargo test` ≥ 75 тестов зелёные, `cargo clippy --all-targets` без ошибок,
-      `python -m unittest discover -s plugin/tests` зелёный.
+**Scope релиза:** v1.4 core = Ф30–35 (~11–14 дней). Трек C (Ф36–40, ~8–10 дней) —
+отдельный марафон в v1.4.x / v1.5: не блокирует релиз core, вливается по мере готовности
+фаз (каждая фаза трека самостоятельна).
+
+- [ ] `cargo test` ≥ 75 тестов зелёные (с треком C — ожидаемо ≥ 90), `cargo clippy --all-targets`
+      без ошибок, `python -m unittest discover -s plugin/tests` зелёный.
 - [ ] **Гейт (Ф30):** неделя работы — ночные прогоны в `bench history`; искусственно
       «вредный» дрим в тесте откатывается автоматически (dual-сигнал: и recall, и MRR);
       timeout-путь протестирован — warning, без rollback; без golden set — гейт пропускается.
