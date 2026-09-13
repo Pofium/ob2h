@@ -3,6 +3,17 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [Не выпущено]
+
+### Added
+- **CLI `ob2h bench`** (Фаза 21 PLAN_v1.3): регрессионный контур retrieval — golden set
+  (`data/bench/golden.jsonl`, 36 кейсов), метрики recall@k / MRR / доля пустых / p50-p95
+  латентности, режимы `search` (гибридный memory_search) и `context` (build_context),
+  вывод таблица/JSON/markdown, `--save-baseline`. Baseline живой БД: search recall@5 0.222,
+  MRR 0.198, p50 70 мс; context recall 0.833, MRR 0.861 — см. `docs/bench_baseline.md`.
+- **Security**: `workspace_read`/`workspace_write` изолированы внутри workspace
+  (запрет абсолютных путей и `..` — устранён path traversal), +6 тестов.
+
 ## [1.2.0] — 2026-09-03
 
 ### Added
