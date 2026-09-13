@@ -51,18 +51,18 @@ impl Workspace {
         self.root.join("daily")
     }
 
-    pub fn resolve_file(&self, name: &str) -> PathBuf {
+    pub fn resolve_file(&self, name: &str) -> anyhow::Result<PathBuf> {
         match name {
-            "memory" | "memory.md" | "MEMORY.md" => self.memory_dir().join("MEMORY.md"),
-            "soul" | "soul.md" | "SOUL.md" => self.root.join("SOUL.md"),
-            "user" | "user.md" | "USER.md" => self.root.join("USER.md"),
-            "history" | "history.jsonl" => self.memory_dir().join("history.jsonl"),
-            _ => self.root.join(name),
+            "memory" | "memory.md" | "MEMORY.md" => Ok(self.memory_dir().join("MEMORY.md")),
+            "soul" | "soul.md" | "SOUL.md" => Ok(self.root.join("SOUL.md")),
+            "user" | "user.md" | "USER.md" => Ok(self.root.join("USER.md")),
+            "history" | "history.jsonl" => Ok(self.memory_dir().join("history.jsonl")),
+            _ => safe_join(&self.root, name),
         }
     }
 
     pub fn read_file(&self, name: &str) -> anyhow::Result<String> {
-        let path = self.resolve_file(name);
+        let path = self.resolve_file(name)?;
         if !path.exists() {
             return Ok(String::new());
         }
@@ -70,7 +70,7 @@ impl Workspace {
     }
 
     pub fn write_file(&self, name: &str, content: &str) -> anyhow::Result<()> {
-        let path = self.resolve_file(name);
+        let path = self.resolve_file(name)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -214,3 +214,93 @@ impl Workspace {
         Ok(())
     }
 }
+
+/// Безопасная сборка пути внутри workspace: только относительные пути из
+/// нормальных компонентов. `PathBuf::join` с абсолютным путём подменяет базу,
+/// а `..` не нормализуется — без этой проверки workspace_read/write дают
+/// произвольное чтение/запись файлов.
+fn safe_join(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    use std::path::Component;
+    let rel = Path::new(name);
+    if rel.is_absolute() {
+        anyhow::bail!("путь должен быть относительным внутри workspace: {name:?}");
+    }
+    let mut normalized = PathBuf::new();
+    for comp in rel.components() {
+        match comp {
+            Component::Normal(c) => normalized.push(c),
+            Component::CurDir => {}
+            other => anyhow::bail!("недопустимый компонент пути {other:?} в {name:?}"),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        anyhow::bail!("пустой путь файла");
+    }
+    Ok(root.join(normalized))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_ws() -> Workspace {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ob2h_ws_test_{}_{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        Workspace::new(&dir)
+    }
+
+    #[test]
+    fn resolve_allows_normal_relative_paths() {
+        let ws = temp_ws();
+        let p = ws.resolve_file("notes/todo.md").unwrap();
+        assert_eq!(p, ws.root().join("notes").join("todo.md"));
+        assert!(p.starts_with(ws.root()));
+    }
+
+    #[test]
+    fn resolve_rejects_parent_traversal() {
+        let ws = temp_ws();
+        assert!(ws.resolve_file("../escape.txt").is_err());
+        assert!(ws.resolve_file("a/../../escape.txt").is_err());
+        assert!(ws.resolve_file("..").is_err());
+    }
+
+    #[test]
+    fn resolve_rejects_absolute_paths() {
+        let ws = temp_ws();
+        let abs = std::env::temp_dir().join("escape.txt");
+        assert!(ws.resolve_file(&abs.to_string_lossy()).is_err());
+        // Windows-префикс: на POSIX это относительное имя, но на Windows — абсолютный путь.
+        if cfg!(windows) {
+            assert!(ws.resolve_file("C:\\Windows\\system32\\config").is_err());
+        }
+    }
+
+    #[test]
+    fn resolve_rejects_empty_path() {
+        let ws = temp_ws();
+        assert!(ws.resolve_file("").is_err());
+        assert!(ws.resolve_file("./.").is_err());
+    }
+
+    #[test]
+    fn aliases_still_work() {
+        let ws = temp_ws();
+        let p = ws.resolve_file("memory").unwrap();
+        assert_eq!(p, ws.memory_dir().join("MEMORY.md"));
+    }
+
+    #[test]
+    fn write_read_roundtrip_confined() {
+        let ws = temp_ws();
+        ws.write_file("sub/notes.md", "привет").unwrap();
+        assert_eq!(ws.read_file("sub/notes.md").unwrap(), "привет");
+        assert!(ws.root().join("sub").join("notes.md").exists());
+    }
+}
+
