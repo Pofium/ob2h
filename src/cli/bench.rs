@@ -80,7 +80,10 @@ pub fn percentile(durations_ms: &mut [f64], p: f64) -> f64 {
 
 /// Нормализация для context-матчинга: нижний регистр + схлопывание пробелов.
 pub fn normalize(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Агрегированный результат прогона.
@@ -129,9 +132,14 @@ pub async fn run_bench(
     }
 
     // Прогрев: первый вызов грузит локальную модель эмбеддингов — не включаем его в метрики.
-    let bench_opts = ContextOptions { max_chars: Some(8000), ..Default::default() };
+    let bench_opts = ContextOptions {
+        max_chars: Some(8000),
+        ..Default::default()
+    };
     if mode == "context" {
-        let _ = memory.build_context(20, Some("прогрев"), &ContextOptions::default()).await;
+        let _ = memory
+            .build_context(20, Some("прогрев"), &ContextOptions::default())
+            .await;
     } else {
         let _ = memory.search_hybrid("прогрев", 5, 0.0).await?;
     }
@@ -156,7 +164,9 @@ pub async fn run_bench(
 
         let started = Instant::now();
         let ranked: Vec<String> = if mode == "context" {
-            let block = memory.build_context(20, Some(&case.query), &bench_opts).await?;
+            let block = memory
+                .build_context(20, Some(&case.query), &bench_opts)
+                .await?;
             let mut ranked = Vec::new();
             for line in block.lines() {
                 let nl = normalize(line);
@@ -283,8 +293,19 @@ pub async fn cli_run(
     as_json: bool,
     save_baseline: bool,
 ) -> anyhow::Result<()> {
+    if mode == "history" {
+        // Ф35.2: сводка накопительной статистики — golden-набор не нужен
+        let path = crate::cli::bench_history::history_path(&ctx.settings.data_dir);
+        let summary = crate::cli::bench_history::analyze(&path)?;
+        if as_json {
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        } else {
+            crate::cli::bench_history::print_summary(&summary);
+        }
+        return Ok(());
+    }
     if mode != "search" && mode != "context" && mode != "latency" {
-        anyhow::bail!("mode должен быть search|context|latency, получено: {mode}");
+        anyhow::bail!("mode должен быть search|context|latency|history, получено: {mode}");
     }
     let ks: Vec<usize> = k_spec
         .split(',')
@@ -341,7 +362,10 @@ pub async fn cli_run(
             );
         } else {
             println!("Латентность поиска (Ф35.1), кейсов: {}", lat.cases);
-            println!("{:<14} {:>10} {:>10} {:>10}", "хранилище", "векторов", "p50, мс", "p95, мс");
+            println!(
+                "{:<14} {:>10} {:>10} {:>10}",
+                "хранилище", "векторов", "p50, мс", "p95, мс"
+            );
             println!(
                 "{:<14} {:>10} {:>10.1} {:>10.1}",
                 "embed(query)", "-", lat.embed_p50_ms, lat.embed_p95_ms
@@ -356,9 +380,7 @@ pub async fn cli_run(
             );
             println!(
                 "порог гейта p95 = {LATENCY_GATE_P95_MS:.0} мс: {}",
-                if lat.mem_p95_ms > LATENCY_GATE_P95_MS
-                    || lat.graph_p95_ms > LATENCY_GATE_P95_MS
-                {
+                if lat.mem_p95_ms > LATENCY_GATE_P95_MS || lat.graph_p95_ms > LATENCY_GATE_P95_MS {
                     "ПРЕВЫШЕН — нужен эксперимент sqlite-vec"
                 } else {
                     "не превышен — эксперимент откладывается, решение фиксируется цифрами"
@@ -370,6 +392,18 @@ pub async fn cli_run(
             write_latency_baseline(&lat, &out)?;
             println!("latency-секция сохранена: {}", out.display());
         }
+        // Ф35.2: запись прогона в history.jsonl (накопительная статистика)
+        let db_path = ctx.settings.data_dir.join("ob2h.db");
+        let rec = crate::cli::bench_history::latency_record(
+            &lat,
+            &db_path,
+            &ctx.settings.embed_provider,
+            crate::vector::vec0::enabled(),
+        );
+        let _ = crate::cli::bench_history::append_record(
+            &crate::cli::bench_history::history_path(&ctx.settings.data_dir),
+            &rec,
+        );
         return Ok(());
     }
 
@@ -402,6 +436,36 @@ pub async fn cli_run(
         write_baseline(&result, &out)?;
         println!("baseline сохранён: {}", out.display());
     }
+
+    // Ф35.2: запись прогона в history.jsonl (recall/mrr по уровням k)
+    let db_path = ctx.settings.data_dir.join("ob2h.db");
+    let recall_at = |k: usize| {
+        result
+            .ks
+            .iter()
+            .position(|&x| x == k)
+            .and_then(|i| result.recall.get(i).copied())
+    };
+    let db_size_mb = std::fs::metadata(&db_path)
+        .map(|m| m.len() as f64 / 1_048_576.0)
+        .unwrap_or(0.0);
+    let rec = json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "mode": result.mode,
+        "cases": result.cases,
+        "recall@5": recall_at(5),
+        "recall@10": recall_at(10),
+        "mrr": (result.mrr * 1000.0).round() / 1000.0,
+        "p95_ms": (result.p95_ms * 10.0).round() / 10.0,
+        "db_size_mb": (db_size_mb * 10.0).round() / 10.0,
+        "embedding_backend": ctx.settings.embed_provider,
+        "vec0": if crate::vector::vec0::enabled() { "on" } else { "off" },
+        "dream_sha": crate::cli::bench_history::last_dream_marker(&db_path),
+    });
+    let _ = crate::cli::bench_history::append_record(
+        &crate::cli::bench_history::history_path(&ctx.settings.data_dir),
+        &rec,
+    );
     Ok(())
 }
 
@@ -425,10 +489,7 @@ fn print_human(result: &BenchResult, golden_path: &Path) {
         println!("  recall@{k:<3} {r:.3}");
     }
     println!("  MRR        {:.3}", result.mrr);
-    println!(
-        "  пусто      {}/{}",
-        result.empty_count, result.cases
-    );
+    println!("  пусто      {}/{}", result.empty_count, result.cases);
     println!("  p50        {:.1} мс", result.p50_ms);
     println!("  p95        {:.1} мс", result.p95_ms);
     println!();
@@ -452,13 +513,19 @@ fn write_baseline(result: &BenchResult, out: &Path) -> anyhow::Result<()> {
     let cells: Vec<String> = result.recall.iter().map(|r| format!("{r:.3}")).collect();
     let mut md = String::new();
     md.push_str("# OB2H bench baseline (Фаза 21, PLAN_v1.3)\n\n");
-    md.push_str(&format!("- Дата: {}\n", chrono::Utc::now().format("%Y-%m-%d %H:%M UTC")));
+    md.push_str(&format!(
+        "- Дата: {}\n",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M UTC")
+    ));
     md.push_str(&format!("- Версия ob2h: {}\n", env!("CARGO_PKG_VERSION")));
     md.push_str(&format!("- Режим: {}\n", result.mode));
     md.push_str(&format!("- Кейсов: {}\n", result.cases));
     md.push_str("- Golden: `data/bench/golden.jsonl` (персональные данные, в git не входит;\n");
     md.push_str("  здесь — только агрегаты)\n\n");
-    md.push_str(&format!("| {} | MRR | p50, мс | p95, мс |\n", heads.join(" | ")));
+    md.push_str(&format!(
+        "| {} | MRR | p50, мс | p95, мс |\n",
+        heads.join(" | ")
+    ));
     md.push_str("|---|---|---|---|\n");
     md.push_str(&format!(
         "| {} | {:.3} | {:.1} | {:.1} |\n",
@@ -531,7 +598,11 @@ fn write_latency_baseline(lat: &LatencyResult, out: &Path) -> anyhow::Result<()>
     ));
     md.push_str(&format!(
         "\n> Решение (35.1): p95 {} порога — эксперимент `OB2H_VEC0=1` (sqlite-vec rescore,\n",
-        if over { "ПРЕВЫШАЕТ" } else { "не превышает" }
+        if over {
+            "ПРЕВЫШАЕТ"
+        } else {
+            "не превышает"
+        }
     ));
     md.push_str("> int8 + oversample + full-precision re-rank) ");
     if over {
@@ -552,7 +623,11 @@ pub fn cli_history(settings: &crate::config::Settings, last: usize) -> anyhow::R
     if rows.is_empty() {
         println!(
             "История пуста: {} (гейт пишет строку на каждый прогон после дрима)",
-            settings.data_dir.join("bench").join("history.jsonl").display()
+            settings
+                .data_dir
+                .join("bench")
+                .join("history.jsonl")
+                .display()
         );
         return Ok(());
     }
@@ -601,9 +676,7 @@ pub fn cli_history(settings: &crate::config::Settings, last: usize) -> anyhow::R
         }
     }
     println!();
-    println!(
-        "Пороги гейта: recall@5 >10% или MRR >15% относительно bench:last → rollback дрима"
-    );
+    println!("Пороги гейта: recall@5 >10% или MRR >15% относительно bench:last → rollback дрима");
     Ok(())
 }
 
@@ -618,7 +691,10 @@ mod tests {
     #[test]
     fn recall_hits_partial_and_miss() {
         let expected = set(&["a", "b", "c"]);
-        let ranked: Vec<String> = vec!["x", "a", "y", "b"].into_iter().map(String::from).collect();
+        let ranked: Vec<String> = vec!["x", "a", "y", "b"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         assert_eq!(recall_at_k(&ranked, &expected, 1), 0.0);
         assert!((recall_at_k(&ranked, &expected, 2) - 1.0 / 3.0).abs() < 1e-9);
         assert!((recall_at_k(&ranked, &expected, 4) - 2.0 / 3.0).abs() < 1e-9);

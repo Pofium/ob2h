@@ -103,6 +103,9 @@ impl McpServer {
     }
 
     pub async fn run_stdio(self: Arc<Self>) -> anyhow::Result<()> {
+        // Ф35.2/30.3: ночной bench-прогон с записью в history.jsonl
+        tokio::spawn(crate::cli::bench_history::nightly_loop(self.ctx.clone()));
+
         let stdin = tokio::io::stdin();
         let stdout = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
         let mut reader = BufReader::new(stdin).lines();

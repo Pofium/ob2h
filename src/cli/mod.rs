@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod bench;
+pub mod bench_history;
 pub mod db;
 pub mod dedup;
 pub mod doctor;

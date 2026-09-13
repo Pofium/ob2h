@@ -6,6 +6,11 @@
 ## [Не выпущено]
 
 ### Added
+- **Ночная статистика bench (Ф35.2/30.3, доделано)**: каждый bench-прогон дописывает
+  `data/bench/history.jsonl` (§4: ts/mode/recall/mrr/p95/db_size/embedding_backend/
+  vec0/dream_sha); сервер раз в 24 ч сам гонит latency-бенч по golden-набору
+  (`OB2H_BENCH_NIGHTLY=0` — off); `ob2h bench --mode history` — сводка с медианами
+  p95 off/on и честным вердиктом 35.2. +2 теста (`tests/test_bench_history.rs`).
 - **Communities, framework edges, связка с памятью (Фаза 40 / трек C PLAN_v1.4)**:
   зоны (label propagation + модулярность Q, детерминированный pure-Rust) в
   `project_report`; framework-эвристики ROUTE (axum/actix/FastAPI) и QUERIES_TABLE
