@@ -1004,6 +1004,53 @@ impl McpServer {
                     None => return "[Error] query is required".to_string(),
                 };
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
+                let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("classic");
+
+                // Ф29.2: mode=ppr — PPR-ранжирование графа знаний (multi-hop поверх сидов).
+                if mode == "ppr" {
+                    let pid = match args.get("project_id").and_then(|v| v.as_str()).map(String::from)
+                    {
+                        Some(p) => Some(p),
+                        None => self.ctx.active_project_id.read().await.clone(),
+                    };
+                    let Some(pid) = pid else {
+                        return "[Error] mode=ppr требует project_id или активный проект сессии"
+                            .to_string();
+                    };
+                    match self
+                        .ctx
+                        .graph
+                        .ppr_search(
+                            query,
+                            Some(&pid),
+                            limit,
+                            self.ctx.settings.ppr_damping,
+                            &self.ctx.settings.ppr_weights,
+                        )
+                        .await
+                    {
+                        Ok(hits) if hits.is_empty() => return "граф пуст по запросу".to_string(),
+                        Ok(hits) => {
+                            let mut lines =
+                                vec![format!("узлов (ppr): {}", hits.len())];
+                            for h in &hits {
+                                lines.push(format!(
+                                    "- {} ({}, val={}) ppr={:.4}{}",
+                                    h.label,
+                                    h.node_type,
+                                    h.val,
+                                    h.score,
+                                    h.file_path
+                                        .as_deref()
+                                        .map(|p| format!(" — {p}"))
+                                        .unwrap_or_default()
+                                ));
+                            }
+                            return lines.join("\n");
+                        }
+                        Err(e) => return format!("[Error] {e}"),
+                    }
+                }
 
                 match self.ctx.graph.search(query, limit, true).await {
                     Ok(found) => {
@@ -1071,8 +1118,38 @@ impl McpServer {
                     Ok(res) => {
                         let steps = res.reasoning_steps.join("; ");
                         let entities = res.used_entities.join(", ");
+                        // Ф29.3: scope=all дополняет факт-блок PPR-подграфом знаний
+                        let mut ppr_docs = String::new();
+                        if scope == "all" {
+                            let pid = self.ctx.active_project_id.read().await.clone();
+                            if let Some(pid) = pid {
+                                if let Ok(hits) = self
+                                    .ctx
+                                    .graph
+                                    .ppr_search(
+                                        query,
+                                        Some(&pid),
+                                        5,
+                                        self.ctx.settings.ppr_damping,
+                                        &self.ctx.settings.ppr_weights,
+                                    )
+                                    .await
+                                {
+                                    let lines: Vec<String> = hits
+                                        .iter()
+                                        .map(|h| {
+                                            format!("- {} ({}) ppr={:.4}", h.label, h.node_type, h.score)
+                                        })
+                                        .collect();
+                                    if !lines.is_empty() {
+                                        ppr_docs =
+                                            format!("\nppr_docs:\n{}", lines.join("\n"));
+                                    }
+                                }
+                            }
+                        }
                         format!(
-                            "answer: {}\nconfidence: {}\nentities: {}\nsteps: {}{}",
+                            "answer: {}\nconfidence: {}\nentities: {}\nsteps: {}{}{}",
                             res.answer,
                             res.confidence,
                             if entities.is_empty() { "-" } else { &entities },
@@ -1081,7 +1158,8 @@ impl McpServer {
                                 String::new()
                             } else {
                                 format!("\nscope: all\n{memory_block}")
-                            }
+                            },
+                            ppr_docs
                         )
                     }
                     Err(e) => format!("[Error] {e}"),

@@ -295,10 +295,12 @@ Ralph-миграция из спеки (названа там «M4», что у�
 - [x] **29.2** `graph_search` mode=ppr: **dual-seed** — топ FTS/векторных матчей + phrase/entity-узлы
   (из OneKE-lite) → PPR-ранжирование узлов (вместо 1-hop-расширения); веса рёбер по типу
   (edge-type-aware, идеи HippoRAG 2 / GAAMA — §8).
-  *(реализовано параллельной сессией в `631a5bf` как `memory_search mode=graph` — dual-seed
-  гибридные хиты + entity-фразы, блок `[ppr]` с фолбэком на 1-hop)*
+  *(memory-вариант — параллельная сессия `631a5bf` (`memory_search mode=graph`); граф знаний —
+  `GraphService::ppr_search` + `graph_search mode=ppr`: сиды = топ матчинга, веса рёбер по
+  `label` через `OB2H_PPR_WEIGHTS`, проектный фильтр)*
 - [x] **29.3** `graph_reason`: факт-блок пополняется PPR-подграфом (пути между used_entities).
-  *(там же: `graph_reason scope=memory|all`, уверенность trust × PPR-масса)*
+  *(memory — `631a5bf` (`scope=memory`); знания — `scope=all` добавляет блок `ppr_docs:` из
+  `ppr_search` по графу проекта; дефолтный docs-ответ не изменён — регресс-тест цел)*
 - [x] **29.4** Тесты: синтетический multi-hop A→B→C (запрос по A достигает C, 1-hop не достигает);
   сходимость PPR; bench на живой БД. *(9 юнит-тестов движка + 5 интеграционных,
   `tests/test_pagerank.rs` — коммит `631a5bf`)*

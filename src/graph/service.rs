@@ -58,6 +58,17 @@ pub struct GraphSearchResult {
     pub edges: Vec<EdgeWithLabels>,
 }
 
+/// Ф29.2: узел в PPR-выдаче графа знаний.
+#[derive(Debug, Clone, Serialize)]
+pub struct PprNodeHit {
+    pub node_id: i64,
+    pub label: String,
+    pub node_type: String,
+    pub file_path: Option<String>,
+    pub score: f64,
+    pub val: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphReasonResult {
     pub answer: String,
@@ -454,6 +465,137 @@ impl GraphService {
                 chunks,
             })
         })
+    }
+
+    /// Ф29.2 (PLAN_v1.3): PPR-ранжирование графа знаний — сиды из существующего
+    /// матчинга (FTS/лексика/вектор, без 1-hop), рёбра проекта с весами по типу
+    /// (edge-type-aware, идеи HippoRAG 2 / GAAMA). Многошаговое: mass доходит
+    /// до узлов, недостижимых за один хоп.
+    pub async fn ppr_search(
+        &self,
+        query: &str,
+        project_id: Option<&str>,
+        limit: usize,
+        damping: f64,
+        weights: &crate::graph::pagerank::PprWeights,
+    ) -> anyhow::Result<Vec<PprNodeHit>> {
+        let found = self.search(query, 10, false).await?;
+        if found.nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let seed_ids: Vec<i64> = found.nodes.iter().map(|n| n.id).collect();
+
+        let nodes: Vec<(i64, String, String, Option<String>, i64)> = self.db.with_conn(|conn| {
+            match project_id {
+                Some(pid) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, label, node_type, file_path, val FROM graph_nodes \
+                         WHERE deleted_at IS NULL AND project_id = ?1",
+                    )?;
+                    let rows = stmt.query_map(params![pid], |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, Option<String>>(3)?,
+                            r.get::<_, i64>(4)?,
+                        ))
+                    })?;
+                    Ok(rows.flatten().collect())
+                }
+                None => {
+                    let mut stmt = conn.prepare(
+                        "SELECT id, label, node_type, file_path, val FROM graph_nodes \
+                         WHERE deleted_at IS NULL",
+                    )?;
+                    let rows = stmt.query_map([], |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, Option<String>>(3)?,
+                            r.get::<_, i64>(4)?,
+                        ))
+                    })?;
+                    Ok(rows.flatten().collect())
+                }
+            }
+        })?;
+
+        let index: std::collections::HashMap<i64, usize> =
+            nodes.iter().enumerate().map(|(i, (id, ..))| (*id, i)).collect();
+        let seeds: Vec<(usize, f64)> = seed_ids
+            .iter()
+            .filter_map(|id| index.get(id).copied().map(|i| (i, 1.0)))
+            .collect();
+        if seeds.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let edges: Vec<crate::graph::pagerank::PprEdge> = self.db.with_conn(|conn| {
+            match project_id {
+                Some(pid) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT source_id, target_id, label FROM graph_edges \
+                         WHERE deleted_at IS NULL AND project_id = ?1",
+                    )?;
+                    let rows = stmt.query_map(params![pid], |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    })?;
+                    Ok(rows
+                        .flatten()
+                        .map(|(s, t, label)| crate::graph::pagerank::PprEdge {
+                            from: index.get(&s).copied().unwrap_or(usize::MAX),
+                            to: index.get(&t).copied().unwrap_or(usize::MAX),
+                            weight: crate::graph::pagerank::weight_for(weights, &label),
+                        })
+                        .collect())
+                }
+                None => {
+                    let mut stmt = conn.prepare(
+                        "SELECT source_id, target_id, label FROM graph_edges WHERE deleted_at IS NULL",
+                    )?;
+                    let rows = stmt.query_map([], |r| {
+                        Ok((
+                            r.get::<_, i64>(0)?,
+                            r.get::<_, i64>(1)?,
+                            r.get::<_, String>(2)?,
+                        ))
+                    })?;
+                    Ok(rows
+                        .flatten()
+                        .map(|(s, t, label)| crate::graph::pagerank::PprEdge {
+                            from: index.get(&s).copied().unwrap_or(usize::MAX),
+                            to: index.get(&t).copied().unwrap_or(usize::MAX),
+                            weight: crate::graph::pagerank::weight_for(weights, &label),
+                        })
+                        .collect())
+                }
+            }
+        })?;
+
+        let graph = crate::graph::pagerank::PprGraph::new(nodes.len(), &edges);
+        let ranked = crate::graph::pagerank::personalized_pagerank(&graph, &seeds, damping, 20, 0.0);
+
+        Ok(ranked
+            .into_iter()
+            .take(limit)
+            .filter_map(|(idx, score)| {
+                let (id, label, ntype, path, val) = nodes.get(idx)?;
+                Some(PprNodeHit {
+                    node_id: *id,
+                    label: label.clone(),
+                    node_type: ntype.clone(),
+                    file_path: path.clone(),
+                    score,
+                    val: *val,
+                })
+            })
+            .collect())
     }
 
     /// Гибридный поиск узлов в графе проекта (FTS/LIKE + Vector Cosine через RRF k=60)

@@ -284,3 +284,53 @@ async fn mcp_scope_and_graph_mode_contract() {
         .await;
     assert!(graph_related.contains("[ppr]"), "{graph_related}");
 }
+
+/// Ф29.2/29.4 (PLAN_v1.3): PPR по графу знаний — multi-hop. Запрос сидится на
+/// alpha; через цепочку alpha→beta→gamma масса доходит до gamma, которую 1-hop
+/// не достигает; изолированный delta массы не получает.
+#[tokio::test]
+async fn knowledge_graph_ppr_reaches_two_hops() {
+    let db = Database::in_memory().expect("db");
+    let embedder = Arc::new(FakeEmbedding::new(384));
+    let graph = ob2h::graph::GraphService::new(db.clone(), embedder);
+
+    let now = ob2h::db::utcnow();
+    db.with_conn(|conn| {
+        for (id, label) in [(1, "alpha"), (2, "beta"), (3, "gamma"), (4, "delta")] {
+            conn.execute(
+                "INSERT INTO graph_nodes (id, node_id, label, node_type, description, val, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, 'Concept', 'описание', 1, ?4, ?4)",
+                params![id, format!("n{id}-{label}"), label, now],
+            )?;
+        }
+        conn.execute(
+            "INSERT INTO graph_edges (source_id, target_id, label, weight, created_at) \
+             VALUES (1, 2, 'causes', 1.0, ?1)",
+            params![now],
+        )?;
+        conn.execute(
+            "INSERT INTO graph_edges (source_id, target_id, label, weight, created_at) \
+             VALUES (2, 3, 'causes', 1.0, ?1)",
+            params![now],
+        )?;
+        Ok(())
+    })
+    .expect("seed graph");
+
+    let hits = graph
+        .ppr_search("alpha", None, 5, 0.85, &Default::default())
+        .await
+        .expect("ppr search");
+
+    let labels: Vec<&str> = hits.iter().map(|h| h.label.as_str()).collect();
+    assert!(labels.contains(&"alpha"), "сид в выдаче: {labels:?}");
+    assert!(labels.contains(&"beta"), "1-hop сосед: {labels:?}");
+    assert!(
+        labels.contains(&"gamma"),
+        "multi-hop: gamma достижима только через PPR: {labels:?}"
+    );
+    assert!(
+        !labels.contains(&"delta"),
+        "изолированный узел массы не получает: {labels:?}"
+    );
+}

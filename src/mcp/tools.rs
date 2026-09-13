@@ -139,14 +139,15 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 10. graph_search
         McpToolDef {
             name: "graph_search".to_string(),
-            description: "Поиск по графу знаний: узлы и связи (с 1-hop соседями). project_id и provenance позволяют точечно фильтровать.".to_string(),
+            description: "Поиск по графу знаний: узлы и связи (с 1-hop соседями). mode=ppr — Personalized PageRank по графу проекта (multi-hop, dual-seed, веса по типу рёбер). project_id и provenance позволяют точечно фильтровать.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Поисковый запрос по графу" },
                     "limit": { "type": "integer", "description": "Лимит узлов (дефолт: 10)" },
                     "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" },
-                    "provenance": { "type": "string", "enum": ["ast", "llm", "manual", "all"], "description": "Тип источника связей (дефолт: all)" }
+                    "provenance": { "type": "string", "enum": ["ast", "llm", "manual", "all"], "description": "Тип источника связей (дефолт: all)" },
+                    "mode": { "type": "string", "enum": ["classic", "ppr"], "description": "classic (дефолт, 1-hop) | ppr (Personalized PageRank, Ф29.2)" }
                 },
                 "required": ["query"]
             }),
