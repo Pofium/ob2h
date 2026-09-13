@@ -6,10 +6,15 @@
 ## [1.4.0] — 2026-09-13
 
 ### Added
-- **Trust в скоринге prefetch (аудит v1.3, замыкание §22.2)**: `build_context` использует
-  реальный `0.2*trust` вместо константы 0.1 — trust-петля Ф23 (touch/feedback/дрим-ревизия)
-  теперь влияет на автоконтекст каждого хода; дефолт trust 0.5 сохраняет прежний баланс.
-  Тест `trust_boost_lifts_record_in_prefetch_scoring` (tests/test_context_v2.rs).
+- **Trust в скоринге prefetch (аудит v1.3, §22.2) — за флагом, дефолт off**:
+  `ContextOptions.trust_weight` + `OB2H_CONTEXT_TRUST_WEIGHT` (дефолт `0` — прежняя
+  формула; `0.2` — слагаемое `trust` из плана v1.3). Механизм реализован и протестирован
+  (`trust_boost_lifts_record_in_prefetch_scoring`, `default_trust_weight_keeps_relevance_order`),
+  но выключен по bench-данным живой БД: на молодой trust-статистике (миграция M5 сегодня,
+  ревизия дрима уже ставила −0.4/−0.5) включение веса 0.2 дало recall@5 0.569→0.417 (−27%),
+  MRR 0.611→0.444 — за красной линией гейта ADR-13 (−10%/−15%). Решение о включении —
+  после накопления ночных прогонов (`ob2h bench --mode history`), цифры — в
+  `docs/bench_baseline.md`.
 - **Ночная статистика bench (Ф35.2/30.3, доделано)**: каждый bench-прогон дописывает
   `data/bench/history.jsonl` (§4: ts/mode/recall/mrr/p95/db_size/embedding_backend/
   vec0/dream_sha); сервер раз в 24 ч сам гонит latency-бенч по golden-набору
@@ -87,7 +92,7 @@
   **Миграция V7**: `memory_links.deleted_at` — forget/merge рвут связи soft-delete'ом
   (tombstone реплицируется синком v2 в Ф34), чтения фильтруют удалённые, upsert
   оживляет. +7 тестов (`tests/test_typed_edges.rs`).
-- **Ralph Knowledge Layer — ядро и окружение (Фазы 26–28 PLAN_v1.3, миграция M6 → схема v7)**:
+- **Ralph Knowledge Layer — ядро и окружение (Фазы 26–28 PLAN_v1.3, миграция M6 → схема v6)**:
   таблицы `ralph_runs`/`ralph_iterations`/`ralph_findings`/`ast_changes` (аддитивно,
   graph_nodes не пересоздавался — confidence сохранена, тест схемы). MCP-инструменты
   **№27–33**: `ralph_start`, `ralph_iteration` (авто-вердикт только по `tests_summary`

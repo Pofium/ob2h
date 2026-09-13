@@ -1397,9 +1397,10 @@ impl MemoryService {
             _ => return self.build_context_fallback(limit, query, opts),
         };
 
-        // Скоринг (§22.2): 0.35*rel + 0.25*importance + 0.2*trust + 0.1*recency + 0.1*log1p(access).
-        // recency — экспоненциальный полураспад по updated_at. Доверие из trust-петли (Ф23)
-        // влияет на автоконтекст; дефолт 0.5 даёт те же 0.1, что была константа до Ф23.
+        // Скоринг (§22.2): 0.35*rel + 0.25*importance + W*trust + 0.1*recency + 0.1*log1p(access).
+        // recency — экспоненциальный полураспад по updated_at. W = opts.trust_weight:
+        // 0 (дефолт) — прежняя формула; 0.2 — доверие из trust-петли (Ф23) влияет на
+        // автоконтекст. Включение — за флагом по bench-данным (см. bench_baseline.md).
         let max_rrf = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max).max(1e-9);
         let half_life = opts.half_life_days.max(0.1);
         let now = chrono::Utc::now();
@@ -1424,7 +1425,7 @@ impl MemoryService {
                 let trust = trust_map.get(&h.record.id).copied().unwrap_or(0.5);
                 let score = 0.35 * rel
                     + 0.25 * h.record.importance
-                    + 0.2 * trust
+                    + opts.trust_weight * trust
                     + 0.1 * recency
                     + 0.1 * sat_access;
                 Candidate { record: h.record, score }
@@ -1507,11 +1508,15 @@ pub struct ContextOptions {
     pub mmr_lambda: f64,
     /// Автор хода (Ф25.2): записи с чужим meta.author исключаются.
     pub author: Option<String>,
+    /// Вес trust в скоринге (§22.2). Дефолт 0 — формула v1.3 без доверия;
+    /// 0.2 включает слагаемое `trust` (флаг OB2H_CONTEXT_TRUST_WEIGHT,
+    /// аудит v1.3: на молодой trust-статистике даёт −27% recall@5 — см. bench_baseline).
+    pub trust_weight: f64,
 }
 
 impl Default for ContextOptions {
     fn default() -> Self {
-        Self { max_chars: None, half_life_days: 90.0, mmr_lambda: 0.7, author: None }
+        Self { max_chars: None, half_life_days: 90.0, mmr_lambda: 0.7, author: None, trust_weight: 0.0 }
     }
 }
 

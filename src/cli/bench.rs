@@ -132,8 +132,14 @@ pub async fn run_bench(
     }
 
     // Прогрев: первый вызов грузит локальную модель эмбеддингов — не включаем его в метрики.
+    // Вес trust берётся из env — как у живого сервера (дефолт 0 = формула v1.3).
+    let trust_weight = std::env::var("OB2H_CONTEXT_TRUST_WEIGHT")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0);
     let bench_opts = ContextOptions {
         max_chars: Some(8000),
+        trust_weight,
         ..Default::default()
     };
     if mode == "context" {
