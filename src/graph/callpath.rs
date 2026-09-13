@@ -348,6 +348,12 @@ pub fn dead_code(conn: &Connection, project_id: &str) -> rusqlite::Result<Vec<De
          WHERE n.project_id = ?1
            AND n.node_type IN ({types})
            AND (n.deleted_at IS NULL OR n.deleted_at = '')
+           AND NOT EXISTS (
+               SELECT 1 FROM graph_edges fe
+               WHERE fe.target_id = n.id
+                 AND fe.label IN ('ROUTE', 'HANDLES')
+                 AND fe.deleted_at IS NULL
+           )
          ORDER BY indeg, n.file_path, n.line_start"
     );
 

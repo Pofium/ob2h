@@ -59,7 +59,11 @@ fn seed_graph(db: &Database) {
 }
 
 fn repo_map(db: &Database, query: Option<&str>, tokens: usize) -> String {
-    db.with_conn(|conn| build_repo_map(conn, PROJ, query, tokens))
+    repo_map_mem(db, query, tokens, false)
+}
+
+fn repo_map_mem(db: &Database, query: Option<&str>, tokens: usize, memory: bool) -> String {
+    db.with_conn(|conn| build_repo_map(conn, PROJ, query, tokens, memory))
         .unwrap()
 }
 
@@ -129,10 +133,38 @@ fn empty_project_is_honest() {
     })
     .unwrap();
     let m = db
-        .with_conn(|conn| build_repo_map(conn, "empty", None, 4096))
+        .with_conn(|conn| build_repo_map(conn, "empty", None, 4096, false))
         .unwrap();
     assert!(
         m.contains("нет сканированных файлов"),
         "честное сообщение вместо пустой карты"
     );
+}
+
+#[test]
+fn with_memory_prepends_high_trust_memories() {
+    let db = Database::in_memory().unwrap();
+    seed_graph(&db);
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO memories (key, content, category, importance, created_at, updated_at, project_id, trust)
+             VALUES ('adr-k6', 'Решение: ralph_* вне sync-бандлов', 'adr', 0.9, '2026-09-13T10:00:00Z', '2026-09-13T10:00:00Z', 'map', 0.9)",
+            [],
+        )
+    })
+    .unwrap();
+
+    let without = repo_map(&db, None, 8192);
+    let with = repo_map_mem(&db, None, 8192, true);
+    assert!(!without.contains("Память проекта"), "без флага памяти нет");
+    assert!(
+        with.contains("## Память проекта (high-trust)"),
+        "с флагом память есть: {}",
+        with
+    );
+    assert!(with.contains("adr-k6"));
+    // память — первым блоком (до первого файлового блока)
+    let mem_pos = with.find("## Память проекта").unwrap();
+    let file_pos = with.find("## src/").unwrap();
+    assert!(mem_pos < file_pos, "память приоритетнее файлов");
 }

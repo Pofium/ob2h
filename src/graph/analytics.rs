@@ -318,6 +318,14 @@ impl GraphAnalytics {
             }
         }
 
+        // Ф40.1: зоны (communities) — усиливает ralph_context/Ф27
+        if let Ok(zones) = super::communities::detect_zones(conn, project_id, 3) {
+            let section = super::communities::format_zones(&zones);
+            if !section.is_empty() {
+                md.push_str(&section);
+            }
+        }
+
         // Ф36.3: кандидаты в мёртвый код — in-degree 0 по usage-рёбрам, кроме entrypoints
         if let Ok(dead) = super::callpath::dead_code(conn, project_id) {
             if !dead.is_empty() {

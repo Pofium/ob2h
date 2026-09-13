@@ -439,18 +439,35 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 
 ### Фаза 40 (C5) — Communities, framework edges, связка с памятью (Оценка: 2 дня)
 
-- [ ] **40.1** Louvain/модулярность pure-Rust по graph_edges проекта → «зоны» в
+- [x] **40.1** Louvain/модулярность pure-Rust по graph_edges проекта → «зоны» в
   `project_report`/`project_context` (усиливает ralph_context, Ф27).
-- [ ] **40.2** Framework-aware edges выборочно: kind=ROUTE (axum/actix, FastAPI),
+- [x] **40.2** Framework-aware edges выборочно: kind=ROUTE (axum/actix, FastAPI),
   kind=QUERIES_TABLE (SQL ↔ ORM) — эвристики в AST-экстракторе; kind-набор расширяется
   данными, схема не меняется.
-- [ ] **40.3** Связка graph ↔ memory: `memory_save` с project_id — автолинк kind=code_symbol
+- [x] **40.3** Связка graph ↔ memory: `memory_save` с project_id — автолинк kind=code_symbol
   на упомянутые God Nodes/символы (OneKE-lite); `project_context(mode=repo_map,
   with_memory=true)` подмешивает high-trust memories проекта; ADR-записи (category=adr)
   линкуются на символы из текста.
-- [ ] **40.4** Dead-code (36.3) учитывает kind=ROUTE/HANDLES — маршрут живой entrypoint.
-- [ ] **Тесты:** fixture axum/FastAPI — ROUTE найден и исключён из dead-code; зоны на
+- [x] **40.4** Dead-code (36.3) учитывает kind=ROUTE/HANDLES — маршрут живой entrypoint.
+- [x] **Тесты:** fixture axum/FastAPI — ROUTE найден и исключён из dead-code; зоны на
   fixture из двух модулей; memory↔symbol линк появляется при save с project_id.
+
+  **РЕАЛИЗАЦИЯ (13.09.2026):** 40.1: `src/graph/communities.rs` — label propagation
+  (детерминированный pure-Rust, тай-брейк по минимальной метке; честно Louvain-lite
+  без иерархии) + модулярность Q = Σ_c [W_c/m − (D_c/2m)²]; секция «Зоны» в
+  `project_report` (top-5, Q в заголовке); 40.2: ROUTE (axum/actix `#[get("/p")]`,
+  FastAPI/Flask `@app.get("/p")` → узел `route:GET /p` типа Route) и QUERIES_TABLE
+  (SQLAlchemy `__tablename__` → `table:x` типа Table), provenance=INFERRED,
+  авто-создание узлов по префиксам в scan_project; 40.3: `memory_save` с project_id
+  пишет meta.code_symbols (упомянутые God Nodes приоритетно, до 8; OneKE-lite по
+  подстроке, честно — без LLM), ответ «saved key=… (linked code_symbols=N)»;
+  `project_context(mode=repo_map, with_memory=true)` и CLI `--memory` подмешивают
+  high-trust память (trust/importance ≥ 0.7) первым блоком карты; ADR-записи
+  (category=adr) линкуются той же механикой; 40.4: dead-code исключает символы со
+  входящими ROUTE/HANDLES. Тесты `tests/test_track_c5.rs` (4): axum ROUTE найден и
+  list_users не мёртвый при мёртвом internal_helper; FastAPI + __tablename__; зоны
+  на fixture из двух модулей (2 зоны, Q≈0.49); memory↔symbol линк (meta.code_symbols).
+  +1 тест в test_repomap (with_memory первым блоком).
 
 ---
 

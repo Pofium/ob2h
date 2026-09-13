@@ -117,11 +117,15 @@ fn load_symbols(
 }
 
 /// Построить карту репозитория под бюджет токенов.
+/// `with_memory` (Ф40.3) подмешивает высокодоверительную память проекта
+/// (trust/importance ≥ 0.7) первым блоком — она приоритетнее файла карты.
+#[allow(clippy::too_many_arguments)]
 pub fn build_repo_map(
     conn: &Connection,
     project_id: &str,
     query: Option<&str>,
     max_tokens: usize,
+    with_memory: bool,
 ) -> Result<String, rusqlite::Error> {
     let files = load_files(conn, project_id)?;
     if files.is_empty() {
@@ -246,6 +250,31 @@ pub fn build_repo_map(
 
     // --- Блоки файлов -----------------------------------------------------------
     let mut blocks: Vec<String> = Vec::with_capacity(n);
+
+    // Ф40.3: высокодоверительная память проекта — первым блоком
+    if with_memory {
+        let mut mstmt = conn.prepare(
+            "SELECT key, content FROM memories
+             WHERE project_id = ?1 AND deleted_at IS NULL
+               AND (trust >= 0.7 OR importance >= 0.7)
+             ORDER BY updated_at DESC LIMIT 5",
+        )?;
+        let rows = mstmt
+            .query_map(params![project_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        if !rows.is_empty() {
+            let mut block = String::from("## Память проекта (high-trust)\n");
+            for (key, content) in rows {
+                let short: String = content.chars().take(120).collect();
+                block.push_str(&format!("- **{}**: {}\n", key, short));
+            }
+            block.truncate(MAX_FILE_BLOCK_CHARS);
+            blocks.push(block);
+        }
+    }
+
     for &(node, score) in &ranked {
         let file = &files[node];
         let syms = load_symbols(conn, project_id, file.id, 12)?;

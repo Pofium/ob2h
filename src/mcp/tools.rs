@@ -333,7 +333,8 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "id": { "type": "string", "description": "Идентификатор проекта" },
                     "query": { "type": "string", "description": "Описание текущей задачи для точечного подбора модулей (опционально)" },
                     "mode": { "type": "string", "enum": ["context", "repo_map"], "description": "Формат: context (дефолт — прежний блок God Nodes/подсистем) или repo_map (карта «файл → символы» под token budget, Ф37)" },
-                    "max_tokens": { "type": "integer", "description": "Бюджет repo_map в токенах (дефолт 4096; типовые 2048/4096/8192)" }
+                    "max_tokens": { "type": "integer", "description": "Бюджет repo_map в токенах (дефолт 4096; типовые 2048/4096/8192)" },
+                    "with_memory": { "type": "boolean", "description": "repo_map: подмешать high-trust память проекта (Ф40.3, trust/importance ≥ 0.7)" }
                 },
                 "required": ["id"]
             }),

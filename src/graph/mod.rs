@@ -3,6 +3,7 @@
 pub mod analytics;
 pub mod blast;
 pub mod callpath;
+pub mod communities;
 pub mod pagerank;
 pub mod repomap;
 pub mod service;

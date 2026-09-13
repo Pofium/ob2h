@@ -113,6 +113,13 @@ pub struct AstCodeExtractor {
     /// Ф39.1: общий паттерн места вызова `name(` (Rust/Python type-pass).
     call_re: Regex,
 
+    /// Ф40.2: маршруты axum/actix `#[get("/path")]`.
+    rust_route_re: Regex,
+    /// Ф40.2: маршруты FastAPI/Flask `@app.get("/path")`.
+    py_route_re: Regex,
+    /// Ф40.2: SQLAlchemy `__tablename__ = "x"`.
+    py_tablename_re: Regex,
+
     dart_import_re: Regex,
     dart_class_re: Regex,
     dart_mixin_re: Regex,
@@ -143,6 +150,11 @@ impl AstCodeExtractor {
 
             // Ф39.1: место вызова `name(` (для type-pass)
             call_re: Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\(").unwrap(),
+
+            // Ф40.2: framework-эвристики (ROUTE / QUERIES_TABLE, provenance=INFERRED)
+            rust_route_re: Regex::new(r#"#\[\s*(get|post|put|delete|patch|route)\s*\(\s*"([^"]+)""#).unwrap(),
+            py_route_re: Regex::new(r#"(?:app|router|api)\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#).unwrap(),
+            py_tablename_re: Regex::new(r#"__tablename__\s*=\s*["'](\w+)["']"#).unwrap(),
 
             // Python patterns
             py_class_re: Regex::new(r"(?m)^\s*class\s+([a-zA-Z0-9_]+)(?:\(([^)]*)\))?:").unwrap(),
@@ -436,6 +448,16 @@ impl AstCodeExtractor {
         }
 
         // 4. Извлечение functions
+        // Ф40.2: маршруты axum/actix — `#[get("/path")]` перед fn
+        let mut route_by_line: std::collections::HashMap<usize, (String, String)> =
+            std::collections::HashMap::new();
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.rust_route_re.captures(line) {
+                if let (Some(m), Some(p)) = (cap.get(1), cap.get(2)) {
+                    route_by_line.insert(i, (m.as_str().to_uppercase(), p.as_str().to_string()));
+                }
+            }
+        }
         for (i, line) in lines.iter().enumerate() {
             if let Some(cap) = self.rust_fn_re.captures(line) {
                 if let Some(fn_match) = cap.get(1) {
@@ -453,12 +475,28 @@ impl AstCodeExtractor {
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
-                        target_node_id: node_id,
+                        target_node_id: node_id.clone(),
                         label: "DEFINES".to_string(),
                         weight: 1.0,
                         context: sig.to_string(),
                         provenance: "EXTRACTED".to_string(),
                     });
+                    // Ф40.2: ROUTE — framework edge (provenance=INFERRED):
+                    // атрибут маршрута на этой или одной из двух предыдущих строк
+                    let route = [i.checked_sub(2), i.checked_sub(1), Some(i)]
+                        .into_iter()
+                        .flatten()
+                        .find_map(|k| route_by_line.get(&k).cloned());
+                    if let Some((method, path)) = route {
+                        out.edges.push(AstEdge {
+                            source_node_id: node_id,
+                            target_node_id: format!("route:{} {}", method, path),
+                            label: "ROUTE".to_string(),
+                            weight: 1.0,
+                            context: format!("{} {}", method, path),
+                            provenance: "INFERRED".to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -578,7 +616,42 @@ impl AstCodeExtractor {
             }
         }
 
+        // 2b. Ф40.2: QUERIES_TABLE — SQLAlchemy `__tablename__ = "x"` в классе
+        let mut last_class: Option<String> = None;
+        for line in lines.iter() {
+            let trimmed = line.trim_start();
+            if let Some(cap) = self.py_class_re.captures(line) {
+                if let Some(nm) = cap.get(1) {
+                    last_class = Some(format!("class:{}:{}", rel_path, nm.as_str()));
+                    continue;
+                }
+            }
+            if let Some(cap) = self.py_tablename_re.captures(line) {
+                if let (Some(tbl), Some(cls)) = (cap.get(1), last_class.clone()) {
+                    out.edges.push(AstEdge {
+                        source_node_id: cls,
+                        target_node_id: format!("table:{}", tbl.as_str()),
+                        label: "QUERIES_TABLE".to_string(),
+                        weight: 1.0,
+                        context: format!("__tablename__ = \"{}\"", tbl.as_str()),
+                        provenance: "INFERRED".to_string(),
+                    });
+                }
+            }
+            let _ = trimmed;
+        }
+
         // 3. Извлечение functions
+        // Ф40.2: маршруты FastAPI/Flask — `@app.get("/path")` перед def
+        let mut route_by_line: std::collections::HashMap<usize, (String, String)> =
+            std::collections::HashMap::new();
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.py_route_re.captures(line) {
+                if let (Some(m), Some(p)) = (cap.get(1), cap.get(2)) {
+                    route_by_line.insert(i, (m.as_str().to_uppercase(), p.as_str().to_string()));
+                }
+            }
+        }
         for (i, line) in lines.iter().enumerate() {
             if let Some(cap) = self.py_fn_re.captures(line) {
                 if let Some(fn_match) = cap.get(1) {
@@ -595,12 +668,26 @@ impl AstCodeExtractor {
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
-                        target_node_id: node_id,
+                        target_node_id: node_id.clone(),
                         label: "DEFINES".to_string(),
                         weight: 1.0,
                         context: line.trim().to_string(),
                         provenance: "EXTRACTED".to_string(),
                     });
+                    let route = [i.checked_sub(2), i.checked_sub(1), Some(i)]
+                        .into_iter()
+                        .flatten()
+                        .find_map(|k| route_by_line.get(&k).cloned());
+                    if let Some((method, path)) = route {
+                        out.edges.push(AstEdge {
+                            source_node_id: node_id,
+                            target_node_id: format!("route:{} {}", method, path),
+                            label: "ROUTE".to_string(),
+                            weight: 1.0,
+                            context: format!("{} {}", method, path),
+                            provenance: "INFERRED".to_string(),
+                        });
+                    }
                 }
             }
         }

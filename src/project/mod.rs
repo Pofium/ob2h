@@ -4,17 +4,17 @@ pub mod ast;
 pub mod hooks;
 pub mod watcher;
 
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tracing::info;
 
+use crate::db::models::ProjectRecord;
 pub use ast::{AstCodeExtractor, AstScanResult};
 pub use hooks::install_git_hooks;
 pub use watcher::ProjectWatcher;
-use crate::db::models::ProjectRecord;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectStats {
@@ -129,7 +129,10 @@ impl ProjectService {
         }
 
         if total_embedded > 0 {
-            info!("ProjectService: векторизовано {} узлов кода проекта '{}'", total_embedded, project_id);
+            info!(
+                "ProjectService: векторизовано {} узлов кода проекта '{}'",
+                total_embedded, project_id
+            );
         }
         Ok(total_embedded)
     }
@@ -178,7 +181,10 @@ impl ProjectService {
             updated_at: now,
         };
 
-        info!("Зарегистрирован проект '{}' ({}) по пути: {}", name, id, project.root_path);
+        info!(
+            "Зарегистрирован проект '{}' ({}) по пути: {}",
+            name, id, project.root_path
+        );
         Ok(project)
     }
 
@@ -236,7 +242,10 @@ impl ProjectService {
     }
 
     /// Автоматическое определение проекта по рабочей директории.
-    pub fn detect_project_by_path(&self, current_dir: &str) -> anyhow::Result<Option<ProjectRecord>> {
+    pub fn detect_project_by_path(
+        &self,
+        current_dir: &str,
+    ) -> anyhow::Result<Option<ProjectRecord>> {
         let normalized = PathBuf::from(current_dir);
         let abs_current = std::fs::canonicalize(&normalized)
             .unwrap_or(normalized)
@@ -253,11 +262,13 @@ impl ProjectService {
     }
 
     /// Возвращает мапу известных файлов проекта rel_path -> sha256.
-    pub fn get_known_files(&self, project_id: &str) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    pub fn get_known_files(
+        &self,
+        project_id: &str,
+    ) -> anyhow::Result<std::collections::HashMap<String, String>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT rel_path, sha256 FROM project_files WHERE project_id = ?1"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT rel_path, sha256 FROM project_files WHERE project_id = ?1")?;
         let rows = stmt.query_map(params![project_id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })?;
@@ -307,13 +318,23 @@ impl ProjectService {
         let mut slug = name
             .to_lowercase()
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '-' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
             .collect::<String>();
         while slug.contains("--") {
             slug = slug.replace("--", "-");
         }
         let slug = slug.trim_matches('-').to_string();
-        let base_id = if slug.is_empty() { "project".to_string() } else { slug };
+        let base_id = if slug.is_empty() {
+            "project".to_string()
+        } else {
+            slug
+        };
         let mut project_id = base_id.clone();
         let mut counter = 1;
         while self.get_project(&project_id)?.is_some() {
@@ -333,7 +354,10 @@ impl ProjectService {
         let head_file = root.join(".git").join("HEAD");
         if head_file.exists() {
             if let Ok(head_content) = std::fs::read_to_string(&head_file) {
-                let branch = head_content.trim().trim_start_matches("ref: refs/heads/").to_string();
+                let branch = head_content
+                    .trim()
+                    .trim_start_matches("ref: refs/heads/")
+                    .to_string();
                 if !branch.is_empty() {
                     let conn = self.conn.lock().unwrap();
                     let _ = conn.execute(
@@ -345,23 +369,38 @@ impl ProjectService {
             }
         }
 
-        info!("Zero-Config: автоматически зарегистрирован проект '{}' ({}) по пути {}", name, project.id, abs_root);
+        info!(
+            "Zero-Config: автоматически зарегистрирован проект '{}' ({}) по пути {}",
+            name, project.id, abs_root
+        );
         Ok(project)
     }
 
     /// Сканирует кодовую базу проекта через AST и обновляет граф знаний.
-    pub fn scan_project(&self, project_id: &str, custom_path: Option<&str>, incremental: bool) -> anyhow::Result<AstScanResult> {
-        let project = self.get_project(project_id)?
+    pub fn scan_project(
+        &self,
+        project_id: &str,
+        custom_path: Option<&str>,
+        incremental: bool,
+    ) -> anyhow::Result<AstScanResult> {
+        let project = self
+            .get_project(project_id)?
             .ok_or_else(|| anyhow::anyhow!("Проект с ID '{}' не найден", project_id))?;
 
         let scan_path = custom_path.unwrap_or(&project.root_path);
         let path_obj = Path::new(scan_path);
 
         if !path_obj.exists() {
-            return Err(anyhow::anyhow!("Путь к проекту не существует: {}", scan_path));
+            return Err(anyhow::anyhow!(
+                "Путь к проекту не существует: {}",
+                scan_path
+            ));
         }
 
-        info!("Начало AST-сканирования проекта '{}' (incremental={}) по пути: {}", project_id, incremental, scan_path);
+        info!(
+            "Начало AST-сканирования проекта '{}' (incremental={}) по пути: {}",
+            project_id, incremental, scan_path
+        );
 
         let known_hashes = if incremental {
             self.get_known_files(project_id)?
@@ -369,7 +408,14 @@ impl ProjectService {
             std::collections::HashMap::new()
         };
 
-        let mut scan_res = self.ast_extractor.scan_directory(path_obj, if incremental { Some(&known_hashes) } else { None });
+        let mut scan_res = self.ast_extractor.scan_directory(
+            path_obj,
+            if incremental {
+                Some(&known_hashes)
+            } else {
+                None
+            },
+        );
         let now = Utc::now().to_rfc3339();
 
         // Поиск удалённых файлов
@@ -392,7 +438,10 @@ impl ProjectService {
 
         // Если ничего не изменилось и нет удалённых файлов
         if incremental && scan_res.files_scanned == 0 && deleted_files.is_empty() {
-            info!("Инкрементальный скан: изменений не обнаружено для проекта '{}'", project_id);
+            info!(
+                "Инкрементальный скан: изменений не обнаружено для проекта '{}'",
+                project_id
+            );
             return Ok(scan_res);
         }
 
@@ -436,7 +485,8 @@ impl ProjectService {
         }
 
         // Сохраняем узлы графа
-        let mut node_id_to_pk: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+        let mut node_id_to_pk: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
 
         for node in &scan_res.nodes {
             tx.execute(
@@ -487,34 +537,54 @@ impl ProjectService {
                     "SELECT id FROM graph_nodes WHERE node_id = ?1",
                     params![edge.source_node_id],
                     |r| r.get(0),
-                ).optional()?.unwrap_or(0)
+                )
+                .optional()?
+                .unwrap_or(0)
             };
 
             let dst_pk = if let Some(pk) = node_id_to_pk.get(&edge.target_node_id) {
                 *pk
             } else {
-                // Если узел-цель еще не существует (например, внешний модуль), создаем его
+                // Если узел-цель еще не существует (например, внешний модуль), создаем его;
+                // Ф40.2: тип узла по префиксу — route: → Route, table: → Table
+                let (auto_type, auto_label) = if edge.target_node_id.starts_with("route:") {
+                    (
+                        "Route",
+                        edge.target_node_id.trim_start_matches("route:").to_string(),
+                    )
+                } else if edge.target_node_id.starts_with("table:") {
+                    (
+                        "Table",
+                        edge.target_node_id.trim_start_matches("table:").to_string(),
+                    )
+                } else {
+                    ("ExternalModule", edge.target_node_id.clone())
+                };
                 tx.execute(
                     r#"
                     INSERT INTO graph_nodes (
                         node_id, label, node_type, description, val, created_at, updated_at,
                         project_id, provenance
                     )
-                    VALUES (?1, ?1, 'ExternalModule', ?2, 1, ?3, ?3, ?4, 'ast')
+                    VALUES (?1, ?5, ?6, ?2, 1, ?3, ?3, ?4, 'ast')
                     ON CONFLICT(node_id) DO NOTHING
                     "#,
                     params![
                         edge.target_node_id,
                         format!("Внешний модуль/зависимость: {}", edge.target_node_id),
                         now,
-                        project_id
+                        project_id,
+                        auto_label,
+                        auto_type,
                     ],
                 )?;
                 tx.query_row(
                     "SELECT id FROM graph_nodes WHERE node_id = ?1",
                     params![edge.target_node_id],
                     |r| r.get(0),
-                ).optional()?.unwrap_or(0)
+                )
+                .optional()?
+                .unwrap_or(0)
             };
 
             if src_pk > 0 && dst_pk > 0 {
@@ -549,7 +619,8 @@ impl ProjectService {
 
         // Сохраняем/обновляем хэши файлов в таблице project_files
         for (rel_path, hash) in &scan_res.file_hashes {
-            let (file_size, lines_count) = scan_res.file_meta.get(rel_path).copied().unwrap_or((0, 0));
+            let (file_size, lines_count) =
+                scan_res.file_meta.get(rel_path).copied().unwrap_or((0, 0));
             tx.execute(
                 r#"
                 INSERT INTO project_files (project_id, rel_path, sha256, file_size, lines_count, updated_at)
@@ -574,7 +645,11 @@ impl ProjectService {
 
         info!(
             "Сканирование проекта '{}' завершено: файлов {}, узлов {}, связей {}, строк {}",
-            project_id, scan_res.files_scanned, scan_res.nodes.len(), scan_res.edges.len(), scan_res.lines_total
+            project_id,
+            scan_res.files_scanned,
+            scan_res.nodes.len(),
+            scan_res.edges.len(),
+            scan_res.lines_total
         );
 
         Ok(scan_res)
@@ -582,7 +657,8 @@ impl ProjectService {
 
     /// Статистика проекта.
     pub fn get_project_stats(&self, project_id: &str) -> anyhow::Result<ProjectStats> {
-        let project = self.get_project(project_id)?
+        let project = self
+            .get_project(project_id)?
             .ok_or_else(|| anyhow::anyhow!("Проект '{}' не найден", project_id))?;
 
         let conn = self.conn.lock().unwrap();
@@ -678,12 +754,20 @@ pub fn detect_manifest_metadata(root: &Path) -> (String, Vec<String>, Option<Str
             for line in content.lines() {
                 let trimmed = line.trim();
                 if trimmed.starts_with("name = ") {
-                    let n = trimmed.trim_start_matches("name = ").trim().trim_matches('"').trim_matches('\'');
+                    let n = trimmed
+                        .trim_start_matches("name = ")
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'');
                     if !n.is_empty() {
                         name = n.to_string();
                     }
                 } else if trimmed.starts_with("description = ") && description.is_none() {
-                    let d = trimmed.trim_start_matches("description = ").trim().trim_matches('"').trim_matches('\'');
+                    let d = trimmed
+                        .trim_start_matches("description = ")
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'');
                     if !d.is_empty() {
                         description = Some(d.to_string());
                     }
@@ -709,9 +793,14 @@ pub fn detect_manifest_metadata(root: &Path) -> (String, Vec<String>, Option<Str
                     }
                 }
                 if description.is_none() {
-                    description = v.get("description").and_then(|x| x.as_str()).map(|s| s.to_string());
+                    description = v
+                        .get("description")
+                        .and_then(|x| x.as_str())
+                        .map(|s| s.to_string());
                 }
-                if v.get("dependencies").and_then(|d| d.get("react")).is_some() && !tech_stack.contains(&"react".to_string()) {
+                if v.get("dependencies").and_then(|d| d.get("react")).is_some()
+                    && !tech_stack.contains(&"react".to_string())
+                {
                     tech_stack.push("react".to_string());
                 }
             }
@@ -719,7 +808,10 @@ pub fn detect_manifest_metadata(root: &Path) -> (String, Vec<String>, Option<Str
     }
 
     // 3. Python: pyproject.toml / requirements.txt
-    if root.join("pyproject.toml").exists() || root.join("requirements.txt").exists() || root.join("setup.py").exists() {
+    if root.join("pyproject.toml").exists()
+        || root.join("requirements.txt").exists()
+        || root.join("setup.py").exists()
+    {
         if !tech_stack.contains(&"python".to_string()) {
             tech_stack.push("python".to_string());
         }
@@ -727,7 +819,11 @@ pub fn detect_manifest_metadata(root: &Path) -> (String, Vec<String>, Option<Str
             for line in content.lines() {
                 let trimmed = line.trim();
                 if trimmed.starts_with("name = ") {
-                    let n = trimmed.trim_start_matches("name = ").trim().trim_matches('"').trim_matches('\'');
+                    let n = trimmed
+                        .trim_start_matches("name = ")
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'');
                     if !n.is_empty() && name == default_name {
                         name = n.to_string();
                     }
@@ -781,7 +877,9 @@ pub fn detect_manifest_metadata(root: &Path) -> (String, Vec<String>, Option<Str
     }
 
     // 7. Java: pom.xml / build.gradle
-    if (root.join("pom.xml").exists() || root.join("build.gradle").exists()) && !tech_stack.contains(&"java".to_string()) {
+    if (root.join("pom.xml").exists() || root.join("build.gradle").exists())
+        && !tech_stack.contains(&"java".to_string())
+    {
         tech_stack.push("java".to_string());
     }
 

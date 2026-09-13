@@ -6,6 +6,14 @@
 ## [Не выпущено]
 
 ### Added
+- **Communities, framework edges, связка с памятью (Фаза 40 / трек C PLAN_v1.4)**:
+  зоны (label propagation + модулярность Q, детерминированный pure-Rust) в
+  `project_report`; framework-эвристики ROUTE (axum/actix/FastAPI) и QUERIES_TABLE
+  (SQLAlchemy `__tablename__`) с provenance=INFERRED; `memory_save` с project_id
+  линкует упомянутые God Nodes/символы в meta.code_symbols (OneKE-lite);
+  `project_context(mode=repo_map, with_memory=true)` / CLI `--memory` подмешивают
+  high-trust память проекта; dead-code исключает маршруты (ROUTE/HANDLES).
+  Модуль `src/graph/communities.rs`; +4 теста (`tests/test_track_c5.rs`).
 - **Type-resolve lite + provenance (Фаза 39 / трек C PLAN_v1.4)**: лёгкий semantic
   pass Rust+Python на своём AST — резолв простых вызовов (same-file, импорты,
   алиасы `use x as y`/`from .m import x as y`) в CALLS-рёбра с provenance=RESOLVED;

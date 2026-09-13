@@ -5,8 +5,8 @@ pub mod dedup;
 pub mod doctor;
 
 pub use agent::{AgentManager, AgentTarget};
-pub use doctor::{Doctor, DoctorItem, DoctorStatus};
 use clap::{Parser, Subcommand};
+pub use doctor::{Doctor, DoctorItem, DoctorStatus};
 
 #[derive(Parser, Debug)]
 #[command(name = "ob2h", author, version, about = "Локальное MCP-хранилище знаний для AI-агентов на Rust", long_about = None)]
@@ -206,6 +206,9 @@ pub enum ProjectCliCommands {
         /// Фокус: файлы, совпадающие с query, получают PPR-сид
         #[arg(short, long)]
         query: Option<String>,
+        /// Ф40.3: подмешать high-trust память проекта
+        #[arg(long, default_value_t = false)]
+        memory: bool,
     },
     /// Ф36.3: кандидаты в мёртвый код — символы с in-degree 0 (кроме entrypoints)
     DeadCode {

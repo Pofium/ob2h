@@ -4,7 +4,10 @@ use clap::Parser;
 use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use ob2h::cli::{BenchCommands, Cli, Commands, DbCommands, DreamCommands, PluginCommands, SyncCommands, Vec0Commands};
+use ob2h::cli::{
+    BenchCommands, Cli, Commands, DbCommands, DreamCommands, PluginCommands, SyncCommands,
+    Vec0Commands,
+};
 use ob2h::config::Settings;
 use ob2h::mcp::McpServer;
 use ob2h::{init_app, start_background_workers};
@@ -21,8 +24,8 @@ async fn main() -> anyhow::Result<()> {
     let file_appender = tracing_appender::rolling::never(settings.logs_dir(), "ob2h.log");
     let (non_blocking_file, _guard) = tracing_appender::non_blocking(file_appender);
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&settings.log_level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&settings.log_level));
 
     if is_stdio {
         tracing_subscriber::registry()
@@ -45,19 +48,19 @@ async fn main() -> anyhow::Result<()> {
             let server = Arc::new(McpServer::new(ctx));
             server.run_stdio().await?;
         }
-        Some(Commands::Bench { command, mode, k, golden, json, save_baseline }) => {
+        Some(Commands::Bench {
+            command,
+            mode,
+            k,
+            golden,
+            json,
+            save_baseline,
+        }) => {
             if let Some(BenchCommands::History { last }) = command {
                 ob2h::cli::bench::cli_history(&ctx.settings, last)?;
             } else {
-                ob2h::cli::bench::cli_run(
-                    &ctx,
-                    &mode,
-                    &k,
-                    golden.as_deref(),
-                    json,
-                    save_baseline,
-                )
-                .await?;
+                ob2h::cli::bench::cli_run(&ctx, &mode, &k, golden.as_deref(), json, save_baseline)
+                    .await?;
             }
         }
         Some(Commands::Doctor { fix }) => {
@@ -164,12 +167,17 @@ async fn main() -> anyhow::Result<()> {
             PluginCommands::Uninstall => plugin_uninstall()?,
             PluginCommands::Status => plugin_status()?,
         },
-        Some(Commands::Sync { command }) => match command {            SyncCommands::Status => {
+        Some(Commands::Sync { command }) => match command {
+            SyncCommands::Status => {
                 println!("{}", ctx.sync.status());
             }
             SyncCommands::Export { peer, full } => {
                 let path = ctx.sync.export_opts(&peer, full)?;
-                println!("export{}: {}", if full { " (full)" } else { "" }, path.display());
+                println!(
+                    "export{}: {}",
+                    if full { " (full)" } else { "" },
+                    path.display()
+                );
             }
             SyncCommands::Import { files } => {
                 if files.is_empty() {
@@ -214,9 +222,9 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Vec0 { command }) => match command {
             Vec0Commands::Build { rebuild } => {
                 let dim = ctx.embedder.dim();
-                let added = ctx
-                    .db
-                    .with_conn(|conn| ob2h::vector::vec0::build_index(conn, dim, ob2h::vector::vec0::mode(), rebuild))?;
+                let added = ctx.db.with_conn(|conn| {
+                    ob2h::vector::vec0::build_index(conn, dim, ob2h::vector::vec0::mode(), rebuild)
+                })?;
                 let st = ctx
                     .db
                     .with_conn(|conn| ob2h::vector::vec0::stats(conn, dim))?;
@@ -254,9 +262,23 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Some(Commands::Project { command }) => match command {
-            ob2h::cli::ProjectCliCommands::Init { id, name, path, description } => {
-                let p = ctx.project.register_project(&id, &name, &path, description.as_deref(), None)?;
-                println!("Проект зарегистрирован: id={} name='{}' root='{}'", p.id, p.name, p.root_path);
+            ob2h::cli::ProjectCliCommands::Init {
+                id,
+                name,
+                path,
+                description,
+            } => {
+                let p = ctx.project.register_project(
+                    &id,
+                    &name,
+                    &path,
+                    description.as_deref(),
+                    None,
+                )?;
+                println!(
+                    "Проект зарегистрирован: id={} name='{}' root='{}'",
+                    p.id, p.name, p.root_path
+                );
             }
             ob2h::cli::ProjectCliCommands::Scan { id, path } => {
                 let res = ctx.project.scan_project(&id, path.as_deref(), true)?;
@@ -266,7 +288,11 @@ async fn main() -> anyhow::Result<()> {
                 });
                 println!(
                     "Сканирование '{}' завершено: файлов={}, узлов={}, связей={}, строк={}",
-                    id, res.files_scanned, res.nodes.len(), res.edges.len(), res.lines_total
+                    id,
+                    res.files_scanned,
+                    res.nodes.len(),
+                    res.edges.len(),
+                    res.lines_total
                 );
             }
             ob2h::cli::ProjectCliCommands::List => {
@@ -277,18 +303,34 @@ async fn main() -> anyhow::Result<()> {
                     println!("Зарегистрированные проекты ({}):", list.len());
                     for p in list {
                         let last = p.last_scanned_at.as_deref().unwrap_or("никогда");
-                        println!("- [{}] '{}' ({}) | последний скан: {}", p.id, p.name, p.root_path, last);
+                        println!(
+                            "- [{}] '{}' ({}) | последний скан: {}",
+                            p.id, p.name, p.root_path, last
+                        );
                     }
                 }
             }
             ob2h::cli::ProjectCliCommands::Report { id } => {
-                let report = ctx.db.with_conn(|conn| ob2h::graph::GraphAnalytics::generate_project_report(conn, &id))?;
+                let report = ctx.db.with_conn(|conn| {
+                    ob2h::graph::GraphAnalytics::generate_project_report(conn, &id)
+                })?;
                 println!("{}", report.markdown_summary);
             }
-            ob2h::cli::ProjectCliCommands::RepoMap { id, tokens, query } => {
-                let map = ctx
-                    .db
-                    .with_conn(|conn| ob2h::graph::repomap::build_repo_map(conn, &id, query.as_deref(), tokens))?;
+            ob2h::cli::ProjectCliCommands::RepoMap {
+                id,
+                tokens,
+                query,
+                memory,
+            } => {
+                let map = ctx.db.with_conn(|conn| {
+                    ob2h::graph::repomap::build_repo_map(
+                        conn,
+                        &id,
+                        query.as_deref(),
+                        tokens,
+                        memory,
+                    )
+                })?;
                 println!("{map}");
             }
             ob2h::cli::ProjectCliCommands::DeadCode { id, limit } => {
@@ -311,7 +353,12 @@ async fn main() -> anyhow::Result<()> {
                     p.id
                 };
                 let installed = ob2h::project::install_git_hooks(&project_root, &project_id)?;
-                println!("Установлены Git-хуки для проекта '{}' в {}: {:?}", project_id, project_root.display(), installed);
+                println!(
+                    "Установлены Git-хуки для проекта '{}' в {}: {:?}",
+                    project_id,
+                    project_root.display(),
+                    installed
+                );
             }
         },
     }
@@ -351,10 +398,10 @@ async fn run_vec0_recall(
     }
     let dim = ctx.embedder.dim();
     let os = ob2h::vector::vec0::oversample();
-    let st = ctx
-        .db
-        .with_conn(|conn| ob2h::vector::vec0::stats(conn, dim)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into())))?;
+    let st = ctx.db.with_conn(|conn| {
+        ob2h::vector::vec0::stats(conn, dim)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))
+    })?;
     if st.indexed == 0 {
         anyhow::bail!("vec0-индекс пуст — сначала `ob2h vec0 build`");
     }
@@ -363,7 +410,10 @@ async fn run_vec0_recall(
     let mut t_brute = 0.0f64;
     let mut t_vec0 = 0.0f64;
     for case in &cases {
-        let embs = ctx.embedder.embed(std::slice::from_ref(&case.query)).await?;
+        let embs = ctx
+            .embedder
+            .embed(std::slice::from_ref(&case.query))
+            .await?;
         let Some(q) = embs.first() else { continue };
 
         // ground truth: полный перебор (прежний путь)
@@ -382,8 +432,10 @@ async fn run_vec0_recall(
                 }
                 Ok(list)
             })?;
-            let refs: Vec<(i64, Option<&[u8]>)> =
-                cands.iter().map(|(id, b)| (*id, Some(b.as_slice()))).collect();
+            let refs: Vec<(i64, Option<&[u8]>)> = cands
+                .iter()
+                .map(|(id, b)| (*id, Some(b.as_slice())))
+                .collect();
             let out: Vec<i64> = ob2h::vector::top_k(q, &refs, k, 0.0)
                 .into_iter()
                 .map(|(id, _)| id)
@@ -419,7 +471,11 @@ async fn run_vec0_recall(
     );
     println!(
         "критерий приёмки recall@{k} ≥ 0.99: {}",
-        if recall >= 0.99 { "ВЫПОЛНЕН" } else { "НЕ выполнен" }
+        if recall >= 0.99 {
+            "ВЫПОЛНЕН"
+        } else {
+            "НЕ выполнен"
+        }
     );
     Ok(())
 }
@@ -498,7 +554,10 @@ fn plugin_install() -> anyhow::Result<()> {
     );
 
     println!();
-    println!("Включите провайдер вручную в {}:", home.join("config.yaml").display());
+    println!(
+        "Включите провайдер вручную в {}:",
+        home.join("config.yaml").display()
+    );
     println!("  memory:");
     println!("    provider: ob2h");
     println!();
@@ -522,19 +581,29 @@ fn plugin_uninstall() -> anyhow::Result<()> {
 fn plugin_status() -> anyhow::Result<()> {
     let home = get_hermes_home()?;
     let dir = home.join("plugins").join("ob2h");
-    let installed = PLUGIN_FILES.iter().all(|(name, _)| dir.join(name).is_file());
+    let installed = PLUGIN_FILES
+        .iter()
+        .all(|(name, _)| dir.join(name).is_file());
     println!("hermes_home: {}", home.display());
     println!(
         "plugin_dir:  {} [{}]",
         dir.display(),
-        if installed { "установлен" } else { "не установлен" }
+        if installed {
+            "установлен"
+        } else {
+            "не установлен"
+        }
     );
     let cfg_path = home.join("config.yaml");
     if let Ok(content) = std::fs::read_to_string(&cfg_path) {
         let active = content.lines().any(|l| l.trim() == "provider: ob2h");
         println!(
             "memory.provider: ob2h — {}",
-            if active { "включён в конфиге" } else { "не найден в config.yaml" }
+            if active {
+                "включён в конфиге"
+            } else {
+                "не найден в config.yaml"
+            }
         );
         let mcp = content.lines().any(|l| l.starts_with("  ob2h:"));
         println!(
@@ -546,7 +615,10 @@ fn plugin_status() -> anyhow::Result<()> {
     }
     let ob2h_json = home.join("ob2h.json");
     if ob2h_json.is_file() {
-        println!("ob2h.json:    {} (пути бинарника/data_dir плагина)", ob2h_json.display());
+        println!(
+            "ob2h.json:    {} (пути бинарника/data_dir плагина)",
+            ob2h_json.display()
+        );
     }
     Ok(())
 }
@@ -575,13 +647,20 @@ fn skill_install() -> anyhow::Result<()> {
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("SKILL.md"), skill)?;
     println!("Скилл ob2h установлен: {}", dir.join("SKILL.md").display());
-    println!("Пути: binary={}, data_dir={}", exe.display(), data_dir.display());
+    println!(
+        "Пути: binary={}, data_dir={}",
+        exe.display(),
+        data_dir.display()
+    );
     Ok(())
 }
 
 fn get_hermes_config_path() -> std::path::PathBuf {
-    let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| "C:\\Users\\ipres\\AppData\\Local".to_string());
-    std::path::PathBuf::from(local_app_data).join("hermes").join("config.yaml")
+    let local_app_data = std::env::var("LOCALAPPDATA")
+        .unwrap_or_else(|_| "C:\\Users\\ipres\\AppData\\Local".to_string());
+    std::path::PathBuf::from(local_app_data)
+        .join("hermes")
+        .join("config.yaml")
 }
 
 fn remove_ob2h_block(yaml: &str) -> String {
@@ -590,7 +669,10 @@ fn remove_ob2h_block(yaml: &str) -> String {
 
     for line in yaml.lines() {
         let trimmed = line.trim_start();
-        if line.starts_with("  ob2h:") || line.starts_with("  \"ob2h\":") || line.starts_with("  'ob2h':") {
+        if line.starts_with("  ob2h:")
+            || line.starts_with("  \"ob2h\":")
+            || line.starts_with("  'ob2h':")
+        {
             in_ob2h = true;
             continue;
         }
@@ -619,7 +701,10 @@ fn install_to_hermes() -> anyhow::Result<()> {
     let exe_path = std::env::current_exe()?;
     let exe_str = exe_path.to_string_lossy().replace('\\', "/");
     let current_dir = std::env::current_dir()?;
-    let data_dir = current_dir.join("data").to_string_lossy().replace('\\', "/");
+    let data_dir = current_dir
+        .join("data")
+        .to_string_lossy()
+        .replace('\\', "/");
 
     // Бэкап
     let backup_path = config_path.with_extension("yaml.bak");
@@ -641,7 +726,10 @@ fn install_to_hermes() -> anyhow::Result<()> {
     };
 
     std::fs::write(&config_path, new_content)?;
-    println!("OB2H успешно зарегистрирован в Hermes ({})!", config_path.display());
+    println!(
+        "OB2H успешно зарегистрирован в Hermes ({})!",
+        config_path.display()
+    );
     println!("Перезапустите Hermes для активации инструментов.");
     Ok(())
 }
@@ -664,10 +752,16 @@ fn uninstall_from_hermes() -> anyhow::Result<()> {
     let cleaned = remove_ob2h_block(&content);
     let mut new_content = cleaned;
     if new_content.trim_end().ends_with("mcp_servers:") {
-        new_content = new_content.replace("mcp_servers:", "").trim_end().to_string();
+        new_content = new_content
+            .replace("mcp_servers:", "")
+            .trim_end()
+            .to_string();
     }
 
     std::fs::write(&config_path, new_content)?;
-    println!("OB2H успешно удалён из конфига Hermes ({}).", config_path.display());
+    println!(
+        "OB2H успешно удалён из конфига Hermes ({}).",
+        config_path.display()
+    );
     Ok(())
 }

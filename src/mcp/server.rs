@@ -522,7 +522,51 @@ impl McpServer {
                     .save_with_project(content, key, category, importance, source, None, project_id)
                     .await
                 {
-                    Ok(k) => format!("saved key={k}"),
+                    Ok(k) => {
+                        // Ф40.3: автолинк памяти на символы проекта (OneKE-lite):
+                        // упомянутые God Nodes/символы -> meta.code_symbols
+                        let mut linked = 0usize;
+                        if let Some(pid) = project_id {
+                            if let Ok(Some(rec)) = self.ctx.memory.get(&k) {
+                                let symbols = self
+                                    .ctx
+                                    .db
+                                    .with_conn(|conn| {
+                                        crate::graph::communities::mentioned_symbols(
+                                            conn,
+                                            pid,
+                                            &rec.content,
+                                            8,
+                                        )
+                                    })
+                                    .unwrap_or_default();
+                                linked = symbols.len();
+                                if !symbols.is_empty() {
+                                    let mut meta: serde_json::Map<String, serde_json::Value> = rec
+                                        .meta
+                                        .as_deref()
+                                        .and_then(|m| serde_json::from_str(m).ok())
+                                        .unwrap_or_default();
+                                    meta.insert(
+                                        "code_symbols".to_string(),
+                                        serde_json::json!(symbols),
+                                    );
+                                    let meta_str = serde_json::to_string(&meta).unwrap_or_default();
+                                    let _ = self.ctx.db.with_conn(|conn| {
+                                        conn.execute(
+                                            "UPDATE memories SET meta = ?1, updated_at = ?2 WHERE key = ?3",
+                                            rusqlite::params![meta_str, chrono::Utc::now().to_rfc3339(), k],
+                                        )
+                                    });
+                                }
+                            }
+                        }
+                        if linked > 0 {
+                            format!("saved key={k} (linked code_symbols={linked})")
+                        } else {
+                            format!("saved key={k}")
+                        }
+                    }
                     Err(e) => format!("[Error] {e}"),
                 }
             }
@@ -1585,8 +1629,18 @@ impl McpServer {
                         .get("max_tokens")
                         .and_then(|v| v.as_u64())
                         .unwrap_or(4096) as usize;
+                    let with_memory = args
+                        .get("with_memory")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     return match self.ctx.db.with_conn(|conn| {
-                        crate::graph::repomap::build_repo_map(conn, id, query, max_tokens)
+                        crate::graph::repomap::build_repo_map(
+                            conn,
+                            id,
+                            query,
+                            max_tokens,
+                            with_memory,
+                        )
                     }) {
                         Ok(m) => m,
                         Err(e) => format!("[Error] {e}"),
