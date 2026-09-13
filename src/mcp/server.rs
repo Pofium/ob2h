@@ -532,7 +532,18 @@ impl McpServer {
             "memory_context" => {
                 let query = args.get("query").and_then(|v| v.as_str());
                 let limit = args.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
-                match self.ctx.memory.build_context(limit, query) {
+                // max_chars (Фаза 22): агент может сузить бюджет; по умолчанию — настройка.
+                let max_chars = args
+                    .get("max_chars")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize)
+                    .or(Some(self.ctx.settings.prefetch_max_chars));
+                let opts = crate::memory::ContextOptions {
+                    max_chars,
+                    half_life_days: self.ctx.settings.recency_half_life_days,
+                    ..Default::default()
+                };
+                match self.ctx.memory.build_context(limit, query, &opts).await {
                     Ok(ctx) => ctx,
                     Err(e) => format!("[Error] {e}"),
                 }
@@ -1100,7 +1111,12 @@ impl McpServer {
                 }
             }
             "memory://context" => {
-                match self.ctx.memory.build_context(20, None) {
+                let opts = crate::memory::ContextOptions {
+                    max_chars: Some(self.ctx.settings.prefetch_max_chars),
+                    half_life_days: self.ctx.settings.recency_half_life_days,
+                    ..Default::default()
+                };
+                match self.ctx.memory.build_context(20, None, &opts).await {
                     Ok(ctx) => (ctx, "text/markdown"),
                     Err(e) => (format!("Ошибка получения контекста памяти: {e}"), "text/markdown"),
                 }

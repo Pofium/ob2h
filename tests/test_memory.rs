@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use ob2h::db::Database;
 use ob2h::embedding::FakeEmbedding;
-use ob2h::memory::MemoryService;
+use ob2h::memory::{ContextOptions, MemoryService};
 
 #[tokio::test]
 async fn test_memory_crud_and_hybrid_search() {
@@ -33,7 +33,10 @@ async fn test_memory_crud_and_hybrid_search() {
     assert!(rec1_decayed.importance < 0.9);
 
     // Build context
-    let ctx = service.build_context(5, Some("кофе")).expect("build_context");
+    let ctx = service
+        .build_context(5, Some("кофе"), &ContextOptions::default())
+        .await
+        .expect("build_context");
     assert!(ctx.contains("<agent_memory>"));
     assert!(ctx.contains("кофе"));
 

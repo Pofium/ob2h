@@ -11,7 +11,7 @@ use std::time::Instant;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::memory::MemoryService;
+use crate::memory::{ContextOptions, MemoryService};
 
 /// Одна строка golden-набора: запрос → ключи, которые обязан найтись.
 #[derive(Debug, Deserialize)]
@@ -129,8 +129,9 @@ pub async fn run_bench(
     }
 
     // Прогрев: первый вызов грузит локальную модель эмбеддингов — не включаем его в метрики.
+    let bench_opts = ContextOptions { max_chars: Some(8000), ..Default::default() };
     if mode == "context" {
-        let _ = memory.build_context(20, Some("прогрев"));
+        let _ = memory.build_context(20, Some("прогрев"), &ContextOptions::default()).await;
     } else {
         let _ = memory.search_hybrid("прогрев", 5, 0.0).await?;
     }
@@ -155,7 +156,7 @@ pub async fn run_bench(
 
         let started = Instant::now();
         let ranked: Vec<String> = if mode == "context" {
-            let block = memory.build_context(20, Some(&case.query))?;
+            let block = memory.build_context(20, Some(&case.query), &bench_opts).await?;
             let mut ranked = Vec::new();
             for line in block.lines() {
                 let nl = normalize(line);

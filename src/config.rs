@@ -24,6 +24,10 @@ pub struct Settings {
     // --- Консолидация / контекст ---
     pub context_window: usize,
     pub max_completion_tokens: usize,
+    /// Бюджет символов блока <agent_memory> (Фаза 22): резать по record-границам в Rust.
+    pub prefetch_max_chars: usize,
+    /// Полураспад recency в днях для скоринга контекста (Фаза 22).
+    pub recency_half_life_days: f64,
 
     // --- Дриминг ---
     pub autodream_enabled: bool,
@@ -92,6 +96,14 @@ impl Settings {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(8192);
+        let prefetch_max_chars = env::var("OB2H_PREFETCH_MAX_CHARS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8000);
+        let recency_half_life_days = env::var("OB2H_HALF_LIFE_DAYS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(90.0);
 
         let autodream_enabled = env::var("OB2H_AUTODREAM_ENABLED")
             .map(|v| v != "0" && v.to_lowercase() != "false")
@@ -155,6 +167,8 @@ impl Settings {
             embed_api_key,
             context_window,
             max_completion_tokens,
+            prefetch_max_chars,
+            recency_half_life_days,
             autodream_enabled,
             autodream_interval_min,
             autodream_min_interval_h,

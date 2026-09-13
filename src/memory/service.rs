@@ -283,12 +283,24 @@ impl MemoryService {
         Ok(scored.into_iter().map(|(id, s)| (id, s as f64)).collect())
     }
 
-    /// Гибридный поиск: FTS5 + Vector слияние через RRF (k=60).
+    /// Гибридный поиск: FTS5 + Vector слияние через RRF (k=60). Трогает access-счётчики.
     pub async fn search_hybrid(
         &self,
         query: &str,
         limit: usize,
         min_score: f32,
+    ) -> anyhow::Result<Vec<MemoryHit>> {
+        self.search_hybrid_hits(query, limit, min_score, true).await
+    }
+
+    /// Ядро гибридного поиска. `touch=false` — для пулов кандидатов (build_context
+    /// трогает только записи, вошедшие в итоговый блок).
+    pub async fn search_hybrid_hits(
+        &self,
+        query: &str,
+        limit: usize,
+        min_score: f32,
+        touch: bool,
     ) -> anyhow::Result<Vec<MemoryHit>> {
         let fts_res = self.search_fts(query, limit * 2).unwrap_or_default();
         let vec_res = self.search_vector(query, limit * 2, min_score).await.unwrap_or_default();
@@ -324,9 +336,11 @@ impl MemoryService {
             }
         }
 
-        // Обновляем счетчик обращений
-        let ids: Vec<i64> = hits.iter().map(|h| h.record.id).collect();
-        self.touch_access(&ids)?;
+        // Обновляем счетчик обращений (только для явного поиска, не для пулов контекста)
+        if touch {
+            let ids: Vec<i64> = hits.iter().map(|h| h.record.id).collect();
+            self.touch_access(&ids)?;
+        }
 
         Ok(hits)
     }
@@ -414,7 +428,9 @@ impl MemoryService {
     }
 
     /// Сборка контекста `<agent_memory>` для инъекции в системный промпт.
-    pub fn build_context(&self, limit: usize, query: Option<&str>) -> anyhow::Result<String> {
+    /// Прежний путь (до Фазы 22): топ по importance + подстрочный overlap.
+    /// Fallback для пустых/тривиальных запросов и пустого гибридного пула.
+    fn build_context_fallback(&self, limit: usize, query: Option<&str>) -> anyhow::Result<String> {
         let query_words: HashSet<String> = query
             .unwrap_or_default()
             .to_lowercase()
@@ -480,5 +496,187 @@ impl MemoryService {
         }
         out.push_str("</agent_memory>");
         Ok(out)
+    }
+
+    /// Контекст prefetch'а (Фаза 22, PLAN_v1.3): непустой запрос → гибридный пул
+    /// (FTS5+vector, RRF k=60) → скоринг rel/importance/recency/access → MMR-диверсификация
+    /// → бюджет символов по record-границам → touch_access только вошедших записей.
+    pub async fn build_context(
+        &self,
+        limit: usize,
+        query: Option<&str>,
+        opts: &ContextOptions,
+    ) -> anyhow::Result<String> {
+        let q = query.map(str::trim).unwrap_or("");
+        if q.is_empty() {
+            return self.build_context_fallback(limit, query);
+        }
+
+        let pool_size = (limit * 2).max(20);
+        let hits = match self.search_hybrid_hits(q, pool_size, 0.0, false).await {
+            Ok(h) if !h.is_empty() => h,
+            _ => return self.build_context_fallback(limit, query),
+        };
+
+        // Скоринг (§22.2): 0.35*rel + 0.25*importance + 0.1*trust + 0.1*recency + 0.1*log1p(access).
+        // trust — константа 0.1 до Фазы 23. recency — экспоненциальный полураспад по updated_at.
+        let max_rrf = hits.iter().map(|h| h.score).fold(0.0_f64, f64::max).max(1e-9);
+        let half_life = opts.half_life_days.max(0.1);
+        let now = chrono::Utc::now();
+        let mut cands: Vec<Candidate> = hits
+            .into_iter()
+            .map(|h| {
+                let rel = (h.score / max_rrf).clamp(0.0, 1.0);
+                let age_days = chrono::DateTime::parse_from_rfc3339(&h.record.updated_at)
+                    .map(|dt| {
+                        now.signed_duration_since(dt.with_timezone(&chrono::Utc))
+                            .num_days()
+                            .max(0) as f64
+                    })
+                    .unwrap_or(0.0);
+                let recency = (-age_days / half_life).exp();
+                // Насыщение доступа: log1p, 1.0 достигается на ~50-м использовании.
+                let sat_access =
+                    ((1.0 + h.record.access_count.max(0) as f64).ln() / 50f64.ln()).clamp(0.0, 1.0);
+                let score =
+                    0.35 * rel + 0.25 * h.record.importance + 0.1 + 0.1 * recency + 0.1 * sat_access;
+                Candidate { record: h.record, score }
+            })
+            .collect();
+        cands.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+        // MMR-диверсификация (§22.3): λ — вес релевантности, остаток — разнообразие.
+        let max_score = cands.iter().map(|c| c.score).fold(0.0_f64, f64::max).max(1e-9);
+        let rels: Vec<f64> = cands.iter().map(|c| c.score / max_score).collect();
+        let vecs: Vec<Option<Vec<f32>>> = cands
+            .iter()
+            .map(|c| c.record.embedding.as_deref().and_then(crate::vector::deserialize))
+            .collect();
+        let picked = mmr_select(&rels, &vecs, limit, opts.mmr_lambda);
+
+        // Бюджет символов (§22.4): резать по record-границам, не отдавать обрезку Hermes'у.
+        let budget = opts.max_chars.unwrap_or(usize::MAX).max(64);
+        let block_overhead = "<agent_memory>\n</agent_memory>".chars().count();
+        let mut used = block_overhead;
+        let mut lines_out: Vec<String> = Vec::new();
+        let mut included_ids: Vec<i64> = Vec::new();
+        let mut skipped = 0usize;
+        for &i in &picked {
+            let c = &cands[i];
+            let line = format!("- [{}] {}\n", c.record.category, c.record.content);
+            let line_chars = line.chars().count();
+            if used + line_chars > budget {
+                skipped += 1;
+                continue;
+            }
+            used += line_chars;
+            included_ids.push(c.record.id);
+            lines_out.push(line);
+        }
+        if lines_out.is_empty() {
+            // Бюджет теснее одной записи — жёстко режем первую под бюджет.
+            let c = &cands[picked[0]];
+            let prefix = format!("- [{}] ", c.record.category);
+            let avail = budget
+                .saturating_sub(block_overhead + prefix.chars().count() + 1)
+                .max(20);
+            let content: String = c.record.content.chars().take(avail).collect();
+            included_ids.push(c.record.id);
+            lines_out.push(format!("- [{}] {}\n", c.record.category, content));
+            skipped = picked.len() - 1;
+        }
+        if skipped > 0 {
+            let marker = format!("- …[truncated {skipped} records]\n");
+            if used + marker.chars().count() <= budget {
+                lines_out.push(marker);
+            }
+        }
+
+        self.touch_access(&included_ids)?;
+
+        let mut out = String::from("<agent_memory>\n");
+        for line in lines_out {
+            out.push_str(&line);
+        }
+        out.push_str("</agent_memory>");
+        Ok(out)
+    }
+}
+
+/// Кандидат контекста: запись + итоговый скоринг (§22.2).
+struct Candidate {
+    record: MemoryRecord,
+    score: f64,
+}
+
+/// Параметры сборки контекстного блока (Фаза 22).
+#[derive(Debug, Clone)]
+pub struct ContextOptions {
+    /// Бюджет символов блока (None — без обрезки).
+    pub max_chars: Option<usize>,
+    /// Полураспад recency в днях.
+    pub half_life_days: f64,
+    /// Вес релевантности в MMR (0..1), остаток — разнообразие.
+    pub mmr_lambda: f64,
+}
+
+impl Default for ContextOptions {
+    fn default() -> Self {
+        Self { max_chars: None, half_life_days: 90.0, mmr_lambda: 0.7 }
+    }
+}
+
+/// MMR-отбор индексов: λ*релевантность − (1−λ)*макс. сходство к уже выбранным.
+/// `rel` — нормированные релевантности, `vecs[i]` — эмбеддинг кандидата (None → сходство 0).
+pub fn mmr_select(rel: &[f64], vecs: &[Option<Vec<f32>>], limit: usize, lambda: f64) -> Vec<usize> {
+    let lambda = lambda.clamp(0.0, 1.0);
+    let mut remaining: Vec<usize> = (0..rel.len()).collect();
+    let mut selected: Vec<usize> = Vec::new();
+    while selected.len() < limit && !remaining.is_empty() {
+        let mut best: Option<(usize, f64)> = None;
+        for &i in &remaining {
+            let max_sim = selected
+                .iter()
+                .map(|&s| match (&vecs[i], &vecs[s]) {
+                    (Some(a), Some(b)) => crate::vector::cosine(a, b) as f64,
+                    _ => 0.0,
+                })
+                .fold(-1.0_f64, f64::max);
+            let score = lambda * rel[i] - (1.0 - lambda) * max_sim;
+            if best.is_none()
+                || score > best.map(|(_, bs)| bs).unwrap_or(f64::NEG_INFINITY)
+            {
+                best = Some((i, score));
+            }
+        }
+        let (i, _) = best.expect("remaining непуст");
+        selected.push(i);
+        remaining.retain(|&r| r != i);
+    }
+    selected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mmr_prefers_diverse_when_relevance_close() {
+        // v, v (дубли), w (ортогональный). Релевантности близкие.
+        let v = vec![1.0f32, 0.0];
+        let w = vec![0.0f32, 1.0];
+        let rel = [1.0, 0.9, 0.5];
+        let vecs = vec![Some(v.clone()), Some(v), Some(w)];
+        let picked = mmr_select(&rel, &vecs, 2, 0.7);
+        assert_eq!(picked[0], 0, "первым берётся самый релевантный");
+        assert_eq!(picked[1], 2, "вторым — разнообразный, а не дубль");
+    }
+
+    #[test]
+    fn mmr_pure_relevance_when_lambda_one() {
+        let rel = [0.5, 1.0];
+        let vecs = vec![None::<Vec<f32>>, None];
+        let picked = mmr_select(&rel, &vecs, 2, 1.0);
+        assert_eq!(picked, vec![1, 0]);
     }
 }

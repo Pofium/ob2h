@@ -14,6 +14,18 @@
 - **Security**: `workspace_read`/`workspace_write` изолированы внутри workspace
   (запрет абсолютных путей и `..` — устранён path traversal), +6 тестов.
 
+### Changed
+- **`memory_context` / `build_context` — честный prefetch (Фаза 22 PLAN_v1.3)**:
+  при непустом `query` блок `<agent_memory>` собирается гибридным пулом
+  (FTS5-trigram + cosine, RRF k=60) со скорингом
+  `0.35*rel + 0.25*importance + 0.1*trust(конст.) + 0.1*recency + 0.1*log1p(access)`,
+  MMR-диверсификацией (λ=0.7) и бюджетом символов (обрезка по record-границам в Rust,
+  маркер `…[truncated N records]`); пустой/тривиальный запрос — прежний importance-fallback.
+  **Контракт**: `memory_context` получил опциональный `max_chars` (по умолчанию —
+  `OB2H_PREFETCH_MAX_CHARS=8000`; `max_tokens` сохранён); touch_access инкрементирует
+  только записи, вошедшие в блок. Конфиги: `OB2H_PREFETCH_MAX_CHARS`, `OB2H_HALF_LIFE_DAYS=90`.
+  Замеры до/после — в `docs/bench_baseline.md`.
+
 ## [1.2.0] — 2026-09-03
 
 ### Added
