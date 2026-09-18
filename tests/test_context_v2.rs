@@ -115,6 +115,53 @@ async fn touch_counts_only_included_records() {
 }
 
 #[tokio::test]
+async fn trust_boost_lifts_record_in_prefetch_scoring() {
+    let (service, _) = setup().await;
+    // B менее релевантна запросу «кофе», чем A (cos 0.9 против 1.0), но trust-петля
+    // (4× helpful → trust 1.0) должна поднять её на первое место (§22.2: 0.2*trust).
+    for _ in 0..4 {
+        service.record_feedback("hmem-b", "helpful", None).expect("feedback");
+    }
+    let a_id = service.get("hmem-a").expect("get").expect("record").id;
+    let b_id = service.get("hmem-b").expect("get").expect("record").id;
+    let tm = service.trust_map(&[a_id, b_id]).expect("trust_map");
+    assert!(tm[&b_id] > tm[&a_id], "trust B должен стать выше A");
+
+    // Бюджет вмещает только первую запись блока — первая позиция и есть проверка.
+    // Вес 0.2 — формула §22.2 (дефолт 0 выключает слагаемое, см. тест ниже).
+    let opts = ContextOptions { max_chars: Some(260), trust_weight: 0.2, ..Default::default() };
+    let block = service
+        .build_context(30, Some("кофе"), &opts)
+        .await
+        .expect("build_context");
+    assert!(
+        block.contains("Кофе правило номер два"),
+        "высокий trust должен поднять B на первое место: {block}"
+    );
+    assert!(!block.contains("Кофе правило номер один"));
+}
+
+#[tokio::test]
+async fn default_trust_weight_keeps_relevance_order() {
+    let (service, _) = setup().await;
+    // Дефолт (trust_weight=0, аудит v1.3): trust-петля НЕ влияет на prefetch —
+    // более релевантная A остаётся первой, несмотря на прокачанный trust B.
+    for _ in 0..4 {
+        service.record_feedback("hmem-b", "helpful", None).expect("feedback");
+    }
+    let opts = ContextOptions { max_chars: Some(260), ..Default::default() };
+    let block = service
+        .build_context(30, Some("кофе"), &opts)
+        .await
+        .expect("build_context");
+    assert!(
+        block.contains("Кофе правило номер один"),
+        "дефолт должен сохранять порядок по релевантности: {block}"
+    );
+    assert!(!block.contains("Кофе правило номер два"));
+}
+
+#[tokio::test]
 async fn empty_query_uses_importance_fallback() {
     let (service, _) = setup().await;
     let block = service

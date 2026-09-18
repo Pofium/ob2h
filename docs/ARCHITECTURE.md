@@ -1,9 +1,10 @@
 # Архитектура OB2H
 
-Архитектура локального MCP-хранилища знаний для Hermes (Rust, v0.9).
-Решения зафиксированы в `PLAN.md` §1 (ADR-1…ADR-8) и §6 (ADR-9…ADR-11:
-синхронизация, MemoryProvider-плагин, tombstones). Источники портирования —
-`REFERENCE_omnesbot.md`.
+Архитектура локального MCP-хранилища знаний для Hermes (Rust; базовый документ —
+v0.9, дополнен v1.4 — см. аддендум ниже). Решения зафиксированы в `PLAN.md` §1
+(ADR-1…ADR-8) и §6 (ADR-9…ADR-11 и далее: синхронизация, MemoryProvider-плагин,
+tombstones, bench-гейт ADR-13, sqlite-vec ADR-14/35.1, Ralph ADR-K1…K6).
+Источники портирования — `REFERENCE_omnesbot.md`.
 
 ---
 
@@ -314,3 +315,47 @@ tombstones, идемпотентность `applied_bundles`, авто-бэка�
 - Миграции аддитивные и даунгрейт-безопасные (новые колонки с DEFAULT; старый
   бинарник продолжает работать).
 - Логи: `data/logs/ob2h.log`.
+
+---
+
+## Аддендум v1.3/v1.4 (2026-09-13) — что изменилось после v0.9
+
+Этот раздел — дельта к тексту выше (базовые разделы описывают v0.9; детали —
+`PLAN_v1.3.md`, `PLAN_v1.4.md`, `CHANGELOG.md`).
+
+**Контракт:** 35 MCP-инструментов (было 25): + `memory_feedback` (№26), `ralph_start`/
+`ralph_iteration`/`ralph_verdict`/`ralph_context`/`ralph_report`, `ast_diff`/`ast_history`
+(№27–33), `memory_merge` (№34), `project_call_path` (№35, трек C). Аддитивные параметры:
+`memory_search` — `related`, `mode=graph`; `memory_context` — `max_chars`, `author`;
+`graph_search` — `mode=ppr`; `graph_reason` — `scope=docs|memory|all`; `project_graph_search`
+— `mode=callers|callees`; `project_context` — `mode=repo_map`, `with_memory`. На read-only
+инструментах проставлены MCP-аннотации (`readOnlyHint`), `memory_forget` — `destructiveHint`.
+
+**Схема БД (миграции M5–M7):** `memories.trust`, `memories.last_feedback_at`, таблица
+`memory_links` (kind: same_project|entity|category|manual + typed `contradicts|causes|
+supersedes`, soft-delete `deleted_at`), Ralph-таблицы `ralph_runs`/`ralph_iterations`/
+`ralph_findings`/`ast_changes` (вне синка, ADR-K6). Эмбеддинги — int8-формат v2
+`[0x01][scale f32][i8 × dim]` (dual-read со старым f32; конвертация —
+`ob2h db quantize-embeddings`).
+
+**Обучающий контур:** `trust` (0..1) растёт от использования/feedback/ревизии, гасится
+decay и дрим-вердиктами; `build_context` скорит `0.35*rel + 0.25*importance + 0.2*trust +
+0.1*recency + 0.1*log1p(access)`, MMR λ=0.7, бюджет `OB2H_PREFETCH_MAX_CHARS` (8К).
+Save-time дедуп (cos ≥ 0.98 — тихий UPDATE; 0.75–0.98 — `merge_candidate`), офлайн-
+консолидация в дриме (merge|keep_both|contradicts|supersedes), compaction → `hmem-digest/*`.
+
+**Поиск:** гибрид FTS5 trigram + cosine (RRF k=60) везде; PPR (Personalized PageRank,
+`src/graph/pagerank.rs`) по памяти и графу знаний — dual-seed, edge-type-aware
+(`OB2H_PPR_WEIGHTS`, `OB2H_PPR_DAMPING`); p95 и recall меряются golden set'ом
+(`data/bench/golden.jsonl`, `ob2h bench`, история `data/bench/history.jsonl`,
+ночной bench-гейт дрима с авто-откатом).
+
+**Трек C (coding graph):** call-path/callers/callees/dead-code (`project_call_path`,
+`ob2h project dead-code`), repo-map под token budget (`project_context mode=repo_map`),
+edit-time blast radius (warn-only, `OB2H_EDIT_BLAST`), type-resolve с provenance
+(EXTRACTED/RESOLVED/INFERRED), communities (label propagation), framework-рёбра
+ROUTE/QUERIES_TABLE, связка memory↔code (`meta.code_symbols`).
+
+**Синк v2:** дельта-бандлы по курсору, поле-уровневый merge с журналом
+`sync/conflicts.jsonl` (+`OB2H_SYNC_KEEP_LOSERS` → `meta.conflict_versions`),
+`ob2h sync verify` — см. `SYNC.md`.

@@ -40,6 +40,10 @@ pub struct Settings {
     /// Ф32.3: belief-derivation lite — LLM может ставить рёбра kind=causes между
     /// записями; off (дефолт) — предложения только в дрим-отчёт.
     pub dream_belief: bool,
+    /// §22.2/аудит v1.3: вес trust в скоринге build_context. 0 (дефолт) — прежняя
+    /// формула; 0.2 — формула плана. Выключен по bench-данным (−27% recall@5
+    /// на молодой trust-статистике), включение — после накопления ночных прогонов.
+    pub context_trust_weight: f64,
     pub dream_ralph_revision: bool,
 
     // --- Ф30: ночной bench-гейт дрима ---
@@ -164,6 +168,12 @@ impl Settings {
         let dream_belief = env::var("OB2H_DREAM_BELIEF")
             .map(|v| v == "1" || v.to_lowercase() == "true")
             .unwrap_or(false);
+        // §22.2: вес trust в скоринге prefetch; 0 — прежнее поведение (дефолт).
+        let context_trust_weight = env::var("OB2H_CONTEXT_TRUST_WEIGHT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
         // Ф28.1 (FR-K7): dream-ревизия stale-findings Ralph по свежему контексту.
         let dream_ralph_revision = env::var("OB2H_DREAM_RALPH")
             .map(|v| v != "0" && v.to_lowercase() != "false")
@@ -259,6 +269,7 @@ impl Settings {
             dream_extract_enabled,
             dream_memory_revision,
             dream_belief,
+            context_trust_weight,
             dream_ralph_revision,
             bench_gate_enabled,
             bench_gate_timeout_ms,

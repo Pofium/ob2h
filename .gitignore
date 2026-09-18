@@ -10,3 +10,6 @@
 ob2h-linux-x86_64
 
 __pycache__/
+
+.mimosa/
+target_bench/

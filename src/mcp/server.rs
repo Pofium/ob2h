@@ -955,6 +955,7 @@ impl McpServer {
                     max_chars,
                     half_life_days: self.ctx.settings.recency_half_life_days,
                     author,
+                    trust_weight: self.ctx.settings.context_trust_weight,
                     ..Default::default()
                 };
                 match self.ctx.memory.build_context(limit, query, &opts).await {
@@ -2025,6 +2026,7 @@ impl McpServer {
                 let opts = crate::memory::ContextOptions {
                     max_chars: Some(self.ctx.settings.prefetch_max_chars),
                     half_life_days: self.ctx.settings.recency_half_life_days,
+                    trust_weight: self.ctx.settings.context_trust_weight,
                     ..Default::default()
                 };
                 match self.ctx.memory.build_context(20, None, &opts).await {

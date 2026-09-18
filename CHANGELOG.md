@@ -15,9 +15,28 @@
   из БД: ast_nodes/edges/god_nodes/pending_embedding/last_scanned). `wait=false` —
   мгновенный ack запуска. Повторный `project_scan` по идущему скану того же проекта
   идемпотентен (возвращает текущий job). Агенту больше не нужно уходить в CLI/логи/БД,
-  чтобы инициировать или проверить построение AST-базы. Контракт: 33 → 34 инструмента,
+  чтобы инициировать или проверить построение AST-базы. Контракт: 35 → 36 инструментов,
   у `project_scan` новый опциональный аргумент `wait`. +тесты в `tests/test_mcp.rs`
-  (статус-поллинг, wait=false, [Error] по несуществующему id).
+  (статус-поллинг, wait=false, [Error] по несуществующему id). В ветку feat/v1.4
+  вмержена линия релиза v1.4.0 (trust-флаг prefetch, актуализация доков), не
+  попадавшая в ветку.
+
+### Changed
+- CLI `project scan` остаётся без изменений (ручные/скриптовые запуски), но больше
+  не единственный способ досмотреть долгий скан из агента.
+
+## [1.4.0] — 2026-09-13
+
+### Added
+- **Trust в скоринге prefetch (аудит v1.3, §22.2) — за флагом, дефолт off**:
+  `ContextOptions.trust_weight` + `OB2H_CONTEXT_TRUST_WEIGHT` (дефолт `0` — прежняя
+  формула; `0.2` — слагаемое `trust` из плана v1.3). Механизм реализован и протестирован
+  (`trust_boost_lifts_record_in_prefetch_scoring`, `default_trust_weight_keeps_relevance_order`),
+  но выключен по bench-данным живой БД: на молодой trust-статистике (миграция M5 сегодня,
+  ревизия дрима уже ставила −0.4/−0.5) включение веса 0.2 дало recall@5 0.569→0.417 (−27%),
+  MRR 0.611→0.444 — за красной линией гейта ADR-13 (−10%/−15%). Решение о включении —
+  после накопления ночных прогонов (`ob2h bench --mode history`), цифры — в
+  `docs/bench_baseline.md`.
 - **Ночная статистика bench (Ф35.2/30.3, доделано)**: каждый bench-прогон дописывает
   `data/bench/history.jsonl` (§4: ts/mode/recall/mrr/p95/db_size/embedding_backend/
   vec0/dream_sha); сервер раз в 24 ч сам гонит latency-бенч по golden-набору
@@ -95,7 +114,7 @@
   **Миграция V7**: `memory_links.deleted_at` — forget/merge рвут связи soft-delete'ом
   (tombstone реплицируется синком v2 в Ф34), чтения фильтруют удалённые, upsert
   оживляет. +7 тестов (`tests/test_typed_edges.rs`).
-- **Ralph Knowledge Layer — ядро и окружение (Фазы 26–28 PLAN_v1.3, миграция M6 → схема v7)**:
+- **Ralph Knowledge Layer — ядро и окружение (Фазы 26–28 PLAN_v1.3, миграция M6 → схема v6)**:
   таблицы `ralph_runs`/`ralph_iterations`/`ralph_findings`/`ast_changes` (аддитивно,
   graph_nodes не пересоздавался — confidence сохранена, тест схемы). MCP-инструменты
   **№27–33**: `ralph_start`, `ralph_iteration` (авто-вердикт только по `tests_summary`
@@ -127,7 +146,9 @@
   Память как граф: `MemoryService::ppr_rank` (узлы — живые записи, рёбра — `memory_links`
   с весом kind × вес ребра, dual-seed: гибридные хиты + entity-фразы),
   `ppr_expand_records` и `ppr_context`. MCP: `memory_search mode=graph` (блок `[ppr]`
-  вместо 1-hop, фолбэк на 1-hop) и `graph_reason scope=memory|all` (PPR-подграф памяти,
+  вместо 1-hop, фолбэк на 1-hop), `graph_search mode=ppr` (PPR по графу знаний: dual-seed
+  из матчинга, веса рёбер по типу через `OB2H_PPR_WEIGHTS`, проектный фильтр) и
+  `graph_reason scope=memory|all` (PPR-подграф памяти,
   уверенность по trust × PPR-массе, лимиты 500 узлов / 1 с; без `scope` — прежний ответ
   по графу знаний). Новые настройки: `OB2H_PPR_WEIGHTS`, `OB2H_PPR_DAMPING`,
   `OB2H_GRAPH_REASON_MEMORY_MAX_NODES`, `OB2H_GRAPH_REASON_MEMORY_TIMEOUT_MS`.

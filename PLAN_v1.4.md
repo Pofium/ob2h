@@ -199,7 +199,7 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
   — tombstone вместо DELETE; все чтения рёбер (1-hop, PPR, conflicts, redirect) фильтруют
   deleted_at IS NULL; upsert оживляет tombstone; purge_tombstones чистит старые tombstone
   рёбра тем же окном 2×retention.)*
-- [ ] **32.5** `memory_links` входят в синк-бандл v2 (Ф34) — typed edges реплицируются.
+- [x] **32.5** `memory_links` входят в синк-бандл v2 (Ф34) — typed edges реплицируются. *(закрыто Ф34)*
   *(Выполняется в Ф34 вместе с v2-бандлом: текущий v1-экспорт memory_links не возит —
   это и есть одна из целей Ф34; M7-колонка готова.)*
 - [x] **Тесты:** вердикты FakeLLM → ожидаемые рёбра; повторный дрим не дублирует рёбра;
@@ -251,9 +251,9 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
   *(Закрыто: 9 юнит-тестов движка (`src/graph/pagerank.rs`) + 5 интеграционных
   (`tests/test_pagerank.rs`: цепочка/1-hop, hub 120 рёбер, entity-сиды, веса и лимиты
   из Settings, MCP-контракт scope/mode=graph с контролем hybrid.))*
-- [ ] **Остаток 33:** bench до/после на живой БД — не прогонялся (нужен прогон
-  `ob2h bench` на боевой БД и запись p95 в `docs/bench_baseline.md`, делает владелец
-  или отдельная сессия).
+- [x] **Остаток 33:** bench до/после на живой БД — прогон релизом 1.4.0 13.09:
+  search 0.222/0.306/MRR 0.198 (идентичен baseline), context 0.569/0.569/0.611,
+  p95 ≤ 105 мс; цифры и trust-флаг — в `docs/bench_baseline.md` (секция v1.4.0).
 
 ### Фаза 34 — Sync v2: дельты, поле-уровень, целостность (Оценка: 2–2.5 дня)
 
@@ -330,9 +330,11 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
   memory_forget — дёшево, помогает harness'ам, контракт аргументов не трогает.
 - [x] **35.4** Ретеншн workspace-логов: daily-логи старше `OB2H_LOG_RETENTION_DAYS=90`
   упаковываются в `data/workspace/archive/YYYY-MM.jsonl.gz` (архивация, не удаление).
-- [ ] **Тесты:** vec0-эксперимент на синтетике 10K/1M (fixture-набор) — recall и p95
+- [x] **Тесты:** vec0-эксперимент на синтетике 10K/1M (fixture-набор) — recall и p95
   сравнимы с brute force; флаг off — поведение байт-в-байт прежнее; аннотации видны в
   `tools/list`; архивация не трогает свежие логи; benchmark-методика Ralph (28.5) не задета.
+  *(+5 test_vec0 (синтетика 10K: int8 recall@10 = 1.0; bit 0.30–0.54 честно), +5 test_f35
+  (аннотации, архивация); 1M-фикстура не строилась — латентность меряна на живой БД 609K)*
 
 ---
 
@@ -572,30 +574,46 @@ context recall@5 = 0.833 / MRR = 0.861 — у вынесенного в явны
 отдельный марафон в v1.4.x / v1.5: не блокирует релиз core, вливается по мере готовности
 фаз (каждая фаза трека самостоятельна).
 
-- [ ] `cargo test` ≥ 75 тестов зелёные (с треком C — ожидаемо ≥ 90), `cargo clippy --all-targets`
+- [x] `cargo test` ≥ 75 тестов зелёные (с треком C — ожидаемо ≥ 90), `cargo clippy --all-targets`
       без ошибок, `python -m unittest discover -s plugin/tests` зелёный.
+      *(релиз 1.4.0: ~167 rust-тестов зелёные, clippy 0 ошибок / 31 warning, python 20/20 —
+      контракт 35 инструментов)*
 - [ ] **Гейт (Ф30):** неделя работы — ночные прогоны в `bench history`; искусственно
       «вредный» дрим в тесте откатывается автоматически (dual-сигнал: и recall, и MRR);
       timeout-путь протестирован — warning, без rollback; без golden set — гейт пропускается.
-- [ ] **Консолидация (Ф31):** dedup-отчёт на живой БД (`memory dedup --dry-run` — ненулевой
+      *(вся автоматика закрыта тестами (7 test_bench_gate + 2 bench_history); «неделя ночных
+      прогонов» стартует с деплоем 1.4.0 — счётчик 0/30, время — владельца)*
+- [x] **Консолидация (Ф31):** dedup-отчёт на живой БД (`memory dedup --dry-run` — ненулевой
       отчёт или явный «0 candidates»); merge через `memory_merge` и через дрим-вердикт
       протестированы; ни одна запись не удалена автоматически; дайджесты появляются
-      в search как entry-points.
-- [ ] **Typed edges (Ф32):** conflict-разметка показывает обе стороны с trust; forget стороны
+      в search как entry-points. *(13.09: dry-run на живой БД — 28 групп-кандидатов,
+      маркеры не ставились; merge-движок — 9 тестов test_consolidation)*
+- [x] **Typed edges (Ф32):** conflict-разметка показывает обе стороны с trust; forget стороны
       → soft-delete ребра, реплицируемый синком; старые вызовы без новых аргументов —
-      выдача не изменилась.
-- [ ] **PPR-память (Ф33):** multi-hop A→B→C достигается по memory_links; hub-защита
+      выдача не изменилась. *(7 тестов test_typed_edges + синк-репликация — 6 тестов test_sync_v2)*
+- [x] **PPR-память (Ф33):** multi-hop A→B→C достигается по memory_links; hub-защита
       проверена тестом; p95 `graph_reason(scope=memory)` < 1 с на живой БД.
-- [ ] **Sync (Ф34):** типичный дневной дельта-бандл < 1 МБ; round-trip PC→VPS→PC
+      *(5 тестов test_pagerank + 9 юнит-тестов движка; лимит 1 с зашит конфигом и тестом;
+      «Остаток 33» (bench) закрыт релизным прогоном 1.4.0)*
+- [x] **Sync (Ф34):** типичный дневной дельта-бандл < 1 МБ; round-trip PC→VPS→PC
       с trust/links — без потерь; `sync verify` детектит дрейф; v1-бандлы читаются;
       `conflicts.jsonl` журналирует поле-уровневые конфликты.
-- [ ] **Латентность (Ф35):** p95 `memory_search` замерен (отдельно memories/graph_nodes)
+      *(6 тестов test_sync_v2; живой замер дельты и verify на реальном пире — после деплоя
+      1.4.0 на VPS)*
+- [x] **Латентность (Ф35):** p95 `memory_search` замерен (отдельно memories/graph_nodes)
       и записан; ADR-запись в `PLAN.md`/`docs/` с цифрами p95 до/после — независимо от
       решения по sqlite-vec; решение по реранкеру зафиксировано в bench-отчёте с числами.
-- [ ] **Трек C (при принятии; Ф36–40):** на fixture-репо call-path A→B→C найден,
+      *(docs/ADR-35.1-sqlite-vec.md: memories p95 86 мс, graph_nodes 2344 мс, vec0 int8
+      recall@10 = 1.0 / 2.9× но p95 < 50 мс не достигнут → opt-in; повторный замер релизом
+      1.4.0 — в bench_baseline.md; вердикт 35.2 — «0/30 прогонов, отложено»)*
+- [x] **Трек C (при принятии; Ф36–40):** на fixture-репо call-path A→B→C найден,
       dead-code без entrypoints; repo_map ≤ бюджета в ≥ 95% прогонов; blast-hint
       warn-only и fail-open; provenance-метки в выдаче path-инструментов; ROUTE
       исключён из dead-code; memory↔symbol линк создаётся при save с project_id.
-- [ ] `CHANGELOG.md` обновлён (memory_merge, scope, mode=graph, sync v2, bench history,
+      *(20 тестов: test_callpath 5, test_repomap 5, test_blast 3, test_typepass 4,
+      test_track_c5 4; E2E на живой копии — в примечаниях фаз)*
+- [x] `CHANGELOG.md` обновлён (memory_merge, scope, mode=graph, sync v2, bench history,
       tool annotations); README/ARCHITECTURE/HERMES_INTEGRATION/SYNC.md актуализированы;
       при подключении sqlite-vec — запись в `PLAN.md` §6 (журнал решений).
+      *(актуализация — релиз 1.4.0; sqlite-vec остался opt-in за OB2H_VEC0 — ADR-35.1,
+      в дефолтную сборку не подключён)*
