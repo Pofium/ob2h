@@ -4,7 +4,8 @@ use ob2h::mcp::McpServer;
 use ob2h::mcp::tools::list_tools;
 use tempfile::tempdir;
 
-/// Снапшот контракта: 34 инструмента (26 базовых v1.3 + 7 Ralph + project_scan_status).
+/// Снапшот контракта: 36 инструментов (26 базовых v1.3 + 7 Ralph + memory_merge
+/// + project_scan_status).
 #[test]
 fn test_tools_list_contract_snapshot() {
     let names: Vec<String> = list_tools().into_iter().map(|t| t.name).collect();

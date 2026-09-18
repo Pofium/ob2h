@@ -135,5 +135,5 @@ cp ob2h-sync.service ob2h-sync.timer /etc/systemd/system/ && systemctl enable --
   маркер truncated); блок `[related]`/`[ppr]` — соседи памяти (1-hop / PPR); блок
   `[conflicts]` — обе стороны известного противоречия с trust; warn-блок
   `<blast_radius>` — свежие правки кода (флаг `OB2H_EDIT_BLAST=warn`, дефолт off).
-- **Валидация провайдера**: контракт-тест — 35 инструментов, handshake, roundtrip
+- **Валидация провайдера**: контракт-тест — 36 инструментов, handshake, roundtrip
   (`plugin/tests/test_integration.py`).

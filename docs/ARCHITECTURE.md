@@ -331,6 +331,10 @@ tombstones, идемпотентность `applied_bundles`, авто-бэка�
 — `mode=callers|callees`; `project_context` — `mode=repo_map`, `with_memory`. На read-only
 инструментах проставлены MCP-аннотации (`readOnlyHint`), `memory_forget` — `destructiveHint`.
 
+**v1.5 (2026-09-18):** контракт 35 → 36: + `project_scan_status` (№36) — статус фонового
+AST-скана (job + сводка из БД); `project_scan` — опциональный `wait` (дефолт true, ожидание
+до 45 с), скан больше не блокируется таймаутом MCP-клиента (`src/project/scanjob.rs`).
+
 **Схема БД (миграции M5–M7):** `memories.trust`, `memories.last_feedback_at`, таблица
 `memory_links` (kind: same_project|entity|category|manual + typed `contradicts|causes|
 supersedes`, soft-delete `deleted_at`), Ralph-таблицы `ralph_runs`/`ralph_iterations`/
