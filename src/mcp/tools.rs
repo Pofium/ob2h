@@ -1,4 +1,4 @@
-//! 33 инструмента MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты, Ralph).
+//! 34 инструмента MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты, Ralph).
 
 use super::protocol::McpToolDef;
 
@@ -21,6 +21,7 @@ pub fn annotations_for(name: &str) -> Option<serde_json::Value> {
         "project_impact",
         "project_report",
         "project_call_path",
+        "project_scan_status",
         "ralph_report",
         "workspace_read",
     ];
@@ -312,13 +313,26 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 21. project_scan
         McpToolDef {
             name: "project_scan".to_string(),
-            description: "Запустить детерминированное статическое AST-сканирование кодовой базы проекта (без расхода LLM-токенов). Извлекает модули, функции, классы, структуры, таблицы и связи.".to_string(),
+            description: "Запустить детерминированное статическое AST-сканирование кодовой базы проекта (без расхода LLM-токенов). Извлекает модули, функции, классы, структуры, таблицы и связи. Скан идёт в фоне: по умолчанию ждём до 45 с (малые проекты успевают полностью); долгий скан не падает по таймауту — ответ скажет running, результат смотри в project_scan_status.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "id": { "type": "string", "description": "Идентификатор зарегистрированного проекта" },
                     "path": { "type": "string", "description": "Кастомный путь сканирования (опционально)" },
-                    "incremental": { "type": "boolean", "description": "Инкрементальное обновление по SHA256 хэшам (дефолт: true)" }
+                    "incremental": { "type": "boolean", "description": "Инкрементальное обновление по SHA256 хэшам (дефолт: true)" },
+                    "wait": { "type": "boolean", "description": "Ждать завершения до 45 с (дефолт: true); false — сразу вернуть управление, статус через project_scan_status" }
+                },
+                "required": ["id"]
+            }),
+        },
+        // 21a. project_scan_status — поллинг фонового скана вместо CLI/логов
+        McpToolDef {
+            name: "project_scan_status".to_string(),
+            description: "Статус AST-скана проекта: идёт ли фоновый job, его результат (files/nodes/edges/embedded) или ошибка, плюс сводка из БД (ast_nodes, god_nodes, pending_embedding, last_scanned). Используй после project_scan, чтобы дождаться завершения долгого скана.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Идентификатор проекта" }
                 },
                 "required": ["id"]
             }),

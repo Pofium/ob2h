@@ -4,7 +4,7 @@ use ob2h::mcp::McpServer;
 use ob2h::mcp::tools::list_tools;
 use tempfile::tempdir;
 
-/// Снапшот контракта: 33 инструмента (26 базовых v1.3 + 7 Ralph, Фазы 26–27).
+/// Снапшот контракта: 34 инструмента (26 базовых v1.3 + 7 Ralph + project_scan_status).
 #[test]
 fn test_tools_list_contract_snapshot() {
     let names: Vec<String> = list_tools().into_iter().map(|t| t.name).collect();
@@ -31,6 +31,7 @@ fn test_tools_list_contract_snapshot() {
         // v1.0: Проектные инструменты и AST-граф
         "project_init",
         "project_scan",
+        "project_scan_status",
         "project_context",
         "project_graph_search",
         // v1.4 / трек C: структурные запросы (Фаза 36) — №35, вставлен после graph_search
@@ -142,14 +143,58 @@ async fn test_mcp_all_tools_dispatch() {
         .await;
     assert!(p_init_out.contains("project registered: id=my_proj"));
 
-    // 9. project_scan
+    // 9. project_scan — фоновый job с ожиданием до 45 с (малый проект успевает)
     let p_scan_out = server
         .call_tool(
             "project_scan",
             serde_json::json!({ "id": "my_proj" }),
         )
         .await;
-    assert!(p_scan_out.contains("project 'my_proj' scanned:"));
+    assert!(
+        p_scan_out.contains("project 'my_proj' scanned:")
+            || p_scan_out.contains("still running"),
+        "got: {p_scan_out}"
+    );
+
+    // 9a. project_scan_status — досматриваем результат без CLI/логов
+    let mut status_out = String::new();
+    for _ in 0..50 {
+        status_out = server
+            .call_tool("project_scan_status", serde_json::json!({ "id": "my_proj" }))
+            .await;
+        if !status_out.contains("job: running") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(status_out.contains("job: done"), "got: {status_out}");
+    assert!(status_out.contains("embedded="), "got: {status_out}");
+    assert!(
+        status_out.contains("db: ast_nodes=") && status_out.contains("last_scanned="),
+        "got: {status_out}"
+    );
+    assert!(
+        !status_out.starts_with("[Error]"),
+        "status не должен быть ошибкой: {status_out}"
+    );
+
+    // 9b. project_scan wait=false — мгновенный ack фоного запуска
+    let p_scan_bg = server
+        .call_tool(
+            "project_scan",
+            serde_json::json!({ "id": "my_proj", "wait": false }),
+        )
+        .await;
+    assert!(
+        p_scan_bg.contains("started in background"),
+        "got: {p_scan_bg}"
+    );
+
+    // 9c. статус несуществующего проекта — [Error]
+    let bad_status = server
+        .call_tool("project_scan_status", serde_json::json!({ "id": "nope" }))
+        .await;
+    assert!(bad_status.starts_with("[Error]"), "got: {bad_status}");
 
     // 10. project_context
     let p_ctx_out = server

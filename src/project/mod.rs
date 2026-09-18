@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod hooks;
+pub mod scanjob;
 pub mod watcher;
 
 use chrono::Utc;
@@ -14,6 +15,7 @@ use tracing::info;
 use crate::db::models::ProjectRecord;
 pub use ast::{AstCodeExtractor, AstScanResult};
 pub use hooks::install_git_hooks;
+pub use scanjob::{ScanJob, ScanJobManager, ScanJobResult, ScanJobStatus};
 pub use watcher::ProjectWatcher;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +137,23 @@ impl ProjectService {
             );
         }
         Ok(total_embedded)
+    }
+
+    /// Сколько ast-узлов проекта ещё без эмбеддинга (для project_scan_status).
+    pub fn pending_embeddings(&self, project_id: &str) -> anyhow::Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let n: i64 = conn.query_row(
+            r#"
+            SELECT COUNT(*) FROM graph_nodes
+            WHERE project_id = ?1
+              AND provenance = 'ast'
+              AND embedding IS NULL
+              AND (deleted_at IS NULL OR deleted_at = '')
+            "#,
+            params![project_id],
+            |r| r.get(0),
+        )?;
+        Ok(n)
     }
 
     /// Регистрирует новый проект или обновляет существующий.

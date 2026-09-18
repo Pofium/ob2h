@@ -93,6 +93,10 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         project.clone(),
         settings.watcher_debounce_ms,
     ));
+    let scan_jobs = Arc::new(crate::project::ScanJobManager::new(
+        project.clone(),
+        db.conn_arc(),
+    ));
 
     Ok(Arc::new(AppContext {
         settings,
@@ -114,6 +118,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         active_workspace,
         active_project_id,
         watcher,
+        scan_jobs,
     }))
 }
 

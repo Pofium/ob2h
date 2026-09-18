@@ -33,12 +33,16 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   данные/БД `{{DATA_DIR}}` (ob2h.db, workspace/: SOUL.md/USER.md/memory/MEMORY.md +
   daily/*.jsonl — файлы создаются лениво, `workspace_read` отсутствующего = `""`),
   Hermes home `{{HERMES_HOME}}` (config.yaml, plugins/ob2h, ob2h.json).
-- Инструменты (24 шт): memory_save/search/update/forget/context, workspace_read/write,
+- Инструменты (25 шт): memory_save/search/update/forget/context, workspace_read/write,
   session_log, session_ingest (bulk-транскрипта), knowledge_extract,
   graph_search/reason/stats, dream_run/status/log/restore, omnes_stats/backup,
-  project_init, project_scan, project_context, project_graph_search, project_report.
+  project_init, project_scan, project_scan_status, project_context,
+  project_graph_search, project_report.
 - Детерминированный AST-граф кода: `project_scan` извлекает классы, функции, трейты и связи
-  со 100% точностью (Graphify-подход) без вызовов LLM; `project_report` и `project_context`
+  со 100% точностью (Graphify-подход) без вызовов LLM; скан идёт в фоне и не упирается
+  в таймаут MCP-клиента — по умолчанию инструмент ждёт до 45 с, долгий скан отвечает
+  «still running», результат досматривается `project_scan_status` (там же сводка из БД).
+  CLI для этого агенту не нужен. `project_report` и `project_context`
   выделяют центральные хабы архитектуры (God Nodes).
 - AutoDreamWorker: гейты ≥4ч и ≥10 событий, lock, git-история правок, бэкапы
   VACUUM INTO с ротацией 14. CLI: `ob2h stats | dream run/status/log/restore <sha> |
@@ -74,6 +78,13 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
    безопасны параллельно с WAL.
 7. Плагин не активен после установки: проверить `memory.provider: ob2h` в config.yaml и
    `ob2h plugin status`; провал prefetch НЕ роняет агент — падение в тихий Mode 0.
+8. **project_* — всегда передавай `id` явно.** Без `id` сервер молча подставляет
+   «активный проект» своей сессии (Zero-Config-привязка к воркспейсу IDE): скан/поиск
+   уходят в чужой проект и возвращают 0 результатов. Симптом: в логе есть
+   «Зарегистрирован проект …», но нет «Начало AST-сканирования проекта '<id>'»,
+   в БД `projects.last_scanned_at=NULL`. Долгий скан через `project_scan` не падает
+   по таймауту: ответ «still running» → полли `project_scan_status id=<id>`, пока
+   не придёт «job: done» (или «job: failed» с причиной).
 
 ## Проверка работоспособности (read-only, без LLM)
 `memory_search`, `memory_context`, `omnes_stats`, `graph_stats`, `dream_status`,

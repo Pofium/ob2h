@@ -44,6 +44,8 @@ pub struct AppContext {
     pub active_workspace: Arc<tokio::sync::RwLock<Option<std::path::PathBuf>>>,
     pub active_project_id: Arc<tokio::sync::RwLock<Option<String>>>,
     pub watcher: Arc<crate::project::ProjectWatcher>,
+    /// Фоновые AST-сканы (project_scan без таймаута MCP-клиента).
+    pub scan_jobs: Arc<crate::project::ScanJobManager>,
 }
 
 pub struct McpServer {
@@ -430,7 +432,7 @@ impl McpServer {
                             | "project_context"
                             | "project_graph_search"
                             | "project_report" => true,
-                            "project_scan" => !obj.contains_key("id"),
+                            "project_scan" | "project_scan_status" => !obj.contains_key("id"),
                             _ => false,
                         };
 
@@ -446,6 +448,7 @@ impl McpServer {
                                 );
                             }
                             if tool_name == "project_scan"
+                                || tool_name == "project_scan_status"
                                 || tool_name == "project_context"
                                 || tool_name == "project_graph_search"
                                 || tool_name == "project_report"
@@ -1585,6 +1588,9 @@ impl McpServer {
                     Err(e) => format!("[Error] {e}"),
                 }
             }
+            // Фаза MCP-only AST: скан уходит в фон и не упирается в таймаут
+            // MCP-клиента (~60 c); по умолчанию ждём до 45 c и отдаём результат,
+            // иначе — статус и указание поллить project_scan_status.
             "project_scan" => {
                 let id = match args.get("id").and_then(|v| v.as_str()) {
                     Some(i) => i,
@@ -1595,25 +1601,84 @@ impl McpServer {
                     .get("incremental")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true);
+                let wait = args.get("wait").and_then(|v| v.as_bool()).unwrap_or(true);
 
-                match self.ctx.project.scan_project(id, path, incremental) {
-                    Ok(res) => {
-                        let _ = self.ctx.db.with_conn(|conn| {
-                            let _ = crate::graph::GraphAnalytics::update_god_nodes(conn, id);
-                            Ok(())
-                        });
-                        let _ = self.ctx.project.embed_unembedded_nodes(id).await;
-                        format!(
-                            "project '{}' scanned: files={} nodes={} edges={} total_lines={}",
-                            id,
-                            res.files_scanned,
-                            res.nodes.len(),
-                            res.edges.len(),
-                            res.lines_total
-                        )
-                    }
-                    Err(e) => format!("[Error] {e}"),
+                let job = match self.ctx.scan_jobs.start(id, path, incremental) {
+                    Ok(j) => j,
+                    Err(e) => return format!("[Error] {e}"),
+                };
+                if !wait {
+                    return format!(
+                        "scan of '{}' started in background at {}; poll project_scan_status id={}",
+                        id, job.started_at, id
+                    );
                 }
+
+                match self
+                    .ctx
+                    .scan_jobs
+                    .wait_for(id, std::time::Duration::from_secs(45))
+                    .await
+                {
+                    Some(job) => match job.status {
+                        crate::project::ScanJobStatus::Done(r) => format!(
+                            "project '{}' scanned: files={} nodes={} edges={} total_lines={} embedded={}",
+                            id, r.files_scanned, r.nodes, r.edges, r.lines_total, r.embedded
+                        ),
+                        crate::project::ScanJobStatus::Failed(e) => format!("[Error] {e}"),
+                        crate::project::ScanJobStatus::Running => format!(
+                            "scan of '{}' still running (started at {}); poll project_scan_status id='{}'",
+                            id, job.started_at, id
+                        ),
+                    },
+                    None => "[Error] scan job not found".to_string(),
+                }
+            }
+            "project_scan_status" => {
+                let id = match args.get("id").and_then(|v| v.as_str()) {
+                    Some(i) => i,
+                    None => return "[Error] id is required".to_string(),
+                };
+                let stats = match self.ctx.project.get_project_stats(id) {
+                    Ok(s) => s,
+                    Err(e) => return format!("[Error] {e}"),
+                };
+                let pending = self.ctx.project.pending_embeddings(id).unwrap_or(0);
+
+                let job_line = match self.ctx.scan_jobs.job(id) {
+                    Some(job) => match &job.status {
+                        crate::project::ScanJobStatus::Running => {
+                            format!("job: running (started at {})", job.started_at)
+                        }
+                        crate::project::ScanJobStatus::Done(r) => format!(
+                            "job: done ({} → {}): files={} nodes={} edges={} lines={} embedded={}",
+                            job.started_at,
+                            job.finished_at.as_deref().unwrap_or("?"),
+                            r.files_scanned,
+                            r.nodes,
+                            r.edges,
+                            r.lines_total,
+                            r.embedded
+                        ),
+                        crate::project::ScanJobStatus::Failed(e) => {
+                            format!("job: failed ({}): {e}", job.started_at)
+                        }
+                    },
+                    None => "job: none in this server session".to_string(),
+                };
+
+                format!(
+                    "project '{}' ({}) root={}\n{}\ndb: ast_nodes={} edges={} god_nodes={} pending_embedding={} last_scanned={}",
+                    id,
+                    stats.name,
+                    stats.root_path,
+                    job_line,
+                    stats.ast_nodes,
+                    stats.total_edges,
+                    stats.god_nodes,
+                    pending,
+                    stats.last_scanned_at.as_deref().unwrap_or("никогда")
+                )
             }
             "project_context" => {
                 let id = match args.get("id").and_then(|v| v.as_str()) {
