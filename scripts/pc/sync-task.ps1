@@ -5,10 +5,10 @@
 
 param(
     [switch]$Register,
-    [string]$Binary = "C:\Projects\omnesbot_for_hermes\target\release\ob2h.exe"
+    [string]$Binary = "C:\Projects\ob2h\target\release\ob2h.exe"
 )
 
-$env:OB2H_DATA_DIR = "C:\Projects\omnesbot_for_hermes\data"
+$env:OB2H_DATA_DIR = "C:\Projects\ob2h\data"
 
 if ($Register) {
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `

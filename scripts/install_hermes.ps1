@@ -1,7 +1,7 @@
 # PowerShell Installer for OB2H in Hermes (Windows)
 param(
     [string]$HermesConfigPath = "C:\Users\ipres\AppData\Local\hermes\config.yaml",
-    [string]$ProjectDir = "C:\Projects\omnesbot_for_hermes"
+    [string]$ProjectDir = "C:\Projects\ob2h"
 )
 
 $ErrorActionPreference = "Stop"
