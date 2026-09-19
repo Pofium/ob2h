@@ -91,6 +91,21 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
    в БД `projects.last_scanned_at=NULL`. Долгий скан через `project_scan` не падает
    по таймауту: ответ «still running» → полли `project_scan_status id=<id>`, пока
    не придёт «job: done» (или «job: failed» с причиной).
+9. **Синк после перерыва**: watermark (sync_state.last_export_at) может «перепрыгнуть»
+   записи, вставленные ПОСЛЕ последнего экспорта, но ДО его завершения — они выпадают
+   из дельт навсегда. Диагностика: сверка ключей памяти обеих сторон read-only sqlite
+   (`file:...?mode=ro`), лечение: откат курсора в sync_state на дату пропуска + обычный
+   (НЕ --full) экспорт.
+10. **`sync export --full` на VPS с RAM < 8 ГБ = OOM-kill (exit 137)**: полный бандл
+   несёт весь граф (600k+ узлов). Карантин: `data/sync/oversize/` вне inbox, чтобы
+   ночной apply-inbox не падал. Дельту за месяц тоже может раздуть граф — если нужен
+   только перенос памяти, собрать минимальный бандл вручную (header + строки mem/mlink),
+   **уникальный bundle_id обязателен** — скопированный из эталона даст no-op «уже применён».
+11. **`sync verify` требует в peers.json пира `data_dir` и `bin`** (удалённая сторона
+   выполняет `OB2H_DATA_DIR=<data_dir> <bin> sync local-stats`); без них — ошибка.
+12. **При импорте на другой стороне через scp** — файл кладётся в inbox пира,
+   применяется его `sync apply-inbox`; прямой `sync import <файл>` на удалённой машине
+   тоже работает.
 
 ## Проверка работоспособности (read-only, без LLM)
 `memory_search`, `memory_context`, `omnes_stats`, `graph_stats`, `dream_status`,
