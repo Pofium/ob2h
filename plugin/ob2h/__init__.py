@@ -44,7 +44,7 @@ _PREFETCH_TIMEOUT = 10.0
 _WRITE_TIMEOUT = 120.0
 
 # Windows-путь разработки — последний кандидат (для VPS бинарник берётся из PATH/env).
-_DEV_BINARY_FALLBACK = r"C:\Projects\omnesbot_for_hermes\target\release\ob2h.exe"
+_DEV_BINARY_FALLBACK = r"C:\Projects\ob2h\target\release\ob2h.exe"
 
 
 def _load_cfg(hermes_home: str) -> Dict[str, str]:

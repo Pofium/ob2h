@@ -20,14 +20,8 @@ CLI-агент OpenAI. На этом компе есть конфиг `~/.codex/
   мнимые бинарники.
 
 ## Интеграция OB2H
-- ⚠️ **НЕ подключён**: ob2h в config.toml отсутствует.
-  Для подключения добавить секцию (literal-строка пути):
-  ```toml
-  [mcp_servers.ob2h]
-  command = 'C:\Projects\omnesbot_for_hermes\target\release\ob2h.exe'
-  args = ['serve']
-
-  [mcp_servers.ob2h.env]
-  OB2H_DATA_DIR = 'C:/Projects/omnesbot_for_hermes/data'
-  ```
-- После правки — перезапустить Codex.
+- ✅ **Подключён** (2026-09-19): секция добавлена в конец config.toml.
+  Данные — общая БД всех агентов: `OB2H_DATA_DIR = 'C:/Projects/omnesbot_for_hermes/data'`
+  (путь к данным НЕ переименовался вместе с репо).
+- При первом запуске Codex MCP-сервер ob2h подхватится автоматически;
+  после правки config.toml — перезапустить Codex.

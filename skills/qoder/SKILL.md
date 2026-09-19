@@ -19,7 +19,7 @@ IDE + CLI лекарство от Tempo (присутствует на комп�
   Для подключения добавить в `mcpServers`:
   ```json
   "ob2h": {
-    "command": "C:\\Projects\\omnesbot_for_hermes\\target\\release\\ob2h.exe",
+    "command": "C:\\Projects\\ob2h\\target\\release\\ob2h.exe",
     "args": ["serve"],
     "env": { "OB2H_DATA_DIR": "C:/Projects/omnesbot_for_hermes/data" }
   }

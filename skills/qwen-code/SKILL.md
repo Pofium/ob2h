@@ -14,7 +14,7 @@ CLI-агент Alibaba. Один из 8 агентов из README OB2H.
 
 ## Интеграция OB2H
 - MCP: `~/.qwen/mcp.json` → `mcpServers.ob2h` = `ob2h.exe serve`
-  (`C:\Projects\omnesbot_for_hermes\target\release\ob2h.exe`).
+  (`C:\Projects\ob2h\target\release\ob2h.exe`).
 - Команда установки: `ob2h agent install --agent qwen`
 - Статус: `ob2h agent status` (проверяет `~/.qwen/mcp.json`).
 

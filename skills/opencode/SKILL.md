@@ -20,7 +20,7 @@ CLI-агент (opencode.ai). Один из 8 агентов из README OB2H.
   ```json
   "ob2h": {
     "type": "local",
-    "command": ["C:\\Projects\\omnesbot_for_hermes\\target\\release\\ob2h.exe", "serve"],
+    "command": ["C:\\Projects\\ob2h\\target\\release\\ob2h.exe", "serve"],
     "environment": {}
   }
   ```

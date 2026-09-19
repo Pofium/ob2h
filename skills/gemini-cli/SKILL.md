@@ -18,7 +18,7 @@ CLI-агент Google + Antigravity IDE. Один из 8 агентов/IDE из
   1. `~/.gemini/antigravity-ide/mcp_config.json` — ob2h зарегистрирован
   2. `~/.gemini/antigravity/mcp_config.json` — ob2h зарегистрирован
   Оба: `mcpServers.ob2h` = `ob2h.exe serve`
-  (`C:\Projects\omnesbot_for_hermes\target\release\ob2h.exe`).
+  (`C:\Projects\ob2h\target\release\ob2h.exe`).
 - Рядом в этих конфигах уже есть chrome-devtools, cloudrun, codegraph,
   dart-mcp-server, figma и др.
 - Команда установки: `ob2h agent install --agent gemini`

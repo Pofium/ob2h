@@ -14,7 +14,7 @@ IDE на базе VS Code. Один из 8 агентов/IDE из README OB2H.
 
 ## Интеграция OB2H
 - MCP: `~/.cursor/mcp.json` → `mcpServers.ob2h` = `ob2h.exe serve`
-  (путь exe: `C:\Projects\omnesbot_for_hermes\target\release\ob2h.exe`).
+  (путь exe: `C:\Projects\ob2h\target\release\ob2h.exe`).
 - Команда установки: `ob2h agent install --agent cursor`
 - Кастомный путь: `ob2h agent install --agent cursor --path <dir>`
   → пишет `<dir>/.cursor/mcp.json`.
