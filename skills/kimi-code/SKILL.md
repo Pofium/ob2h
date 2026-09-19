@@ -23,7 +23,7 @@ CLI-агент Moonshot. Присутствует на этом компе.
   "ob2h": {
     "command": "C:\\Projects\\ob2h\\target\\release\\ob2h.exe",
     "args": ["serve"],
-    "env": { "OB2H_DATA_DIR": "C:/Projects/omnesbot_for_hermes/data" },
+    "env": { "OB2H_DATA_DIR": "C:/Projects/ob2h/data" },
     "enabled": true
   }
   ```

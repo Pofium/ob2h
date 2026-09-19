@@ -21,4 +21,4 @@ CLI-агент Xiaomi. Присутствует на этом компе.
 ## Интеграция OB2H
 - ⚠️ ob2h в конфиг MiMo не подключён.
 - Для подключения добавить MCP-сервер ob2h (аналогично другим агентам):
-  `ob2h.exe serve` с `OB2H_DATA_DIR=C:/Projects/omnesbot_for_hermes/data`.
+  `ob2h.exe serve` с `OB2H_DATA_DIR=C:/Projects/ob2h/data`.

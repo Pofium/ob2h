@@ -20,7 +20,7 @@ Hermes — главный «харнесс»: именно в нём живёт 
 - `mcp_servers.ob2h` тоже присутствует (режим B: плагин + MCP одновременно;
   работает, но два процесса — лучше уйти в чистый A, удалив MCP-запись).
 - env-блок ob2h в config.yaml:
-  - `OB2H_DATA_DIR: C:/Projects/omnesbot_for_hermes/data`
+  - `OB2H_DATA_DIR: C:/Projects/ob2h/data`
   - `OB2H_LLM_API_KEY: <РЕАЛЬНЫЙ ключ-литерал>` (Hermes НЕ пробрасывает
     .env-переменные MCP-подпроцессам — нельзя писать имя `DEEPSEEK_API_KEY`)
   - `OB2H_LLM_MODEL: deepseek-v4-flash`, `OB2H_EMBED_PROVIDER: local`

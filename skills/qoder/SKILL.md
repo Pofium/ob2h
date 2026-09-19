@@ -21,7 +21,7 @@ IDE + CLI лекарство от Tempo (присутствует на комп�
   "ob2h": {
     "command": "C:\\Projects\\ob2h\\target\\release\\ob2h.exe",
     "args": ["serve"],
-    "env": { "OB2H_DATA_DIR": "C:/Projects/omnesbot_for_hermes/data" }
+    "env": { "OB2H_DATA_DIR": "C:/Projects/ob2h/data" }
   }
   ```
 - Qoder — полноценный агентный IDE: после подключения OB2H даст память,

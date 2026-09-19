@@ -18,7 +18,7 @@ Electron IDE от Z.ai (GLM). Один из 8 агентов/IDE из README OB2
   команда `ob2h.exe serve`.
 - ⚠️ С 05.09.2026 ZCode использует ОБЩУЮ память всех агентов:
   - exe: `C:\Projects\ob2h\target\release\ob2h.exe`
-  - `env.OB2H_DATA_DIR: C:\Projects\omnesbot_for_hermes\data` (единая БД)
+  - `env.OB2H_DATA_DIR: C:\Projects\ob2h\data` (единая БД)
   - `cwd: C:\Projects\Omnes-agent` (рабочий проект ZCode, НЕ хранилище памяти)
   → Отдельный инстанс памяти `C:\Projects\Omnes-agent\data` был слит в основную
   БД (sync-импорт, origin=omnes) и удалён 05.09.2026. В БД факты с origin=omnes.
