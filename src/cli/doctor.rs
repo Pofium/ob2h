@@ -3,10 +3,10 @@
 //! конфигурацию всех AI-агентов (Claude, Cursor, Windsurf, Gemini/Antigravity, Hermes, Qwen, OpenCode),
 //! Git-хуки и пиринги синхронизации. Поддерживает автоматическое исправление (`--fix`).
 
-use std::fs;
-use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use serde_json::Value;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::cli::agent::AgentManager;
 use crate::config::Settings;
@@ -45,7 +45,11 @@ pub struct Doctor {
 
 impl Doctor {
     pub fn new(settings: Settings, fix: bool) -> Self {
-        Self { settings, fix, db: None }
+        Self {
+            settings,
+            fix,
+            db: None,
+        }
     }
 
     /// С доступом к БД: добавляет проверки Ralph (сироты-раны) и счётчиков.
@@ -90,7 +94,11 @@ impl Doctor {
             results.push(DoctorItem {
                 category: "Ralph (циклы разработки)".to_string(),
                 name: "Активные ralph-раны (сироты >7 дней)".to_string(),
-                status: if orphans > 0 { DoctorStatus::Warn } else { DoctorStatus::Ok },
+                status: if orphans > 0 {
+                    DoctorStatus::Warn
+                } else {
+                    DoctorStatus::Ok
+                },
                 details: format!(
                     "сироты: {orphans}; закрыть: ralph_verdict / статус archived через SQL"
                 ),
@@ -118,7 +126,11 @@ impl Doctor {
         results.push(DoctorItem {
             category: "Файловая система".to_string(),
             name: "Каталог данных (OB2H_DATA_DIR)".to_string(),
-            status: if exists { DoctorStatus::Ok } else { DoctorStatus::Error },
+            status: if exists {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Error
+            },
             details: format!("{}", data_dir.display()),
         });
 
@@ -126,7 +138,11 @@ impl Doctor {
         results.push(DoctorItem {
             category: "Файловая система".to_string(),
             name: "Рабочая область (Workspace)".to_string(),
-            status: if workspace.exists() { DoctorStatus::Ok } else { DoctorStatus::Warn },
+            status: if workspace.exists() {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
             details: format!("{}", workspace.display()),
         });
     }
@@ -138,7 +154,10 @@ impl Doctor {
                 category: "База данных SQLite".to_string(),
                 name: "Файл базы данных".to_string(),
                 status: DoctorStatus::Warn,
-                details: format!("Файл {} ещё не создан (будет создан при первом запуске)", db_path.display()),
+                details: format!(
+                    "Файл {} ещё не создан (будет создан при первом запуске)",
+                    db_path.display()
+                ),
             });
             return;
         }
@@ -164,7 +183,11 @@ impl Doctor {
                 results.push(DoctorItem {
                     category: "База данных SQLite".to_string(),
                     name: "Режим журнала WAL".to_string(),
-                    status: if is_wal { DoctorStatus::Ok } else { DoctorStatus::Warn },
+                    status: if is_wal {
+                        DoctorStatus::Ok
+                    } else {
+                        DoctorStatus::Warn
+                    },
                     details: format!("journal_mode = {}", journal_mode),
                 });
 
@@ -176,7 +199,11 @@ impl Doctor {
                 results.push(DoctorItem {
                     category: "База данных SQLite".to_string(),
                     name: "Целостность базы (quick_check)".to_string(),
-                    status: if is_integrity_ok { DoctorStatus::Ok } else { DoctorStatus::Error },
+                    status: if is_integrity_ok {
+                        DoctorStatus::Ok
+                    } else {
+                        DoctorStatus::Error
+                    },
                     details: quick_check,
                 });
 
@@ -189,16 +216,46 @@ impl Doctor {
                 results.push(DoctorItem {
                     category: "База данных SQLite".to_string(),
                     name: "Полнотекстовый поиск FTS5 (Trigram)".to_string(),
-                    status: if fts_check.is_ok() { DoctorStatus::Ok } else { DoctorStatus::Error },
-                    details: if fts_check.is_ok() { "Индекс активен и отвечает на запросы".to_string() } else { "Ошибка FTS5 индекса".to_string() },
+                    status: if fts_check.is_ok() {
+                        DoctorStatus::Ok
+                    } else {
+                        DoctorStatus::Error
+                    },
+                    details: if fts_check.is_ok() {
+                        "Индекс активен и отвечает на запросы".to_string()
+                    } else {
+                        "Ошибка FTS5 индекса".to_string()
+                    },
                 });
 
                 // Счётчики записей
-                let count_mem: i64 = conn.query_row("SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL", [], |r| r.get(0)).unwrap_or(0);
-                let count_nodes: i64 = conn.query_row("SELECT COUNT(*) FROM graph_nodes WHERE deleted_at IS NULL", [], |r| r.get(0)).unwrap_or(0);
-                let count_edges: i64 = conn.query_row("SELECT COUNT(*) FROM graph_edges WHERE deleted_at IS NULL", [], |r| r.get(0)).unwrap_or(0);
-                let count_proj: i64 = conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0)).unwrap_or(0);
-                let count_files: i64 = conn.query_row("SELECT COUNT(*) FROM project_files", [], |r| r.get(0)).unwrap_or(0);
+                let count_mem: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                let count_nodes: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM graph_nodes WHERE deleted_at IS NULL",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                let count_edges: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM graph_edges WHERE deleted_at IS NULL",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                let count_proj: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))
+                    .unwrap_or(0);
+                let count_files: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM project_files", [], |r| r.get(0))
+                    .unwrap_or(0);
 
                 results.push(DoctorItem {
                     category: "База данных SQLite".to_string(),
@@ -233,11 +290,18 @@ impl Doctor {
                 .build()?;
             let vecs = rt.block_on(backend.embed(&["проверка ob2h doctor".to_string()]))?;
             let dim = backend.dim();
-            anyhow::Ok((vecs.into_iter().next(), dim, crate::embedding::active_backend().to_string()))
+            anyhow::Ok((
+                vecs.into_iter().next(),
+                dim,
+                crate::embedding::active_backend().to_string(),
+            ))
         });
         let checked = handle.join().ok().and_then(|r| r.ok());
 
-        let backend_name = checked.as_ref().map(|(_, _, b)| b.as_str()).unwrap_or("unknown");
+        let backend_name = checked
+            .as_ref()
+            .map(|(_, _, b)| b.as_str())
+            .unwrap_or("unknown");
         let (status, details) = match checked {
             Some((Some(vec), dim, backend))
                 if vec.iter().all(|f| f.is_finite()) && !vec.is_empty() =>
@@ -256,7 +320,10 @@ impl Doctor {
                         format!("fake-провайдер включён явно ({dim}d) — векторы являются хэшами"),
                     )
                 } else {
-                    (DoctorStatus::Ok, format!("{} ({}d, канарейка ok)", backend, dim))
+                    (
+                        DoctorStatus::Ok,
+                        format!("{} ({}d, канарейка ok)", backend, dim),
+                    )
                 }
             }
             _ => (
@@ -286,7 +353,11 @@ impl Doctor {
         results.push(DoctorItem {
             category: "AI-Агенты (MCP)".to_string(),
             name: "Claude Code".to_string(),
-            status: if claude_has_ob2h || (self.fix && self.has_mcp_entry(&claude_cfg, "ob2h")) { DoctorStatus::Ok } else { DoctorStatus::Warn },
+            status: if claude_has_ob2h || (self.fix && self.has_mcp_entry(&claude_cfg, "ob2h")) {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
             details: format!("Конфиг: {}", claude_cfg.display()),
         });
 
@@ -299,12 +370,19 @@ impl Doctor {
         results.push(DoctorItem {
             category: "AI-Агенты (MCP)".to_string(),
             name: "Cursor (global)".to_string(),
-            status: if cursor_has_ob2h || (self.fix && self.has_mcp_entry(&cursor_cfg, "ob2h")) { DoctorStatus::Ok } else { DoctorStatus::Warn },
+            status: if cursor_has_ob2h || (self.fix && self.has_mcp_entry(&cursor_cfg, "ob2h")) {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
             details: format!("Конфиг: {}", cursor_cfg.display()),
         });
 
         // 3. Windsurf
-        let windsurf_cfg = home.join(".codeium").join("windsurf").join("mcp_config.json");
+        let windsurf_cfg = home
+            .join(".codeium")
+            .join("windsurf")
+            .join("mcp_config.json");
         let windsurf_has_ob2h = self.has_mcp_entry(&windsurf_cfg, "ob2h");
         if !windsurf_has_ob2h && self.fix {
             let _ = AgentManager::install_windsurf(&exe);
@@ -312,22 +390,46 @@ impl Doctor {
         results.push(DoctorItem {
             category: "AI-Агенты (MCP)".to_string(),
             name: "Windsurf / Cascade".to_string(),
-            status: if windsurf_has_ob2h || (self.fix && self.has_mcp_entry(&windsurf_cfg, "ob2h")) { DoctorStatus::Ok } else { DoctorStatus::Warn },
+            status: if windsurf_has_ob2h || (self.fix && self.has_mcp_entry(&windsurf_cfg, "ob2h"))
+            {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
             details: format!("Конфиг: {}", windsurf_cfg.display()),
         });
 
         // 4. Gemini / Antigravity (проверяем ОБА пути!)
-        let gemini_cfg1 = home.join(".gemini").join("antigravity-ide").join("mcp_config.json");
-        let gemini_cfg2 = home.join(".gemini").join("antigravity").join("mcp_config.json");
-        let gemini_has_ob2h = self.has_mcp_entry(&gemini_cfg1, "ob2h") || self.has_mcp_entry(&gemini_cfg2, "ob2h");
+        let gemini_cfg1 = home
+            .join(".gemini")
+            .join("antigravity-ide")
+            .join("mcp_config.json");
+        let gemini_cfg2 = home
+            .join(".gemini")
+            .join("antigravity")
+            .join("mcp_config.json");
+        let gemini_has_ob2h =
+            self.has_mcp_entry(&gemini_cfg1, "ob2h") || self.has_mcp_entry(&gemini_cfg2, "ob2h");
         if !gemini_has_ob2h && self.fix {
             let _ = AgentManager::install_gemini(&exe);
         }
         results.push(DoctorItem {
             category: "AI-Агенты (MCP)".to_string(),
             name: "Gemini / Antigravity".to_string(),
-            status: if gemini_has_ob2h || (self.fix && (self.has_mcp_entry(&gemini_cfg1, "ob2h") || self.has_mcp_entry(&gemini_cfg2, "ob2h"))) { DoctorStatus::Ok } else { DoctorStatus::Warn },
-            details: format!("Пути: {} / {}", gemini_cfg1.display(), gemini_cfg2.display()),
+            status: if gemini_has_ob2h
+                || (self.fix
+                    && (self.has_mcp_entry(&gemini_cfg1, "ob2h")
+                        || self.has_mcp_entry(&gemini_cfg2, "ob2h")))
+            {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
+            details: format!(
+                "Пути: {} / {}",
+                gemini_cfg1.display(),
+                gemini_cfg2.display()
+            ),
         });
 
         // 5. Hermes
@@ -341,7 +443,11 @@ impl Doctor {
         results.push(DoctorItem {
             category: "AI-Агенты (MCP)".to_string(),
             name: "Hermes Agent".to_string(),
-            status: if hermes_exists { DoctorStatus::Ok } else { DoctorStatus::Warn },
+            status: if hermes_exists {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
             details: if hermes_appdata.exists() {
                 format!("Конфиг найден: {}", hermes_appdata.display())
             } else if hermes_cfg.exists() {
@@ -360,7 +466,11 @@ impl Doctor {
         results.push(DoctorItem {
             category: "AI-Агенты (MCP)".to_string(),
             name: "Qwen Code".to_string(),
-            status: if qwen_has_ob2h || (self.fix && self.has_mcp_entry(&qwen_cfg, "ob2h")) { DoctorStatus::Ok } else { DoctorStatus::Warn },
+            status: if qwen_has_ob2h || (self.fix && self.has_mcp_entry(&qwen_cfg, "ob2h")) {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
             details: format!("Конфиг: {}", qwen_cfg.display()),
         });
 
@@ -373,7 +483,12 @@ impl Doctor {
         results.push(DoctorItem {
             category: "AI-Агенты (MCP)".to_string(),
             name: "OpenCode".to_string(),
-            status: if opencode_has_ob2h || (self.fix && self.has_mcp_entry(&opencode_cfg, "ob2h")) { DoctorStatus::Ok } else { DoctorStatus::Warn },
+            status: if opencode_has_ob2h || (self.fix && self.has_mcp_entry(&opencode_cfg, "ob2h"))
+            {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
             details: format!("Конфиг: {}", opencode_cfg.display()),
         });
     }
@@ -418,8 +533,15 @@ impl Doctor {
                 results.push(DoctorItem {
                     category: "Git Автоматизация".to_string(),
                     name: "Git Hooks в проектах".to_string(),
-                    status: if hooks_installed == checked_projects { DoctorStatus::Ok } else { DoctorStatus::Warn },
-                    details: format!("Установлены в {} из {} зарегистрированных проектов", hooks_installed, checked_projects),
+                    status: if hooks_installed == checked_projects {
+                        DoctorStatus::Ok
+                    } else {
+                        DoctorStatus::Warn
+                    },
+                    details: format!(
+                        "Установлены в {} из {} зарегистрированных проектов",
+                        hooks_installed, checked_projects
+                    ),
                 });
             }
         }
@@ -433,7 +555,11 @@ impl Doctor {
             match fs::read_to_string(&peers_path) {
                 Ok(content) => match serde_json::from_str::<Value>(&content) {
                     Ok(val) => {
-                        let peer_count = val.get("peers").and_then(|p| p.as_object()).map(|o| o.len()).unwrap_or(0);
+                        let peer_count = val
+                            .get("peers")
+                            .and_then(|p| p.as_object())
+                            .map(|o| o.len())
+                            .unwrap_or(0);
                         format!("peers.json валиден, настроено пиров: {peer_count}")
                     }
                     Err(e) => format!("peers.json повреждён: {e}"),
@@ -447,7 +573,11 @@ impl Doctor {
         results.push(DoctorItem {
             category: "Синхронизация PC ↔ VPS".to_string(),
             name: "Конфигурация пирингов".to_string(),
-            status: if exists { DoctorStatus::Ok } else { DoctorStatus::Warn },
+            status: if exists {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
             details,
         });
     }
@@ -472,11 +602,22 @@ impl Doctor {
                 current_cat = &item.category;
                 println!("\n📋 {}", current_cat);
             }
-            println!("  {} {:<32} {}", item.status.symbol(), item.name, item.details);
+            println!(
+                "  {} {:<32} {}",
+                item.status.symbol(),
+                item.name,
+                item.details
+            );
         }
 
-        let errors = items.iter().filter(|i| i.status == DoctorStatus::Error).count();
-        let warns = items.iter().filter(|i| i.status == DoctorStatus::Warn).count();
+        let errors = items
+            .iter()
+            .filter(|i| i.status == DoctorStatus::Error)
+            .count();
+        let warns = items
+            .iter()
+            .filter(|i| i.status == DoctorStatus::Warn)
+            .count();
 
         println!("\n------------------------------------------------------------");
         if errors == 0 && warns == 0 {

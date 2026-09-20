@@ -54,7 +54,10 @@ pub fn collect_pairs(db: &Database) -> anyhow::Result<Vec<GuessPair>> {
                 content: r.get::<_, String>(2)?.chars().take(80).collect(),
                 trust: r.get(3)?,
                 importance: r.get(4)?,
-                vec: r.get::<_, Option<Vec<u8>>>(5)?.as_deref().and_then(deserialize),
+                vec: r
+                    .get::<_, Option<Vec<u8>>>(5)?
+                    .as_deref()
+                    .and_then(deserialize),
             })
         })?;
         Ok(rows.flatten().collect())
@@ -105,7 +108,11 @@ pub fn collect_pairs(db: &Database) -> anyhow::Result<Vec<GuessPair>> {
         }
         let (x, y) = (&rows[a_idx], &rows[o_idx]);
         let canonical = if x.trust != y.trust {
-            if x.trust > y.trust { x } else { y }
+            if x.trust > y.trust {
+                x
+            } else {
+                y
+            }
         } else if x.importance >= y.importance {
             x
         } else {
@@ -119,7 +126,11 @@ pub fn collect_pairs(db: &Database) -> anyhow::Result<Vec<GuessPair>> {
             canonical_key: canonical.key.clone(),
         });
     }
-    pairs.sort_by(|p, q| q.cos.partial_cmp(&p.cos).unwrap_or(std::cmp::Ordering::Equal));
+    pairs.sort_by(|p, q| {
+        q.cos
+            .partial_cmp(&p.cos)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(pairs)
 }
 
@@ -143,7 +154,8 @@ pub fn apply_markers(db: &Database, pairs: &[GuessPair]) -> anyhow::Result<usize
                 )
                 .ok();
             let mut v: serde_json::Value =
-                serde_json::from_str(&meta.unwrap_or_else(|| "{}".into())).unwrap_or(serde_json::json!({}));
+                serde_json::from_str(&meta.unwrap_or_else(|| "{}".into()))
+                    .unwrap_or(serde_json::json!({}));
             if v.get("merge_candidate").and_then(|m| m.as_str()) == Some(other_key) {
                 return Ok(false); // уже помечена той же парой
             }
@@ -182,7 +194,11 @@ pub fn print_report(pairs: &[GuessPair], dry_run: bool) {
             i + 1,
             p.cos,
             p.canonical_key,
-            if p.canonical_key == p.a_key { &p.b_key } else { &p.a_key },
+            if p.canonical_key == p.a_key {
+                &p.b_key
+            } else {
+                &p.a_key
+            },
             if p.identity {
                 "  (identity-дубль: при повторном save — тихий UPDATE, 31.1)"
             } else {
@@ -199,4 +215,3 @@ pub fn print_report(pairs: &[GuessPair], dry_run: bool) {
         );
     }
 }
-

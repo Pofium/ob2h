@@ -1,9 +1,9 @@
 //! Мультиагентный менеджер интеграций (Фаза 14).
 //! Установка и настройка OB2H для: Claude Code, Cursor, Windsurf, ZCode, Gemini CLI / Antigravity, Qwen Code, OpenCode, Hermes.
 
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
 pub enum AgentTarget {
@@ -50,13 +50,27 @@ impl AgentManager {
                 let mut installed = 0;
                 println!("🔍 Автообнаружение установленных AI-агентов в системе...");
 
-                if Self::install_claude(&exe).is_ok() { installed += 1; }
-                if Self::install_cursor(&exe, custom_path).is_ok() { installed += 1; }
-                if Self::install_windsurf(&exe).is_ok() { installed += 1; }
-                if Self::install_zcode(&exe, custom_path).is_ok() { installed += 1; }
-                if Self::install_gemini(&exe).is_ok() { installed += 1; }
-                if Self::install_qwen(&exe).is_ok() { installed += 1; }
-                if Self::install_opencode(&exe).is_ok() { installed += 1; }
+                if Self::install_claude(&exe).is_ok() {
+                    installed += 1;
+                }
+                if Self::install_cursor(&exe, custom_path).is_ok() {
+                    installed += 1;
+                }
+                if Self::install_windsurf(&exe).is_ok() {
+                    installed += 1;
+                }
+                if Self::install_zcode(&exe, custom_path).is_ok() {
+                    installed += 1;
+                }
+                if Self::install_gemini(&exe).is_ok() {
+                    installed += 1;
+                }
+                if Self::install_qwen(&exe).is_ok() {
+                    installed += 1;
+                }
+                if Self::install_opencode(&exe).is_ok() {
+                    installed += 1;
+                }
 
                 println!("✨ Готово! Настроено агентов: {}", installed);
             }
@@ -81,17 +95,37 @@ impl AgentManager {
         println!("📊 Статус подключения AI-агентов к OB2H:\n");
 
         let agents = [
-            ("Claude Code", home.join(".claude").join("skills").join("ob2h").join("SKILL.md")),
+            (
+                "Claude Code",
+                home.join(".claude")
+                    .join("skills")
+                    .join("ob2h")
+                    .join("SKILL.md"),
+            ),
             ("Cursor (global)", home.join(".cursor").join("mcp.json")),
-            ("Windsurf / Cascade", home.join(".codeium").join("windsurf").join("mcp_config.json")),
+            (
+                "Windsurf / Cascade",
+                home.join(".codeium")
+                    .join("windsurf")
+                    .join("mcp_config.json"),
+            ),
             ("ZCode (global)", home.join(".zcode").join("mcp.json")),
-            ("Gemini CLI / Antigravity", home.join(".gemini").join("antigravity-ide").join("mcp_config.json")),
+            (
+                "Gemini CLI / Antigravity",
+                home.join(".gemini")
+                    .join("antigravity-ide")
+                    .join("mcp_config.json"),
+            ),
             ("Qwen Code", home.join(".qwen").join("mcp.json")),
             ("OpenCode", home.join(".opencode").join("mcp.json")),
         ];
 
         for (name, path) in &agents {
-            let status = if path.exists() { "✅ Подключен" } else { "❌ Не найден / не настроен" };
+            let status = if path.exists() {
+                "✅ Подключен"
+            } else {
+                "❌ Не найден / не настроен"
+            };
             println!("- {:<26} [{}] -> {}", name, status, path.display());
         }
 
@@ -135,7 +169,10 @@ description: "Долговременная память, AST-граф кода �
         let cfg_file = claude_cfg_dir.join("config.json");
         Self::upsert_mcp_json(&cfg_file, "ob2h", exe, &["serve"])?;
 
-        println!("✅ Claude Code: скилл и MCP зарегистрированы в {}", skill_file.display());
+        println!(
+            "✅ Claude Code: скилл и MCP зарегистрированы в {}",
+            skill_file.display()
+        );
         Ok(())
     }
 
@@ -156,13 +193,19 @@ description: "Долговременная память, AST-граф кода �
     }
 
     pub fn install_windsurf(exe: &str) -> anyhow::Result<()> {
-        let target_file = Self::home_dir().join(".codeium").join("windsurf").join("mcp_config.json");
+        let target_file = Self::home_dir()
+            .join(".codeium")
+            .join("windsurf")
+            .join("mcp_config.json");
         if let Some(parent) = target_file.parent() {
             fs::create_dir_all(parent)?;
         }
 
         Self::upsert_mcp_json(&target_file, "ob2h", exe, &["serve"])?;
-        println!("✅ Windsurf: MCP зарегистрирован в {}", target_file.display());
+        println!(
+            "✅ Windsurf: MCP зарегистрирован в {}",
+            target_file.display()
+        );
         Ok(())
     }
 
@@ -184,8 +227,14 @@ description: "Долговременная память, AST-граф кода �
 
     pub fn install_gemini(exe: &str) -> anyhow::Result<()> {
         let home = Self::home_dir();
-        let target_file1 = home.join(".gemini").join("antigravity-ide").join("mcp_config.json");
-        let target_file2 = home.join(".gemini").join("antigravity").join("mcp_config.json");
+        let target_file1 = home
+            .join(".gemini")
+            .join("antigravity-ide")
+            .join("mcp_config.json");
+        let target_file2 = home
+            .join(".gemini")
+            .join("antigravity")
+            .join("mcp_config.json");
 
         if let Some(parent) = target_file1.parent() {
             fs::create_dir_all(parent)?;
@@ -197,7 +246,10 @@ description: "Долговременная память, AST-граф кода �
             let _ = Self::upsert_mcp_json(&target_file2, "ob2h", exe, &["serve"]);
         }
 
-        println!("✅ Gemini / Antigravity: MCP зарегистрирован в {}", target_file1.display());
+        println!(
+            "✅ Gemini / Antigravity: MCP зарегистрирован в {}",
+            target_file1.display()
+        );
         Ok(())
     }
 
@@ -208,7 +260,10 @@ description: "Долговременная память, AST-граф кода �
         }
 
         Self::upsert_mcp_json(&target_file, "ob2h", exe, &["serve"])?;
-        println!("✅ Qwen Code: MCP зарегистрирован в {}", target_file.display());
+        println!(
+            "✅ Qwen Code: MCP зарегистрирован в {}",
+            target_file.display()
+        );
         Ok(())
     }
 
@@ -219,12 +274,20 @@ description: "Долговременная память, AST-граф кода �
         }
 
         Self::upsert_mcp_json(&target_file, "ob2h", exe, &["serve"])?;
-        println!("✅ OpenCode: MCP зарегистрирован в {}", target_file.display());
+        println!(
+            "✅ OpenCode: MCP зарегистрирован в {}",
+            target_file.display()
+        );
         Ok(())
     }
 
     /// Вспомогательный метод для обновления JSON файла конфигурации MCP.
-    pub fn upsert_mcp_json(file_path: &Path, server_name: &str, command: &str, args: &[&str]) -> anyhow::Result<()> {
+    pub fn upsert_mcp_json(
+        file_path: &Path,
+        server_name: &str,
+        command: &str,
+        args: &[&str],
+    ) -> anyhow::Result<()> {
         let mut json_val: serde_json::Value = if file_path.exists() {
             let content = fs::read_to_string(file_path).unwrap_or_else(|_| "{}".to_string());
             serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))

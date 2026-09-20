@@ -132,7 +132,7 @@ impl RalphService {
         git_after: Option<&str>,
         findings: Option<&serde_json::Value>,
     ) -> anyhow::Result<IterationOutcome> {
-        let (project_id, feature_slug): (String, String) = self
+        let (project_id, _feature_slug): (String, String) = self
             .db
             .with_conn(|conn| {
                 conn.query_row(
@@ -169,10 +169,10 @@ impl RalphService {
                     now
                 ],
             )?;
-            Ok(conn.execute(
+            conn.execute(
                 "UPDATE ralph_runs SET status = 'verifying', updated_at = ?2 WHERE id = ?1",
                 params![run_id, utcnow()],
-            )?)
+            )
         })?;
         if inserted == 0 {
             anyhow::bail!("run не найден");

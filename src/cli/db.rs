@@ -6,8 +6,11 @@ use crate::mcp::AppContext;
 use crate::vector::{deserialize_f32, serialize_q};
 
 /// Таблицы с эмбеддингами: (таблица, колонка).
-const EMBED_TABLES: [(&str, &str); 3] =
-    [("graph_nodes", "embedding"), ("memories", "embedding"), ("chunks", "embedding")];
+const EMBED_TABLES: [(&str, &str); 3] = [
+    ("graph_nodes", "embedding"),
+    ("memories", "embedding"),
+    ("chunks", "embedding"),
+];
 
 /// Ф24: разовое int8-квантование эмбеддингов (f32 legacy → v2).
 /// Легаси определяется по кратности длины 4; v2 (magic 0x01, длина dim+5) не трогается.
@@ -77,7 +80,12 @@ pub fn run_quantize(ctx: &AppContext, dry_run: bool) -> anyhow::Result<()> {
     }
 
     ctx.db.with_conn(|conn| conn.execute_batch("VACUUM;"))?;
-    let size = std::fs::metadata(ctx.settings.db_path()).map(|m| m.len()).unwrap_or(0);
-    println!("VACUUM выполнен; размер БД: {:.1} МБ", size as f64 / 1024.0 / 1024.0);
+    let size = std::fs::metadata(ctx.settings.db_path())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    println!(
+        "VACUUM выполнен; размер БД: {:.1} МБ",
+        size as f64 / 1024.0 / 1024.0
+    );
     Ok(())
 }

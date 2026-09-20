@@ -208,7 +208,7 @@ impl Dream {
                  FROM memories WHERE deleted_at IS NULL AND key = ?1 LIMIT 1",
             )?;
             let mut rows = stmt.query(params![key])?;
-            Ok(rows.next()?.map(row_candidate).transpose()?)
+            rows.next()?.map(row_candidate).transpose()
         })
     }
 
@@ -318,9 +318,9 @@ impl Dream {
                 .save(&digest_text, Some(&key), "digest", 0.3, "dream", None)
                 .await?;
             let digest_id: i64 = self.db.with_conn(|conn| {
-                Ok(conn.query_row("SELECT id FROM memories WHERE key = ?1", params![digest_key], |r| {
+                conn.query_row("SELECT id FROM memories WHERE key = ?1", params![digest_key], |r| {
                     r.get(0)
-                })?)
+                })
             })?;
             for m in members {
                 self.insert_edge(digest_id, m.id, "summary")?;
@@ -401,7 +401,7 @@ fn similar(a: &Candidate, b: &Candidate, vectors: &HashMap<i64, Option<Vec<f32>>
 }
 
 fn tokens(s: &str) -> HashSet<&str> {
-    s.split(|c: char| c == '-' || c == '/' || c == '_').collect()
+    s.split(['-', '/', '_']).collect()
 }
 
 fn jaccard(a: &str, b: &str) -> f64 {

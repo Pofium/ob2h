@@ -1,9 +1,9 @@
 //! Управление Git-хуками для проектов (post-commit, post-merge, post-checkout).
 //! Обеспечивает автоматическое инкрементальное обновление графа при фиксации изменений.
 
+use anyhow::{bail, Context, Result};
 use std::fs;
 use std::path::Path;
-use anyhow::{bail, Context, Result};
 use tracing::info;
 
 /// Содержимое скрипта post-commit хука

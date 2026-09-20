@@ -29,7 +29,7 @@ pub fn serialize_q(vec: &[f32]) -> Vec<u8> {
 
 /// Десериализация легаси f32 BLOB.
 pub fn deserialize_f32(blob: &[u8]) -> Option<Vec<f32>> {
-    if blob.is_empty() || blob.len() % std::mem::size_of::<f32>() != 0 {
+    if blob.is_empty() || !blob.len().is_multiple_of(std::mem::size_of::<f32>()) {
         return None;
     }
     match try_cast_slice(blob) {

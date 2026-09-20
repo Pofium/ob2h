@@ -234,7 +234,7 @@ impl MemoryService {
                          FROM memories WHERE key = ?1 AND deleted_at IS NULL LIMIT 1",
                     )?;
                     let mut it = stmt.query(params![k])?;
-                    Ok(it
+                    it
                         .next()?
                         .map(|r| -> rusqlite::Result<MergeRow> {
                             Ok(MergeRow {
@@ -246,7 +246,7 @@ impl MemoryService {
                                 trust: r.get(5)?,
                             })
                         })
-                        .transpose()?)
+                        .transpose()
                 },
             )?;
             match row {
@@ -1207,9 +1207,7 @@ impl MemoryService {
                 "SELECT COUNT(*) FROM memories WHERE deleted_at IS NULL",
                 [],
                 |r| r.get(0),
-            )
-            .map_err(Into::into)
-        })?;
+            )})?;
 
         let ranked = self.ppr_rank(&seeds, weights, damping, max_nodes, Some(query))?;
         let mut records: Vec<(MemoryRecord, f64)> = Vec::new();

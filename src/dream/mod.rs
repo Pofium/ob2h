@@ -369,14 +369,14 @@ impl Dream {
                         continue;
                     }
 
-                    let content = self.workspace.read_file(&file)?;
+                    let content = self.workspace.read_file(file)?;
                     if !content.contains(&old_str) {
                         last_error = format!("фрагмент не найден в {file}.md (проверь дословно)");
                         continue;
                     }
 
                     let updated = content.replacen(&old_str, &new_str, 1);
-                    self.workspace.write_file(&file, &updated)?;
+                    self.workspace.write_file(file, &updated)?;
                     context_files.insert(file.clone(), updated);
                     applied.push(serde_json::json!({
                         "file": file,
