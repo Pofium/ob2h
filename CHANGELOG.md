@@ -3,6 +3,46 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [Unreleased]
+
+### Added
+- **AST-скан: ещё пять языков — Vue/Svelte, Scala, Lua, Elixir, Shell/Bash**
+  (итого 18 расширений сверх базовых восьми). Vue/Svelte: `<script>`-блоки SFC
+  переиспользуют `parse_ts_js` (новый параметр `line_offset` — номера строк
+  символов считаются относительно всего файла, а не фрагмента; `parse_sfc`).
+  Scala: imports, class/object/trait (+case-модификаторы), `extends X with A, B`
+  (первая база → INHERITS, примешанные трейты → IMPLEMENTS, срез
+  конструктор-аргументов и `[T]`-дженериков), функции. Lua: require (в т.ч.
+  `local x = require("mod")`), функции `name`/`M.name`/`M:name`/`local function`.
+  Elixir: alias/import/use/require → IMPORTS, defmodule → Module, defprotocol →
+  Interface, def/defp/defmacro/defmacrop (defdelegate/defstruct и пр. не матчатся).
+  Shell: source/. → IMPORTS (переменные `source "$f"` не резолвятся), функции в
+  обеих формах — POSIX `name() {` и `function name`. Расширения vue/svelte/scala/
+  lua/ex/exs/sh/bash добавлены в фильтры collect_files и вотчера. tech_stack-автодетект:
+  vue/svelte — по зависимостям package.json, scala — build.sbt, elixir — mix.exs
+  (для lua/shell маркеров не добавлено — слабые/шумные). +5 тестов (16 всего).
+- **AST-скан: пять новых языков — C#, C/C++, Kotlin, Swift, Ruby** (детерминированные
+  регэксп-парсеры в `src/project/ast.rs`, в стиле PHP/Dart/Java). C#: usings,
+  class/record/struct/enum (первая база → INHERITS, остальные → IMPLEMENTS),
+  interface, методы с модификаторами. C/C++: `#include`, class/struct (срез
+  access-спецификаторов в базах), определения функций/методов с телом `{`
+  (включая квалифицированные `Type::method` и списки инициализации) — расширения
+  `c/cpp/cc/cxx/h/hpp/hxx` раньше собирались обходчиком, но молча не парсились
+  (в `parse_file` не было ветки). Kotlin: imports (с алиасами `as`), class/object/
+  interface, функции (включая extension-функции), базы с срезом конструктор-аргументов
+  `Base(x, y)` (`strip_paren_groups`). Swift: imports (с `@testable`/typed-формами),
+  class/struct/enum/extension (raw-value типы enum не порождают фиктивных
+  IMPLEMENTS-рёбер), protocol → Interface, init. Ruby: require/require_relative,
+  классы с наследованием `<`, модули, методы (`self.`, суффиксы `?`/`!`). Фильтры
+  расширений синхронизированы в `collect_files` (ast.rs) и вотчере (watcher.rs);
+  авто-детект tech_stack пополнился маркерами `*.csproj|*.sln` (csharp),
+  `build.gradle.kts` (kotlin), `Package.swift` (swift), `Gemfile` (ruby),
+  `CMakeLists.txt|Makefile` (cpp). +5 тестов в `tests/test_ast_extractor.rs`.
+- **Синхронный порт в omnesagent-kag (Omnes-agent)**: все десять языков
+  перенесены в `backend/crates/omnesagent-kag/src/ast/mod.rs` (плюс watcher.rs и
+  новые `tests/test_ast_extractor.rs`) — там жил тот же парсер в состоянии до
+  C#/C/C++/Kotlin/Swift/Ruby, включая ту же дыру с не парсившимися C/C++.
+
 ## [1.5.0] — 2026-09-18
 
 ### Added

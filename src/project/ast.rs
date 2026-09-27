@@ -1,4 +1,5 @@
-//! Высокопроизводительный статический AST/код-парсер репозиториев (Rust, Python, TS/JS, Go, SQL, C/C++).
+//! Высокопроизводительный статический AST/код-парсер репозиториев (Rust, Python, TS/JS, Go, SQL,
+//! PHP, Dart, Java, C#, C/C++, Kotlin, Swift, Ruby).
 //! Работает полностью детерминированно и локально, без вызовов LLM и без расхода токенов.
 
 use regex::Regex;
@@ -130,6 +131,51 @@ pub struct AstCodeExtractor {
     java_class_re: Regex,
     java_interface_re: Regex,
     java_fn_re: Regex,
+
+    cs_using_re: Regex,
+    cs_type_re: Regex,
+    cs_interface_re: Regex,
+    cs_fn_re: Regex,
+
+    cpp_include_re: Regex,
+    cpp_class_re: Regex,
+    cpp_struct_re: Regex,
+    cpp_fn_re: Regex,
+
+    kt_import_re: Regex,
+    kt_class_re: Regex,
+    kt_interface_re: Regex,
+    kt_fn_re: Regex,
+
+    sw_import_re: Regex,
+    sw_class_re: Regex,
+    sw_protocol_re: Regex,
+    sw_fn_re: Regex,
+    sw_init_re: Regex,
+
+    rb_require_re: Regex,
+    rb_module_re: Regex,
+    rb_class_re: Regex,
+    rb_fn_re: Regex,
+
+    /// Vue/Svelte SFC: `<script>`-блок (тело переиспользует parse_ts_js).
+    sfc_script_re: Regex,
+
+    scala_import_re: Regex,
+    scala_type_re: Regex,
+    scala_fn_re: Regex,
+
+    lua_require_re: Regex,
+    lua_fn_re: Regex,
+
+    ex_module_re: Regex,
+    ex_protocol_re: Regex,
+    ex_fn_re: Regex,
+    ex_alias_re: Regex,
+
+    sh_fn_paren_re: Regex,
+    sh_fn_kw_re: Regex,
+    sh_source_re: Regex,
 }
 
 impl Default for AstCodeExtractor {
@@ -195,6 +241,60 @@ impl AstCodeExtractor {
             java_class_re: Regex::new(r"(?m)^\s*(?:(?:public|protected|private|static|final|abstract|sealed|non-sealed)\s+)*(?:class|enum|record)\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s+extends\s+([a-zA-Z0-9_.]+)(?:<[^>]+>)?)?(?:\s+implements\s+([a-zA-Z0-9_.,\s]+))?").unwrap(),
             java_interface_re: Regex::new(r"(?m)^\s*(?:(?:public|protected|private|static|sealed|non-sealed)\s+)*interface\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s+extends\s+([a-zA-Z0-9_.,\s]+))?").unwrap(),
             java_fn_re: Regex::new(r"(?m)^\s*(?:(?:public|protected|private|static|final|abstract|synchronized|native|default)\s+)+(?:<[^>]+>\s+)?([a-zA-Z0-9_<>\[\]]+)\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)").unwrap(),
+
+            // C# patterns
+            cs_using_re: Regex::new(r#"(?m)^\s*using\s+(?:static\s+)?([a-zA-Z0-9_.]+)\s*(?:=[^;]*)?;"#).unwrap(),
+            cs_type_re: Regex::new(r"(?m)^\s*(?:(?:public|private|protected|internal|static|sealed|abstract|partial|readonly|ref|file)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum)\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s*:\s*([^{;]+))?").unwrap(),
+            cs_interface_re: Regex::new(r"(?m)^\s*(?:(?:public|private|protected|internal|file)\s+)*interface\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s*:\s*([^{;]+))?").unwrap(),
+            cs_fn_re: Regex::new(r"(?m)^\s*(?:(?:public|private|protected|internal|static|virtual|override|sealed|abstract|async|extern|unsafe|new|partial|required)\s+)+(?:<[^>]+>\s+)?([a-zA-Z0-9_<>\[\]?,]+)\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)").unwrap(),
+
+            // C/C++ patterns
+            cpp_include_re: Regex::new(r#"(?m)^\s*#\s*include\s+[<"]([^">]+)[">]"#).unwrap(),
+            cpp_class_re: Regex::new(r"(?m)^\s*(?:template\s*<[^>]*>\s*)?class\s+([a-zA-Z0-9_]+)(?:\s*:\s*([^{;]+))?").unwrap(),
+            cpp_struct_re: Regex::new(r"(?m)^\s*(?:template\s*<[^>]*>\s*)?struct\s+([a-zA-Z0-9_]+)(?:\s*:\s*([^{;]+))?").unwrap(),
+            cpp_fn_re: Regex::new(r"(?m)^\s*(?:[a-zA-Z_][a-zA-Z0-9_:<>,\*&\s]*?\s+)?(?:[a-zA-Z_][a-zA-Z0-9_]*::)*([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^;{]*\)\s*(?:const\s*)?(?:noexcept\s*)?(?:\s*:\s*[a-zA-Z0-9_:<>,\s&\*\(\)]+)?\{").unwrap(),
+
+            // Kotlin patterns
+            kt_import_re: Regex::new(r"(?m)^\s*import\s+([a-zA-Z0-9_.]+)(?:\s+as\s+([a-zA-Z0-9_]+))?").unwrap(),
+            kt_class_re: Regex::new(r"(?m)^\s*(?:(?:public|private|protected|internal|open|final|abstract|sealed|data|value|inner|enum|annotation|fun)\s+)*(?:class|object)\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\([^)]*\))?(?:\s*:\s*([^{]+))?").unwrap(),
+            kt_interface_re: Regex::new(r"(?m)^\s*(?:(?:public|private|protected|internal|fun)\s+)*interface\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s*:\s*([^{]+))?").unwrap(),
+            kt_fn_re: Regex::new(r"(?m)^\s*(?:(?:public|private|protected|internal|open|override|final|abstract|suspend|inline|operator|infix|external|tailrec|expect|actual|const)\s+)*fun\s+(?:<[^>]+>\s+)?(?:[a-zA-Z_][a-zA-Z0-9_]*\.)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(").unwrap(),
+
+            // Swift patterns
+            sw_import_re: Regex::new(r"(?m)^\s*(?:@testable\s+|@_exported\s+)?import\s+(?:class\s+|struct\s+|enum\s+|protocol\s+|func\s+|var\s+|let\s+|typealias\s+|extension\s+)?([a-zA-Z0-9_.]+)").unwrap(),
+            sw_class_re: Regex::new(r"(?m)^\s*(?:(?:public|private|fileprivate|internal|open|final|@objc|@objcMembers|indirect|frozen)\s+)*(class|struct|enum|extension)\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s*:\s*([^{]+))?").unwrap(),
+            sw_protocol_re: Regex::new(r"(?m)^\s*(?:(?:public|private|fileprivate|internal|open)\s+)*protocol\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s*:\s*([^{]+))?").unwrap(),
+            sw_fn_re: Regex::new(r"(?m)^\s*(?:(?:public|private|fileprivate|internal|open|static|class|final|override|mutating|nonmutating|@discardableResult|required|convenience|@objc)\s+)*func\s+(?:<[^>]+>\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:<[^>]+>)?\(").unwrap(),
+            sw_init_re: Regex::new(r"(?m)^\s*(?:(?:public|private|fileprivate|internal|open|override|required|convenience)\s+)*init(?:\?|!)?\s*(?:<[^>]+>)?\(").unwrap(),
+
+            // Ruby patterns
+            rb_require_re: Regex::new(r#"(?m)^\s*(?:require|require_relative)\s+['"]([^'"]+)['"]"#).unwrap(),
+            rb_module_re: Regex::new(r"(?m)^\s*module\s+([A-Z][a-zA-Z0-9_]*)").unwrap(),
+            rb_class_re: Regex::new(r"(?m)^\s*class\s+([A-Z][a-zA-Z0-9_]*(?:::[A-Z][a-zA-Z0-9_]*)*)\s*(?:<\s*([A-Za-z0-9_:.]+))?").unwrap(),
+            rb_fn_re: Regex::new(r"(?m)^\s*def\s+(?:self\.)?([a-zA-Z_][a-zA-Z0-9_]*[?!]?)").unwrap(),
+
+            // Vue/Svelte SFC (script-блоки прогоняются через parse_ts_js)
+            sfc_script_re: Regex::new(r"(?is)<script[^>]*>(.*?)</script>").unwrap(),
+
+            // Scala patterns
+            scala_import_re: Regex::new(r"(?m)^\s*import\s+([a-zA-Z0-9_.{}]+)").unwrap(),
+            scala_type_re: Regex::new(r"(?m)^\s*(?:(?:abstract|final|sealed|case|implicit|private|protected)\s+)*(class|object|trait)\s+([a-zA-Z0-9_]+)(?:<[^>]+>)?(?:\s*\([^)]*\))?(?:\s+extends\s+([^{]+))?").unwrap(),
+            scala_fn_re: Regex::new(r"(?m)^\s*(?:(?:override|final|abstract|private|protected|implicit|lazy|inline)\s+)*def\s+([a-zA-Z0-9_]+)").unwrap(),
+
+            // Lua patterns
+            lua_require_re: Regex::new(r#"(?m)^\s*(?:local\s+[a-zA-Z0-9_.]+\s*=\s*)?require\s*\(?["']([^"']+)["']"#).unwrap(),
+            lua_fn_re: Regex::new(r"(?m)^\s*(?:local\s+)?function\s+(?:[a-zA-Z0-9_]+[.:])*([a-zA-Z0-9_]+)\s*\(").unwrap(),
+
+            // Elixir patterns
+            ex_module_re: Regex::new(r"(?m)^\s*defmodule\s+([A-Za-z0-9_.]+)\s+do").unwrap(),
+            ex_protocol_re: Regex::new(r"(?m)^\s*defprotocol\s+([A-Za-z0-9_.]+)\s+do").unwrap(),
+            ex_fn_re: Regex::new(r"(?m)^\s*def(?:macro)?p?\s+([a-zA-Z0-9_]+[!?]?)").unwrap(),
+            ex_alias_re: Regex::new(r"(?m)^\s*(?:alias|import|use|require)\s+([A-Za-z0-9_.{}]+)").unwrap(),
+
+            // Shell patterns
+            sh_fn_paren_re: Regex::new(r"(?m)^\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*\(\s*\)\s*\{?").unwrap(),
+            sh_fn_kw_re: Regex::new(r"(?m)^\s*function\s+([a-zA-Z_][a-zA-Z0-9_-]*)").unwrap(),
+            sh_source_re: Regex::new(r#"(?m)^\s*(?:source|\.)\s+([^"'`\s;|&]+)"#).unwrap(),
         }
     }
 
@@ -288,11 +388,27 @@ impl AstCodeExtractor {
                             | "sql"
                             | "c"
                             | "cpp"
+                            | "cc"
+                            | "cxx"
                             | "h"
                             | "hpp"
+                            | "hxx"
                             | "php"
                             | "dart"
                             | "java"
+                            | "cs"
+                            | "kt"
+                            | "kts"
+                            | "swift"
+                            | "rb"
+                            | "vue"
+                            | "svelte"
+                            | "scala"
+                            | "lua"
+                            | "ex"
+                            | "exs"
+                            | "sh"
+                            | "bash"
                     ) {
                         if let Ok(rel) = path.strip_prefix(root) {
                             let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -337,12 +453,26 @@ impl AstCodeExtractor {
         match ext.as_str() {
             "rs" => self.parse_rust(rel_path, &file_node_id, content, out),
             "py" => self.parse_python(rel_path, &file_node_id, content, out),
-            "ts" | "tsx" | "js" | "jsx" => self.parse_ts_js(rel_path, &file_node_id, content, out),
+            "ts" | "tsx" | "js" | "jsx" => {
+                self.parse_ts_js(rel_path, &file_node_id, content, 0, out)
+            }
             "go" => self.parse_go(rel_path, &file_node_id, content, out),
             "sql" => self.parse_sql(rel_path, &file_node_id, content, out),
             "php" => self.parse_php(rel_path, &file_node_id, content, out),
             "dart" => self.parse_dart(rel_path, &file_node_id, content, out),
             "java" => self.parse_java(rel_path, &file_node_id, content, out),
+            "cs" => self.parse_csharp(rel_path, &file_node_id, content, out),
+            "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "hxx" => {
+                self.parse_c_cpp(rel_path, &file_node_id, content, out)
+            }
+            "kt" | "kts" => self.parse_kotlin(rel_path, &file_node_id, content, out),
+            "swift" => self.parse_swift(rel_path, &file_node_id, content, out),
+            "rb" => self.parse_ruby(rel_path, &file_node_id, content, out),
+            "vue" | "svelte" => self.parse_sfc(rel_path, &file_node_id, content, out),
+            "scala" => self.parse_scala(rel_path, &file_node_id, content, out),
+            "lua" => self.parse_lua(rel_path, &file_node_id, content, out),
+            "ex" | "exs" => self.parse_elixir(rel_path, &file_node_id, content, out),
+            "sh" | "bash" => self.parse_shell(rel_path, &file_node_id, content, out),
             _ => {}
         }
     }
@@ -698,6 +828,7 @@ impl AstCodeExtractor {
         rel_path: &str,
         file_node_id: &str,
         content: &str,
+        line_offset: usize,
         out: &mut AstScanResult,
     ) {
         let lines: Vec<&str> = content.lines().collect();
@@ -729,7 +860,7 @@ impl AstCodeExtractor {
                         node_type: "Class".to_string(),
                         description: format!("TypeScript/JS класс `{}` в {}", class_name, rel_path),
                         file_path: rel_path.to_string(),
-                        line_start: i + 1,
+                        line_start: i + 1 + line_offset,
                         line_end: i + 1,
                     });
                     out.edges.push(AstEdge {
@@ -751,7 +882,7 @@ impl AstCodeExtractor {
                         node_type: "Interface".to_string(),
                         description: format!("Интерфейс/тип `{}` в {}", iface_name, rel_path),
                         file_path: rel_path.to_string(),
-                        line_start: i + 1,
+                        line_start: i + 1 + line_offset,
                         line_end: i + 1,
                     });
                     out.edges.push(AstEdge {
@@ -782,7 +913,7 @@ impl AstCodeExtractor {
                         node_type: "Function".to_string(),
                         description: format!("Функция `{}` в {}", fn_name, rel_path),
                         file_path: rel_path.to_string(),
-                        line_start: i + 1,
+                        line_start: i + 1 + line_offset,
                         line_end: i + 1,
                     });
                     out.edges.push(AstEdge {
@@ -1405,7 +1536,1128 @@ impl AstCodeExtractor {
             }
         }
     }
+
+    fn parse_csharp(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. Usings
+        for cap in self.cs_using_re.captures_iter(content) {
+            if let Some(imp) = cap.get(1) {
+                let ns = imp.as_str();
+                if ns == "var" {
+                    continue; // `using var x = ...` — disposable, не импорт
+                }
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", ns),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("using {};", ns),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. Типы (class/record/struct/enum) и интерфейсы
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.cs_type_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let type_name = name_match.as_str();
+                    let node_id = format!("class:{}:{}", rel_path, type_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: type_name.to_string(),
+                        node_type: "Class".to_string(),
+                        description: format!("C# класс/тип `{}` в {}", type_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+
+                    // Базовый тип и интерфейсы: первый — наследование, остальные — реализации
+                    if let Some(bases_match) = cap.get(2) {
+                        for (idx, base) in bases_match.as_str().split(',').enumerate() {
+                            let base_clean = base.trim();
+                            let base_clean = match base_clean.find(" where") {
+                                Some(p) => &base_clean[..p], // обрезаем generic-контрейны
+                                None => base_clean,
+                            };
+                            if base_clean.is_empty() {
+                                continue;
+                            }
+                            let (target, label) = if idx == 0 {
+                                (format!("class:{}", base_clean), "INHERITS")
+                            } else {
+                                (format!("interface:{}", base_clean), "IMPLEMENTS")
+                            };
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: target,
+                                label: label.to_string(),
+                                weight: 1.0,
+                                context: format!(": {}", base_clean),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+            } else if let Some(cap) = self.cs_interface_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let iface_name = name_match.as_str();
+                    let node_id = format!("interface:{}:{}", rel_path, iface_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: iface_name.to_string(),
+                        node_type: "Interface".to_string(),
+                        description: format!("C# интерфейс `{}` в {}", iface_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+
+                    if let Some(bases_match) = cap.get(2) {
+                        for base in bases_match.as_str().split(',') {
+                            let base_clean = base.trim();
+                            if base_clean.is_empty() {
+                                continue;
+                            }
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: format!("interface:{}", base_clean),
+                                label: "INHERITS".to_string(),
+                                weight: 1.0,
+                                context: format!(": {}", base_clean),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Методы
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.cs_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(2) {
+                    let fn_name = fn_match.as_str();
+                    if matches!(fn_name, "if" | "for" | "while" | "switch" | "catch") {
+                        continue;
+                    }
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("C# метод `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn parse_c_cpp(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. #include
+        for cap in self.cpp_include_re.captures_iter(content) {
+            if let Some(inc) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", inc.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("#include {}", inc.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. Классы и структуры
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.cpp_class_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let class_name = name_match.as_str();
+                    let node_id = format!("class:{}:{}", rel_path, class_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: class_name.to_string(),
+                        node_type: "Class".to_string(),
+                        description: format!("C++ класс `{}` в {}", class_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+
+                    if let Some(bases_match) = cap.get(2) {
+                        for base in bases_match.as_str().split(',') {
+                            let base_clean = base
+                                .trim()
+                                .trim_start_matches("public ")
+                                .trim_start_matches("protected ")
+                                .trim_start_matches("private ")
+                                .trim_start_matches("virtual ")
+                                .trim();
+                            if base_clean.is_empty() {
+                                continue;
+                            }
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: format!("class:{}", base_clean),
+                                label: "INHERITS".to_string(),
+                                weight: 1.0,
+                                context: format!(": {}", base_clean),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+            } else if let Some(cap) = self.cpp_struct_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let struct_name = name_match.as_str();
+                    let node_id = format!("struct:{}:{}", rel_path, struct_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: struct_name.to_string(),
+                        node_type: "Struct".to_string(),
+                        description: format!("C++ структура `{}` в {}", struct_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+
+        // 3. Функции и методы (только определения с телом `{`)
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.cpp_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(1) {
+                    let fn_name = fn_match.as_str();
+                    if matches!(
+                        fn_name,
+                        "if" | "for"
+                            | "while"
+                            | "switch"
+                            | "catch"
+                            | "return"
+                            | "else"
+                            | "do"
+                            | "sizeof"
+                            | "throw"
+                    ) {
+                        continue;
+                    }
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("C++ функция/метод `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn parse_kotlin(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. Imports
+        for cap in self.kt_import_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", m.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("import {}", m.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. Классы/объекты и интерфейсы
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.kt_class_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let class_name = name_match.as_str();
+                    let node_id = format!("class:{}:{}", rel_path, class_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: class_name.to_string(),
+                        node_type: "Class".to_string(),
+                        description: format!("Kotlin класс/объект `{}` в {}", class_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+
+                    // База после `:`: первый — суперкласс, остальные — интерфейсы
+                    if let Some(bases_match) = cap.get(2) {
+                        let cleaned = strip_paren_groups(bases_match.as_str());
+                        for (idx, base) in cleaned.split(',').enumerate() {
+                            let base_clean = match base.trim().find('<') {
+                                Some(p) => &base.trim()[..p],
+                                None => base.trim(),
+                            };
+                            if base_clean.is_empty() {
+                                continue;
+                            }
+                            let (target, label) = if idx == 0 {
+                                (format!("class:{}", base_clean), "INHERITS")
+                            } else {
+                                (format!("interface:{}", base_clean), "IMPLEMENTS")
+                            };
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: target,
+                                label: label.to_string(),
+                                weight: 1.0,
+                                context: format!(": {}", base_clean),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+            } else if let Some(cap) = self.kt_interface_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let iface_name = name_match.as_str();
+                    let node_id = format!("interface:{}:{}", rel_path, iface_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: iface_name.to_string(),
+                        node_type: "Interface".to_string(),
+                        description: format!("Kotlin интерфейс `{}` в {}", iface_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+
+                    if let Some(bases_match) = cap.get(2) {
+                        for base in bases_match.as_str().split(',') {
+                            let base_clean = base.trim();
+                            if base_clean.is_empty() {
+                                continue;
+                            }
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: format!("interface:{}", base_clean),
+                                label: "INHERITS".to_string(),
+                                weight: 1.0,
+                                context: format!(": {}", base_clean),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Функции (включая extension-функции — берём последний сегмент)
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.kt_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(1) {
+                    let fn_name = fn_match.as_str();
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("Kotlin функция `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn parse_swift(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+        // Raw-value типы enum — не протоколы, рёбра соответствия для них не выдумываем
+        const SWIFT_RAW_TYPES: &[&str] = &[
+            "String", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
+            "UInt32", "UInt64", "Double", "Float", "Bool", "Character", "Decimal",
+        ];
+
+        // 1. Imports
+        for cap in self.sw_import_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", m.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("import {}", m.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. Типы (class/struct/enum/extension) и протоколы
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.sw_class_re.captures(line) {
+                let kind = cap.get(1).map(|m| m.as_str()).unwrap_or("class");
+                if let Some(name_match) = cap.get(2) {
+                    let type_name = name_match.as_str();
+                    let node_id = if kind == "extension" {
+                        format!("extension:{}:{}", rel_path, type_name)
+                    } else {
+                        format!("class:{}:{}", rel_path, type_name)
+                    };
+                    let description = match kind {
+                        "extension" => format!("Swift расширение `{}` в {}", type_name, rel_path),
+                        "struct" => format!("Swift структура `{}` в {}", type_name, rel_path),
+                        "enum" => format!("Swift перечисление `{}` в {}", type_name, rel_path),
+                        _ => format!("Swift класс `{}` в {}", type_name, rel_path),
+                    };
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: type_name.to_string(),
+                        node_type: "Class".to_string(),
+                        description,
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+
+                    // Только классы наследуются; struct/enum/extension — соответствие протоколам
+                    if let Some(bases_match) = cap.get(3) {
+                        for (idx, part) in bases_match.as_str().split(',').enumerate() {
+                            for token in part.split('&') {
+                                let token_trimmed = token.trim();
+                                let base_clean = match token_trimmed.find('<') {
+                                    Some(p) => &token_trimmed[..p],
+                                    None => token_trimmed,
+                                };
+                                if base_clean.is_empty() {
+                                    continue;
+                                }
+                                if kind == "enum" && SWIFT_RAW_TYPES.contains(&base_clean) {
+                                    continue; // raw value, не протокол
+                                }
+                                let (target, label) = if kind == "class" && idx == 0 {
+                                    (format!("class:{}", base_clean), "INHERITS")
+                                } else {
+                                    (format!("interface:{}", base_clean), "IMPLEMENTS")
+                                };
+                                out.edges.push(AstEdge {
+                                    source_node_id: node_id.clone(),
+                                    target_node_id: target,
+                                    label: label.to_string(),
+                                    weight: 1.0,
+                                    context: format!(": {}", base_clean),
+                                    provenance: "EXTRACTED".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            } else if let Some(cap) = self.sw_protocol_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let proto_name = name_match.as_str();
+                    let node_id = format!("interface:{}:{}", rel_path, proto_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: proto_name.to_string(),
+                        node_type: "Interface".to_string(),
+                        description: format!("Swift протокол `{}` в {}", proto_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+
+                    if let Some(bases_match) = cap.get(2) {
+                        for base in bases_match.as_str().split(',') {
+                            let base_clean = base.trim();
+                            if base_clean.is_empty() {
+                                continue;
+                            }
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: format!("interface:{}", base_clean),
+                                label: "INHERITS".to_string(),
+                                weight: 1.0,
+                                context: format!(": {}", base_clean),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Функции, методы и инициализаторы
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.sw_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(1) {
+                    let fn_name = fn_match.as_str();
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("Swift функция/метод `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            } else if self.sw_init_re.is_match(line) {
+                let node_id = format!("fn:{}:init", rel_path);
+                out.nodes.push(AstNode {
+                    node_id: node_id.clone(),
+                    label: "init".to_string(),
+                    node_type: "Function".to_string(),
+                    description: format!("Swift инициализатор в {}", rel_path),
+                    file_path: rel_path.to_string(),
+                    line_start: i + 1,
+                    line_end: i + 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: node_id,
+                    label: "DEFINES".to_string(),
+                    weight: 1.0,
+                    context: line.trim().to_string(),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+    }
+
+    fn parse_ruby(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. require / require_relative
+        for cap in self.rb_require_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", m.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("require '{}'", m.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. Классы и модули
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.rb_class_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let class_name = name_match.as_str();
+                    let node_id = format!("class:{}:{}", rel_path, class_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: class_name.to_string(),
+                        node_type: "Class".to_string(),
+                        description: format!("Ruby класс `{}` в {}", class_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+
+                    if let Some(base_match) = cap.get(2) {
+                        let base = base_match.as_str().trim();
+                        if !base.is_empty() {
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: format!("class:{}", base),
+                                label: "INHERITS".to_string(),
+                                weight: 1.0,
+                                context: format!("< {}", base),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+            } else if let Some(cap) = self.rb_module_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let module_name = name_match.as_str();
+                    let node_id = format!("module:{}:{}", rel_path, module_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: module_name.to_string(),
+                        node_type: "Module".to_string(),
+                        description: format!("Ruby модуль `{}` в {}", module_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+
+        // 3. Методы (включая self.-методы и суффиксы ?/!)
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.rb_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(1) {
+                    let fn_name = fn_match.as_str();
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("Ruby метод `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Vue/Svelte SFC: содержимое `<script>`-блоков переиспользует TS/JS-парсер.
+    /// line_offset — чтобы номера строк символов были относительно всего файла.
+    fn parse_sfc(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        for cap in self.sfc_script_re.captures_iter(content) {
+            let Some(m) = cap.get(1) else { continue };
+            // Переводы строк до начала тела: смещение корректно и когда
+            // `<script ...>` лежит на строке тега, и когда тело с новой строки
+            let offset = content[..m.start()].matches('\n').count();
+            self.parse_ts_js(rel_path, file_node_id, m.as_str(), offset, out);
+        }
+    }
+
+    fn parse_scala(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. Imports
+        for cap in self.scala_import_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", m.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("import {}", m.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. Типы: class/object/trait (+case-модификаторы)
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.scala_type_re.captures(line) {
+                let kind = cap.get(1).map(|m| m.as_str()).unwrap_or("class");
+                if let Some(name_match) = cap.get(2) {
+                    let type_name = name_match.as_str();
+                    let (node_id, node_type, description) = if kind == "trait" {
+                        (
+                            format!("trait:{}:{}", rel_path, type_name),
+                            "Trait".to_string(),
+                            format!("Scala трейт `{}` в {}", type_name, rel_path),
+                        )
+                    } else {
+                        (
+                            format!("class:{}:{}", rel_path, type_name),
+                            "Class".to_string(),
+                            format!("Scala класс/объект `{}` в {}", type_name, rel_path),
+                        )
+                    };
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: type_name.to_string(),
+                        node_type,
+                        description,
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+
+                    // extends Base with T1, T2: первая часть — наследование,
+                    // остальные — примешанные трейты
+                    if let Some(bases_match) = cap.get(3) {
+                        let cleaned = strip_paren_groups(bases_match.as_str());
+                        let mut parts = cleaned.split(" with ");
+                        if let Some(first) = parts.next() {
+                            let base_trimmed = first.trim();
+                            let base = match base_trimmed.find('[') {
+                                Some(p) => &base_trimmed[..p],
+                                None => base_trimmed,
+                            };
+                            if !base.is_empty() {
+                                out.edges.push(AstEdge {
+                                    source_node_id: node_id.clone(),
+                                    target_node_id: format!("class:{}", base),
+                                    label: "INHERITS".to_string(),
+                                    weight: 1.0,
+                                    context: format!("extends {}", base),
+                                    provenance: "EXTRACTED".to_string(),
+                                });
+                            }
+                        }
+                        for with_part in parts {
+                            for token in with_part.split(',') {
+                                let token_trimmed = token.trim();
+                                let trait_name = match token_trimmed.find('[') {
+                                    Some(p) => &token_trimmed[..p],
+                                    None => token_trimmed,
+                                };
+                                if trait_name.is_empty() {
+                                    continue;
+                                }
+                                out.edges.push(AstEdge {
+                                    source_node_id: node_id.clone(),
+                                    target_node_id: format!("trait:{}", trait_name),
+                                    label: "IMPLEMENTS".to_string(),
+                                    weight: 1.0,
+                                    context: format!("with {}", trait_name),
+                                    provenance: "EXTRACTED".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Функции
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.scala_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(1) {
+                    let fn_name = fn_match.as_str();
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("Scala функция `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn parse_lua(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. require (включая `local x = require("mod")`)
+        for cap in self.lua_require_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", m.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("require '{}'", m.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. Функции: function name / M.name / M:name / local function
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.lua_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(1) {
+                    let fn_name = fn_match.as_str();
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("Lua функция `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn parse_elixir(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. alias / import / use / require
+        for cap in self.ex_alias_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", m.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("alias {}", m.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. defmodule и defprotocol
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.ex_module_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let module_name = name_match.as_str();
+                    let node_id = format!("module:{}:{}", rel_path, module_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: module_name.to_string(),
+                        node_type: "Module".to_string(),
+                        description: format!("Elixir модуль `{}` в {}", module_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            } else if let Some(cap) = self.ex_protocol_re.captures(line) {
+                if let Some(name_match) = cap.get(1) {
+                    let proto_name = name_match.as_str();
+                    let node_id = format!("interface:{}:{}", rel_path, proto_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: proto_name.to_string(),
+                        node_type: "Interface".to_string(),
+                        description: format!("Elixir протокол `{}` в {}", proto_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+
+        // 3. def / defp / defmacro / defmacrop (defdelegate/defstruct/... не матчатся)
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.ex_fn_re.captures(line) {
+                if let Some(fn_match) = cap.get(1) {
+                    let fn_name = fn_match.as_str();
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("Elixir функция `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn parse_shell(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. source / . (переменные вида `source "$f"` не резолвим)
+        for cap in self.sh_source_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", m.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("source {}", m.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. Функции: POSIX `name() {` и keyword-форма `function name`
+        for (i, line) in lines.iter().enumerate() {
+            let cap = self
+                .sh_fn_paren_re
+                .captures(line)
+                .or_else(|| self.sh_fn_kw_re.captures(line));
+            if let Some(cap) = cap {
+                if let Some(fn_match) = cap.get(1) {
+                    let fn_name = fn_match.as_str();
+                    if matches!(
+                        fn_name,
+                        "if" | "for"
+                            | "while"
+                            | "case"
+                            | "until"
+                            | "return"
+                            | "time"
+                            | "select"
+                    ) {
+                        continue;
+                    }
+                    let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: fn_name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("Shell функция `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+    }
 }
+/// Убирает содержимое круглых скобок (`Base(x, y), IBar` → `Base, IBar`) —
+/// чтобы запятые в аргументах конструктора не ломали разбор списка баз.
+fn strip_paren_groups(s: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0usize;
+    for ch in s.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Ф39.1: разобрать use-строку Rust → (module_path, item, alias).
 /// `crate::a::b::Name as Alias` → ("crate::a::b", Some("Name"), Some("Alias")).
 fn split_rust_use(s: &str) -> Option<(String, Option<String>, Option<String>)> {

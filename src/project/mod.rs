@@ -902,6 +902,74 @@ pub fn detect_manifest_metadata(root: &Path) -> (String, Vec<String>, Option<Str
         tech_stack.push("java".to_string());
     }
 
+    // 8. C#: *.csproj / *.sln в корне
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let is_cs = entry
+                .path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s == "csproj" || s == "sln")
+                .unwrap_or(false);
+            if is_cs {
+                if !tech_stack.contains(&"csharp".to_string()) {
+                    tech_stack.push("csharp".to_string());
+                }
+                break;
+            }
+        }
+    }
+
+    // 9. Kotlin: build.gradle.kts
+    if root.join("build.gradle.kts").exists() && !tech_stack.contains(&"kotlin".to_string()) {
+        tech_stack.push("kotlin".to_string());
+    }
+
+    // 10. Swift: Package.swift
+    if root.join("Package.swift").exists() && !tech_stack.contains(&"swift".to_string()) {
+        tech_stack.push("swift".to_string());
+    }
+
+    // 11. Ruby: Gemfile
+    if root.join("Gemfile").exists() && !tech_stack.contains(&"ruby".to_string()) {
+        tech_stack.push("ruby".to_string());
+    }
+
+    // 12. C/C++: CMakeLists.txt / Makefile
+    if (root.join("CMakeLists.txt").exists() || root.join("Makefile").exists())
+        && !tech_stack.contains(&"cpp".to_string())
+    {
+        tech_stack.push("cpp".to_string());
+    }
+
+    // 13. Vue / Svelte: зависимости package.json
+    if let Ok(content) = std::fs::read_to_string(root.join("package.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+            let sections = [v.get("dependencies"), v.get("devDependencies")];
+            let has_dep = |key: &str| {
+                sections
+                    .iter()
+                    .any(|s| s.and_then(|d| d.get(key)).is_some())
+            };
+            if has_dep("vue") && !tech_stack.contains(&"vue".to_string()) {
+                tech_stack.push("vue".to_string());
+            }
+            if has_dep("svelte") && !tech_stack.contains(&"svelte".to_string()) {
+                tech_stack.push("svelte".to_string());
+            }
+        }
+    }
+
+    // 14. Scala: build.sbt
+    if root.join("build.sbt").exists() && !tech_stack.contains(&"scala".to_string()) {
+        tech_stack.push("scala".to_string());
+    }
+
+    // 15. Elixir: mix.exs
+    if root.join("mix.exs").exists() && !tech_stack.contains(&"elixir".to_string()) {
+        tech_stack.push("elixir".to_string());
+    }
+
     // Если нет описания - проверяем первую текстовую строку в README.md
     if description.is_none() {
         if let Ok(content) = std::fs::read_to_string(root.join("README.md")) {

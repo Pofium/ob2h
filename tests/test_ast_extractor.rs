@@ -1,4 +1,4 @@
-//! Тесты AST-парсера кода (Rust, Python, TS/JS, SQL) (Фаза 11).
+//! Тесты AST-парсера кода (Rust, Python, TS/JS, SQL, PHP, Dart, Java, C#, C/C++, Kotlin, Swift, Ruby) (Фаза 11).
 
 use ob2h::project::ast::{AstCodeExtractor, AstScanResult};
 
@@ -217,4 +217,416 @@ fn test_parse_java_code() {
     assert!(edge_labels.contains(&"DEFINES".to_string()));
     assert!(edge_labels.contains(&"INHERITS".to_string()));
     assert!(edge_labels.contains(&"IMPLEMENTS".to_string()));
+}
+
+#[test]
+fn test_parse_csharp_code() {
+    let extractor = AstCodeExtractor::new();
+    let csharp_code = r#"
+    using System;
+    using System.Collections.Generic;
+
+    namespace App.Services
+    {
+        public class AccountService : BaseService, IAuditable
+        {
+            private readonly IRepository repo;
+
+            public Account GetAccount(int id)
+            {
+                return null;
+            }
+
+            public async Task SyncAsync()
+            {
+            }
+        }
+
+        public interface IAuditable
+        {
+            void Audit(string action);
+        }
+    }
+    "#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("src/Services/AccountService.cs", csharp_code, &mut res);
+
+    let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(node_labels.contains(&"AccountService".to_string()));
+    assert!(node_labels.contains(&"IAuditable".to_string()));
+    assert!(node_labels.contains(&"GetAccount".to_string()));
+    assert!(node_labels.contains(&"SyncAsync".to_string()));
+
+    let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
+    assert!(edge_labels.contains(&"IMPORTS".to_string()));
+    assert!(edge_labels.contains(&"DEFINES".to_string()));
+    assert!(edge_labels.contains(&"INHERITS".to_string()));
+    assert!(edge_labels.contains(&"IMPLEMENTS".to_string()));
+}
+
+#[test]
+fn test_parse_c_cpp_code() {
+    let extractor = AstCodeExtractor::new();
+    let cpp_code = r#"
+    #include <string>
+    #include "models/user.h"
+
+    class UserService : public BaseService {
+    public:
+        std::string getUser(int id);
+    };
+
+    std::string UserService::getUser(int id) {
+        return name;
+    }
+
+    struct Point {
+        int x;
+        int y;
+    };
+
+    int main(int argc, char** argv) {
+        return 0;
+    }
+    "#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("src/user_service.cpp", cpp_code, &mut res);
+
+    let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(node_labels.contains(&"UserService".to_string()));
+    assert!(node_labels.contains(&"Point".to_string()));
+    assert!(node_labels.contains(&"getUser".to_string()));
+    assert!(node_labels.contains(&"main".to_string()));
+
+    let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
+    assert!(edge_labels.contains(&"IMPORTS".to_string()));
+    assert!(edge_labels.contains(&"DEFINES".to_string()));
+    assert!(edge_labels.contains(&"INHERITS".to_string()));
+}
+
+#[test]
+fn test_parse_kotlin_code() {
+    let extractor = AstCodeExtractor::new();
+    let kotlin_code = r#"
+    import kotlin.collections.List
+    import com.example.model.User as UserModel
+
+    data class UserRepository(val api: Api) : BaseRepository(), IAuditable {
+        override fun findUser(id: Int): UserModel? {
+            return null
+        }
+
+        suspend fun syncAll() {
+        }
+    }
+
+    interface IAuditable {
+        fun audit(action: String)
+    }
+    "#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("src/main/kotlin/UserRepository.kt", kotlin_code, &mut res);
+
+    let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(node_labels.contains(&"UserRepository".to_string()));
+    assert!(node_labels.contains(&"IAuditable".to_string()));
+    assert!(node_labels.contains(&"findUser".to_string()));
+    assert!(node_labels.contains(&"syncAll".to_string()));
+
+    let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
+    assert!(edge_labels.contains(&"IMPORTS".to_string()));
+    assert!(edge_labels.contains(&"DEFINES".to_string()));
+    assert!(edge_labels.contains(&"INHERITS".to_string()));
+    assert!(edge_labels.contains(&"IMPLEMENTS".to_string()));
+}
+
+#[test]
+fn test_parse_swift_code() {
+    let extractor = AstCodeExtractor::new();
+    let swift_code = r#"
+    import Foundation
+    import UIKit
+
+    public class UserStore: ObservableObject, Sendable {
+        private var users: [String] = []
+
+        init(name: String) {
+        }
+
+        func fetchUsers() -> [String] {
+            return users
+        }
+    }
+
+    protocol Persistable {
+        func save()
+    }
+
+    extension UserStore: Persistable {
+        func save() {
+        }
+    }
+
+    enum Role: String, CaseIterable {
+        case admin
+    }
+    "#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("Sources/App/UserStore.swift", swift_code, &mut res);
+
+    let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(node_labels.contains(&"UserStore".to_string()));
+    assert!(node_labels.contains(&"Persistable".to_string()));
+    assert!(node_labels.contains(&"fetchUsers".to_string()));
+    assert!(node_labels.contains(&"save".to_string()));
+    assert!(node_labels.contains(&"init".to_string()));
+
+    let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
+    assert!(edge_labels.contains(&"IMPORTS".to_string()));
+    assert!(edge_labels.contains(&"DEFINES".to_string()));
+    assert!(edge_labels.contains(&"INHERITS".to_string()));
+    assert!(edge_labels.contains(&"IMPLEMENTS".to_string()));
+}
+
+#[test]
+fn test_parse_ruby_code() {
+    let extractor = AstCodeExtractor::new();
+    let ruby_code = r#"
+    require 'json'
+    require_relative '../models/user'
+
+    module Services
+      class UserService < BaseService
+        def initialize(repo)
+          @repo = repo
+        end
+
+        def self.build(repo)
+          new(repo)
+        end
+
+        def find_user(id)
+          @repo.find(id)
+        end
+
+        def valid?
+          true
+        end
+      end
+    end
+    "#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("app/services/user_service.rb", ruby_code, &mut res);
+
+    let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(node_labels.contains(&"Services".to_string()));
+    assert!(node_labels.contains(&"UserService".to_string()));
+    assert!(node_labels.contains(&"initialize".to_string()));
+    assert!(node_labels.contains(&"build".to_string()));
+    assert!(node_labels.contains(&"find_user".to_string()));
+    assert!(node_labels.contains(&"valid?".to_string()));
+
+    let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
+    assert!(edge_labels.contains(&"IMPORTS".to_string()));
+    assert!(edge_labels.contains(&"DEFINES".to_string()));
+    assert!(edge_labels.contains(&"INHERITS".to_string()));
+}
+
+#[test]
+fn test_parse_vue_sfc_code() {
+    let extractor = AstCodeExtractor::new();
+    let vue_code = r#"<template>
+  <div class="user">{{ name }}</div>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue';
+import UserService from './UserService';
+
+export class UserView {
+    render() {
+        return null;
+    }
+}
+
+function loadUser() {
+    return null;
+}
+</script>
+
+<style scoped>
+.user { color: red; }
+</style>
+"#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("src/components/UserView.vue", vue_code, &mut res);
+
+    let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(node_labels.contains(&"UserView".to_string()));
+    assert!(node_labels.contains(&"loadUser".to_string()));
+
+    // Номер строки символа — относительно всего файла, а не script-блока
+    let load_user = res
+        .nodes
+        .iter()
+        .find(|n| n.label == "loadUser")
+        .expect("loadUser node");
+    assert_eq!(load_user.line_start, 15);
+
+    let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
+    assert!(edge_labels.contains(&"IMPORTS".to_string()));
+    assert!(edge_labels.contains(&"DEFINES".to_string()));
+}
+
+#[test]
+fn test_parse_scala_code() {
+    let extractor = AstCodeExtractor::new();
+    let scala_code = r#"
+    package com.example.services
+
+    import scala.collection.mutable
+    import com.example.model.User
+
+    case class UserService(val repo: UserRepository) extends BaseService with Auditable, Loggable {
+        override def findUser(id: Int): Option[User] = {
+            None
+        }
+
+        def syncAll(): Unit = {
+        }
+    }
+
+    trait Auditable {
+        def audit(action: String): Unit
+    }
+    "#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("src/main/scala/UserService.scala", scala_code, &mut res);
+
+    let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(node_labels.contains(&"UserService".to_string()));
+    assert!(node_labels.contains(&"Auditable".to_string()));
+    assert!(node_labels.contains(&"findUser".to_string()));
+    assert!(node_labels.contains(&"syncAll".to_string()));
+
+    let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
+    assert!(edge_labels.contains(&"IMPORTS".to_string()));
+    assert!(edge_labels.contains(&"DEFINES".to_string()));
+    assert!(edge_labels.contains(&"INHERITS".to_string()));
+    assert!(edge_labels.contains(&"IMPLEMENTS".to_string()));
+}
+
+#[test]
+fn test_parse_lua_code() {
+    let extractor = AstCodeExtractor::new();
+    let lua_code = r#"
+    local json = require("json")
+    local M = {}
+
+    function M.new(name)
+        return setmetatable({ name = name }, M)
+    end
+
+    function M:greet()
+        return "hello"
+    end
+
+    local function helper()
+        return nil
+    end
+
+    return M
+    "#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("src/user_service.lua", lua_code, &mut res);
+
+    let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(node_labels.contains(&"new".to_string()));
+    assert!(node_labels.contains(&"greet".to_string()));
+    assert!(node_labels.contains(&"helper".to_string()));
+
+    let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
+    assert!(edge_labels.contains(&"IMPORTS".to_string()));
+    assert!(edge_labels.contains(&"DEFINES".to_string()));
+}
+
+#[test]
+fn test_parse_elixir_code() {
+    let extractor = AstCodeExtractor::new();
+    let elixir_code = r#"
+    defmodule MyApp.Services.UserService do
+      alias MyApp.Repo
+      import Ecto.Query
+
+      def find_user(id) do
+        nil
+      end
+
+      defp validate(id), do: id > 0
+
+      defmacro log(msg) do
+        quote do
+        end
+      end
+    end
+
+    defprotocol Serializable do
+      def to_map(data)
+    end
+    "#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("lib/my_app/services/user_service.ex", elixir_code, &mut res);
+
+    let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(node_labels.contains(&"MyApp.Services.UserService".to_string()));
+    assert!(node_labels.contains(&"Serializable".to_string()));
+    assert!(node_labels.contains(&"find_user".to_string()));
+    assert!(node_labels.contains(&"validate".to_string()));
+    assert!(node_labels.contains(&"log".to_string()));
+
+    let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
+    assert!(edge_labels.contains(&"IMPORTS".to_string()));
+    assert!(edge_labels.contains(&"DEFINES".to_string()));
+}
+
+#[test]
+fn test_parse_shell_code() {
+    let extractor = AstCodeExtractor::new();
+    let shell_code = r#"#!/usr/bin/env bash
+source ./lib.sh
+. ./env.sh
+
+deploy_app() {
+    echo "deploying"
+}
+
+function cleanup {
+    rm -rf tmp
+}
+
+usage() {
+    echo "usage"
+}
+"#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("scripts/deploy.sh", shell_code, &mut res);
+
+    let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
+    assert!(node_labels.contains(&"deploy_app".to_string()));
+    assert!(node_labels.contains(&"cleanup".to_string()));
+    assert!(node_labels.contains(&"usage".to_string()));
+
+    let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
+    assert!(edge_labels.contains(&"IMPORTS".to_string()));
+    assert!(edge_labels.contains(&"DEFINES".to_string()));
 }
