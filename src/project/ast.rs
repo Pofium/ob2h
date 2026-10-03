@@ -83,6 +83,20 @@ pub struct GqlFieldRef {
     pub field: String,
 }
 
+/// Ф50: ссылка на узел, резолвимая по всем узлам скана (depends_on в tf,
+/// configMapRef/secretRef в k8s). Неразрешённые отбрасываются — висячих
+/// узлов не создаём.
+#[derive(Debug, Clone)]
+pub struct PendingRef {
+    pub source_node_id: String,
+    /// Префикс node_id цели ("resource:", "k8s:"…)
+    pub target_prefix: String,
+    /// Хвост node_id цели (":aws_vpc.main"; для k8s — label "Deployment/api")
+    pub target_suffix: String,
+    pub label: String,
+    pub context: String,
+}
+
 /// Результат AST-сканирования кодовой базы.
 #[derive(Debug, Clone, Default)]
 pub struct AstScanResult {
@@ -100,6 +114,8 @@ pub struct AstScanResult {
     pub http_calls: Vec<HttpCall>,
     /// Ф49.4в: идентификаторы из gql-строк для мостов QUERIES_FIELD.
     pub gql_fields: Vec<GqlFieldRef>,
+    /// Ф50: ссылки, резолвимые после полного скана (tf depends_on, k8s refs).
+    pub pending_refs: Vec<PendingRef>,
 }
 
 // ============================================================================
@@ -170,6 +186,14 @@ pub enum Parser {
     Graphql,
     /// Ф49.3: OpenAPI/Swagger (json/yaml).
     OpenApi,
+    /// Ф50.1: Terraform/OpenTofu.
+    Terraform,
+    /// Ф50.2: Dockerfile.
+    Dockerfile,
+    /// Ф50.3: docker-compose.
+    Compose,
+    /// Ф50.4: Kubernetes/Helm YAML.
+    K8s,
 }
 
 /// Спецификация языка/формата в реестре [`LANGS`].
@@ -569,6 +593,132 @@ enum Role {
         sample_rel: "",
     },
     LangSpec {
+        name: "terraform",
+        matcher: Matcher::Ext(&["tf", "hcl"]),
+        node_types: &["File", "Resource", "DataSource", "Module", "Variable", "Output"],
+        edge_labels: &["DEFINES", "DEPENDS_ON"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Terraform,
+        fixture: r#"terraform {
+    backend "s3" {}
+}
+
+variable "region" {
+    default = "eu-north1"
+}
+
+output "endpoint" {
+    value = "https://example.internal"
+}
+
+resource "yandex_compute_instance" "app" {
+    name = "app-server"
+}
+
+module "network" {
+    source = "./modules/vpc"
+}
+
+resource "yandex_vpc_subnet" "subnet" {
+    depends_on = [yandex_compute_instance.app]
+}
+"#,
+        sample_rel: "",
+    },
+    LangSpec {
+        name: "dockerfile",
+        matcher: Matcher::Predicate(is_dockerfile_path),
+        node_types: &["File", "BaseImage", "EnvVar"],
+        edge_labels: &["DEFINES", "DEPENDS_ON"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Dockerfile,
+        fixture: r#"FROM node:20-alpine AS builder
+ARG NODE_ENV=production
+ENV APP_HOME=/app
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+EXPOSE 3000
+CMD ["node", "server.js"]
+
+FROM nginx:1.27
+COPY --from=builder /app/dist /usr/share/nginx/html
+"#,
+        sample_rel: "Dockerfile",
+    },
+    LangSpec {
+        name: "compose",
+        matcher: Matcher::FileName(&[
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "compose.yaml",
+            "compose.yml",
+        ]),
+        node_types: &["File", "Service", "BaseImage", "EnvVar", "Port", "Volume", "Network"],
+        edge_labels: &["DEFINES", "DEPENDS_ON", "MOUNTS"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Compose,
+        fixture: r#"services:
+  api:
+    image: ghcr.io/example/api:1.4.2
+    build:
+      context: ./api
+    ports:
+      - "8080:3000"
+    environment:
+      - RUST_LOG=info
+      - DATABASE_URL=postgres://db/db
+    depends_on:
+      - db
+    volumes:
+      - ./data:/data
+    networks:
+      - backend
+  db:
+    image: postgres:16
+networks:
+  backend: {}
+"#,
+        sample_rel: "compose.yaml",
+    },
+    LangSpec {
+        name: "k8s",
+        matcher: Matcher::Predicate(is_k8s_yaml_path),
+        node_types: &["File", "K8sResource", "BaseImage"],
+        edge_labels: &["DEFINES", "DEPENDS_ON", "BINDS_SELECTOR"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::K8s,
+        fixture: r#"apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels:
+    app: api
+spec:
+  selector:
+    matchLabels:
+      app: api
+  template:
+    spec:
+      containers:
+        - image: ghcr.io/example/api:1.4.2
+          envFrom:
+            - configMapRef:
+                name: api-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  labels:
+    app: api
+data:
+  LOG_LEVEL: info
+"#,
+        sample_rel: "k8s/app.yaml",
+    },
+    LangSpec {
         name: "php",
         matcher: Matcher::Ext(&["php"]),
         node_types: &["File", "Class", "Interface", "Trait", "Function"],
@@ -930,6 +1080,22 @@ fn is_blade_path(rel_path: &str) -> bool {
     rel_path.ends_with(".blade.php")
 }
 
+/// Ф50.2: Dockerfile (`Dockerfile`, `*.Dockerfile`, `Dockerfile.*`).
+fn is_dockerfile_path(rel_path: &str) -> bool {
+    let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+    name == "Dockerfile" || name.ends_with(".Dockerfile") || name.starts_with("Dockerfile.")
+}
+
+/// Ф50.4: k8s/deploy/helm-каталоги с YAML (values.yaml/Chart.yaml — по
+/// каталогу; случайный корневой yaml не матчится — классификатор 50.5).
+fn is_k8s_yaml_path(rel_path: &str) -> bool {
+    let p = rel_path.to_lowercase();
+    let ext_ok = p.ends_with(".yaml") || p.ends_with(".yml");
+    ext_ok
+        && (p.contains("k8s/") || p.contains("kubernetes/") || p.contains("deploy/")
+            || p.contains("helm/") || p.contains("charts/") || p.contains("chart/"))
+}
+
 /// Ф48.1: `<script src>` — внешняя ссылка (http/https/протокол-относительная) →
 /// `module:` (ExternalModule), локальный путь со скриптовым расширением →
 /// `file:`-узел (реальный файл, узел уточнится при его скане), прочее →
@@ -1161,6 +1327,16 @@ pub struct AstCodeExtractor {
     /// Идентификаторы внутри тела GraphQL-запроса (кандидаты QUERIES_FIELD).
     gql_ident_re: Regex,
 
+    /// Ф50.1: Terraform.
+    tf_block_re: Regex,
+    tf_source_re: Regex,
+    tf_depends_on_re: Regex,
+
+    /// Ф50.2: Dockerfile (line-based, без regex-полей кроме FROM/COPY).
+    docker_from_re: Regex,
+    docker_copy_re: Regex,
+    docker_env_re: Regex,
+
     scala_import_re: Regex,
     scala_type_re: Regex,
     scala_fn_re: Regex,
@@ -1335,6 +1511,16 @@ impl AstCodeExtractor {
             ts_gql_re: Regex::new(r#"(?:gql|graphql)\s*`([^`]*)`"#).unwrap(),
             py_gql_re: Regex::new(r#"(?s)(?:gql|graphql)\s*\(\s*(?:"""(.*?)"""|'''(.*?)''')"#).unwrap(),
             gql_ident_re: Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:\(|\{)").unwrap(),
+
+            // Ф50.1: Terraform
+            tf_block_re: Regex::new(r#"(?m)^\s*(resource|module|variable|output|data)\s+"([^"]+)"(?:\s+"([^"]+)")?"#).unwrap(),
+            tf_source_re: Regex::new(r#"source\s*=\s*"([^"]+)""#).unwrap(),
+            tf_depends_on_re: Regex::new(r#"(?s)depends_on\s*=\s*\[([^\]]*)\]"#).unwrap(),
+
+            // Ф50.2: Dockerfile
+            docker_from_re: Regex::new(r"(?im)^\s*FROM\s+(\S+)(?:\s+AS\s+\S+)?").unwrap(),
+            docker_copy_re: Regex::new(r"(?im)^\s*(?:COPY|ADD)\s+(?:--[^\s]+\s+)*(.+)$").unwrap(),
+            docker_env_re: Regex::new(r"(?im)^\s*(?:ARG|ENV)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*=|\s+)").unwrap(),
 
             // Scala patterns
             scala_import_re: Regex::new(r"(?m)^\s*import\s+([a-zA-Z0-9_.{}]+)").unwrap(),
@@ -4119,7 +4305,6 @@ impl AstCodeExtractor {
                 options.push(t.to_string());
             }
         }
-        let mut package_node: Option<String> = None;
         for (i, line) in lines.iter().enumerate() {
             if let Some(cap) = self.proto_package_re.captures(line) {
                 if let Some(pkg) = cap.get(1) {
@@ -4146,7 +4331,6 @@ impl AstCodeExtractor {
                         context: line.trim().to_string(),
                         provenance: "EXTRACTED".to_string(),
                     });
-                    package_node = Some(node_id);
                 }
             }
         }
@@ -4734,6 +4918,700 @@ impl AstCodeExtractor {
         true
     }
 
+    /// Ф50.1: Terraform/OpenTofu (регэксп+блочный сканер, без hcl-rs,
+    /// ADR-AST-1) — resource/data → Resource/DataSource (провайдер из префикса
+    /// типа в description), module → Module + DEPENDS_ON (локальный source →
+    /// file:, внешний — module:), variable/output → Variable/Output,
+    /// depends_on = [a.b] → PendingRef (резолв по type.name по всему скану).
+    fn parse_terraform(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut defined_resources: Vec<(String, String)> = Vec::new(); // "type.name" → node_id
+
+        for (i, line) in lines.iter().enumerate() {
+            let Some(cap) = self.tf_block_re.captures(line) else {
+                continue;
+            };
+            let Some(kind) = cap.get(1) else { continue };
+            let arg1 = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+            let arg2 = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+            let (node_id, node_type, label, description) = match kind.as_str() {
+                "resource" => {
+                    let provider = arg1.split('_').next().unwrap_or("").to_string();
+                    (
+                        format!("resource:{}:{}.{}", rel_path, arg1, arg2),
+                        "Resource",
+                        format!("{}.{}", arg1, arg2),
+                        format!(
+                            "Terraform resource `{}.{}`{} в {}",
+                            arg1,
+                            arg2,
+                            if provider.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" (провайдер: {})", provider)
+                            },
+                            rel_path
+                        ),
+                    )
+                }
+                "data" => (
+                    format!("resource:{}:{}.{}", rel_path, arg1, arg2),
+                    "DataSource",
+                    format!("{}.{}", arg1, arg2),
+                    format!("Terraform data `{}` в {}", arg1, rel_path),
+                ),
+                "module" => (
+                    format!("module:{}:{}", rel_path, arg1),
+                    "Module",
+                    arg1.to_string(),
+                    format!("Terraform module `{}` в {}", arg1, rel_path),
+                ),
+                "variable" => (
+                    format!("variable:{}:{}", rel_path, arg1),
+                    "Variable",
+                    arg1.to_string(),
+                    format!("Terraform variable `{}` в {}", arg1, rel_path),
+                ),
+                "output" => (
+                    format!("output:{}:{}", rel_path, arg1),
+                    "Output",
+                    arg1.to_string(),
+                    format!("Terraform output `{}` в {}", arg1, rel_path),
+                ),
+                _ => continue,
+            };
+
+            out.nodes.push(AstNode {
+                node_id: node_id.clone(),
+                label: label.clone(),
+                node_type: node_type.to_string(),
+                description,
+                file_path: rel_path.to_string(),
+                line_start: i + 1,
+                line_end: i + 1,
+            });
+            out.edges.push(AstEdge {
+                source_node_id: file_node_id.to_string(),
+                target_node_id: node_id.clone(),
+                label: "DEFINES".to_string(),
+                weight: 1.0,
+                context: line.trim().to_string(),
+                provenance: "EXTRACTED".to_string(),
+            });
+            if matches!(kind.as_str(), "resource" | "data") {
+                defined_resources.push((label.clone(), node_id.clone()));
+            }
+
+            // module "n" { source = ... } — DEPENDS_ON к file:/module:
+            if kind.as_str() == "module" {
+                if let Some(src) = self.tf_source_re.captures(
+                    &content[cap.get(0).map(|m| m.start()).unwrap_or(0)..],
+                ) {
+                    let s = src.get(1).map(|m| m.as_str()).unwrap_or("");
+                    let target = if s.starts_with("./") || s.starts_with("../") {
+                        format!(
+                            "file:{}",
+                            s.trim_start_matches("./")
+                                .trim_end_matches('/')
+                                .trim_start_matches("../")
+                        )
+                    } else if s.contains("://") || s.starts_with("registry") || s.starts_with("app.terraform") {
+                        format!("module:{}", s)
+                    } else {
+                        format!("module:{}", s)
+                    };
+                    out.edges.push(AstEdge {
+                        source_node_id: node_id.clone(),
+                        target_node_id: target,
+                        label: "DEPENDS_ON".to_string(),
+                        weight: 1.0,
+                        context: format!("source = {}", s),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+
+        // depends_on = [a.b, ...] — PendingRef, резолв по type.name по скану
+        for cap in self.tf_depends_on_re.captures_iter(content) {
+            let body = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            for ref_item in body.split(',') {
+                let r = ref_item.trim().trim_matches('"');
+                if r.is_empty() || !r.contains('.') {
+                    continue;
+                }
+                // источник — ресурс, содержащий этот depends_on (последний
+                // определённый до него упрощённо не ищем: вешаем на файл,
+                // если точный владелец не определён)
+                let owner = defined_resources
+                    .iter()
+                    .rev()
+                    .find(|(name, _)| content.rfind(&format!("{} ", name)).is_some())
+                    .map(|(_, id)| id.clone());
+                let Some(src) = owner.or_else(|| Some(file_node_id.to_string())) else {
+                    continue;
+                };
+                let target_suffix = format!(":{}", r);
+                out.pending_refs.push(PendingRef {
+                    source_node_id: src,
+                    target_prefix: "resource:".to_string(),
+                    target_suffix,
+                    label: "DEPENDS_ON".to_string(),
+                    context: format!("depends_on = {}", r),
+                });
+            }
+        }
+    }
+
+    /// Ф50.2: Dockerfile — FROM → BaseImage (image:), ARG/ENV → EnvVar
+    /// (DEFINES), COPY/ADD локальных путей → DEPENDS_ON к file:, внешние URL —
+    /// module:; WORKDIR/EXPOSE/CMD/ENTRYPOINT — в description File-узла;
+    /// многоступенчатые сборки — узлы стейджей не создаём.
+    fn parse_dockerfile(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let mut notes: Vec<String> = Vec::new();
+        let mut seen_images: HashSet<String> = HashSet::new();
+
+        for cap in self.docker_from_re.captures_iter(content) {
+            if let Some(img) = cap.get(1) {
+                let img = img.as_str();
+                if seen_images.insert(img.to_string()) {
+                    out.nodes.push(AstNode {
+                        node_id: format!("image:{}", img),
+                        label: img.to_string(),
+                        node_type: "BaseImage".to_string(),
+                        description: format!("Базовый образ `{}` (FROM в {})", img, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: 1,
+                        line_end: 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: format!("image:{}", img),
+                        label: "DEPENDS_ON".to_string(),
+                        weight: 1.0,
+                        context: format!("FROM {}", img),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+
+        let mut seen_env: HashSet<String> = HashSet::new();
+        for cap in self.docker_env_re.captures_iter(content) {
+            if let Some(name) = cap.get(1) {
+                if seen_env.insert(name.as_str().to_string()) {
+                    let node_id = format!("envvar:{}:{}", rel_path, name.as_str());
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.as_str().to_string(),
+                        node_type: "EnvVar".to_string(),
+                        description: format!("Docker переменная `{}` в {}", name.as_str(), rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: 1,
+                        line_end: 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: format!("ARG/ENV {}", name.as_str()),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+
+        for cap in self.docker_copy_re.captures_iter(content) {
+            let Some(rest) = cap.get(1) else { continue };
+            for token in rest.as_str().split_whitespace() {
+                if token.starts_with('/') && !token.starts_with("//") || !token.contains("://") && token.contains('.') || !token.contains("://") && token.contains('/')
+                {
+                    // локальный путь (не URL, не флаг)
+                    if token.contains("://") || token.starts_with("--") {
+                        continue;
+                    }
+                    let target = format!(
+                        "file:{}",
+                        token.trim_end_matches('/')
+                    );
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: target,
+                        label: "DEPENDS_ON".to_string(),
+                        weight: 1.0,
+                        context: format!("COPY/ADD {}", token),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    break; // первый источник (после флагов) — путь в репо
+                }
+            }
+        }
+
+        for line in content.lines() {
+            let t = line.trim();
+            for kw in ["WORKDIR", "EXPOSE", "CMD", "ENTRYPOINT"] {
+                if t.starts_with(kw) {
+                    notes.push(t.to_string());
+                }
+            }
+        }
+        if !notes.is_empty() {
+            for node in out.nodes.iter_mut() {
+                if node.node_id == file_node_id {
+                    node.description.push_str("; ");
+                    node.description.push_str(&notes.join("; "));
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Разбить YAML на документы (`---`) и распарсить каждый в serde_json::Value.
+    fn split_yaml_docs(content: &str) -> Vec<serde_json::Value> {
+        content
+            .split("\n---")
+            .filter_map(|doc| serde_yaml_ng::from_str::<serde_json::Value>(doc).ok())
+            .collect()
+    }
+
+    /// Ф50.3: docker-compose — services.<name> → Service (svc:), image →
+    /// BaseImage + DEPENDS_ON, build → DEPENDS_ON к Dockerfile, depends_on →
+    /// DEPENDS_ON (резолв по имени сервиса файла), environment/env_file →
+    /// EnvVar, ports → Port (DEFINES), volumes/networks → MOUNTS.
+    /// Возвращает true, если файл распознан как compose.
+    fn parse_compose(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) -> bool {
+        let Ok(root) = serde_yaml_ng::from_str::<serde_json::Value>(content) else {
+            return false;
+        };
+        // Классификатор (50.5): характерный корневой ключ
+        let Some(services) = root.get("services").and_then(|s| s.as_object()) else {
+            return false;
+        };
+
+        for (name, svc) in services {
+            let svc_id = format!("svc:{}:{}", rel_path, name);
+            out.nodes.push(AstNode {
+                node_id: svc_id.clone(),
+                label: name.clone(),
+                node_type: "Service".to_string(),
+                description: format!("Compose-сервис `{}` в {}", name, rel_path),
+                file_path: rel_path.to_string(),
+                line_start: 1,
+                line_end: 1,
+            });
+            out.edges.push(AstEdge {
+                source_node_id: file_node_id.to_string(),
+                target_node_id: svc_id.clone(),
+                label: "DEFINES".to_string(),
+                weight: 1.0,
+                context: format!("service {}", name),
+                provenance: "EXTRACTED".to_string(),
+            });
+
+            // image → BaseImage
+            if let Some(img) = svc.get("image").and_then(|i| i.as_str()) {
+                out.nodes.push(AstNode {
+                    node_id: format!("image:{}", img),
+                    label: img.to_string(),
+                    node_type: "BaseImage".to_string(),
+                    description: format!("Образ `{}` (image в {})", img, rel_path),
+                    file_path: rel_path.to_string(),
+                    line_start: 1,
+                    line_end: 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: svc_id.clone(),
+                    target_node_id: format!("image:{}", img),
+                    label: "DEPENDS_ON".to_string(),
+                    weight: 1.0,
+                    context: format!("image {}", img),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+
+            // build → DEPENDS_ON к Dockerfile
+            let build_target = match svc.get("build") {
+                Some(serde_json::Value::String(ctx)) => {
+                    Some(format!(
+                        "file:{}/Dockerfile",
+                        ctx.trim_end_matches('/').trim_start_matches("./")
+                    ))
+                }
+                Some(serde_json::Value::Object(b)) => {
+                    let ctx = b
+                        .get("context")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or(".")
+                        .trim_end_matches('/')
+                        .trim_start_matches("./")
+                        .to_string();
+                    let df = b
+                        .get("dockerfile")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("Dockerfile");
+                    Some(format!("file:{}/{}", ctx, df))
+                }
+                _ => None,
+            };
+            if let Some(target) = build_target {
+                out.edges.push(AstEdge {
+                    source_node_id: svc_id.clone(),
+                    target_node_id: target,
+                    label: "DEPENDS_ON".to_string(),
+                    weight: 1.0,
+                    context: "build".to_string(),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+
+            // depends_on → DEPENDS_ON (по имени сервиса этого файла)
+            match svc.get("depends_on") {
+                Some(serde_json::Value::Array(deps)) => {
+                    for d in deps {
+                        if let Some(dep) = d.as_str() {
+                            out.edges.push(AstEdge {
+                                source_node_id: svc_id.clone(),
+                                target_node_id: format!("svc:{}:{}", rel_path, dep),
+                                label: "DEPENDS_ON".to_string(),
+                                weight: 1.0,
+                                context: format!("depends_on {}", dep),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+                Some(serde_json::Value::Object(deps)) => {
+                    for dep in deps.keys() {
+                        out.edges.push(AstEdge {
+                            source_node_id: svc_id.clone(),
+                            target_node_id: format!("svc:{}:{}", rel_path, dep),
+                            label: "DEPENDS_ON".to_string(),
+                            weight: 1.0,
+                            context: format!("depends_on {}", dep),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+
+            // environment → EnvVar
+            let mut env_keys: Vec<String> = Vec::new();
+            match svc.get("environment") {
+                Some(serde_json::Value::Array(envs)) => {
+                    for e in envs {
+                        if let Some(e) = e.as_str() {
+                            let key = e.split('=').next().unwrap_or(e).to_string();
+                            env_keys.push(key);
+                        }
+                    }
+                }
+                Some(serde_json::Value::Object(envs)) => {
+                    env_keys.extend(envs.keys().cloned());
+                }
+                _ => {}
+            }
+            if let Some(serde_json::Value::Array(files)) = svc.get("env_file") {
+                for f in files {
+                    if let Some(f) = f.as_str() {
+                        env_keys.push(format!("[env_file: {}]", f));
+                    }
+                }
+            }
+            for key in env_keys {
+                let node_id = format!("envvar:{}:{}:{}", rel_path, name, key);
+                out.nodes.push(AstNode {
+                    node_id: node_id.clone(),
+                    label: key.clone(),
+                    node_type: "EnvVar".to_string(),
+                    description: format!(
+                        "Переменная окружения `{}` сервиса `{}` в {}",
+                        key, name, rel_path
+                    ),
+                    file_path: rel_path.to_string(),
+                    line_start: 1,
+                    line_end: 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: svc_id.clone(),
+                    target_node_id: node_id,
+                    label: "DEFINES".to_string(),
+                    weight: 1.0,
+                    context: format!("env {}", key),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+
+            // ports → Port (уникальное значение), volumes/networks → MOUNTS
+            if let Some(serde_json::Value::Array(ports)) = svc.get("ports") {
+                let mut seen_ports: HashSet<String> = HashSet::new();
+                for p in ports {
+                    let p = match p {
+                        serde_json::Value::String(s) => s.clone(),
+                        serde_json::Value::Object(_) => {
+                            let pub_port = p.get("published").and_then(|v| v.as_str()).unwrap_or("");
+                            let target = p.get("target").and_then(|t| t.as_i64()).unwrap_or(0);
+                            format!("{}:{}", pub_port, target)
+                        }
+                        _ => continue,
+                    };
+                    if seen_ports.insert(p.to_string()) {
+                        let node_id = format!("port:{}:{}", rel_path, p);
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: p.to_string(),
+                            node_type: "Port".to_string(),
+                            description: format!("Порт `{}` сервиса `{}`", p, name),
+                            file_path: rel_path.to_string(),
+                            line_start: 1,
+                            line_end: 1,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: svc_id.clone(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: format!("port {}", p),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            for (key, label) in [("volumes", "MOUNTS"), ("networks", "MOUNTS")] {
+                if let Some(serde_json::Value::Array(items)) = svc.get(key) {
+                    let mut seen_items: HashSet<String> = HashSet::new();
+                    for v in items {
+                        let value = match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Object(o) => o
+                                .get("source")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            _ => continue,
+                        };
+                        if value.is_empty() || !seen_items.insert(value.clone()) {
+                            continue;
+                        }
+                        let prefix = if key == "volumes" { "volume" } else { "network" };
+                        let node_id = format!("{}:{}", prefix, value);
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: value.clone(),
+                            node_type: if key == "volumes" {
+                                "Volume"
+                            } else {
+                                "Network"
+                            }
+                            .to_string(),
+                            description: format!(
+                                "{} `{}` ({} в {})",
+                                if key == "volumes" { "Том" } else { "Сеть" },
+                                value,
+                                name,
+                                rel_path
+                            ),
+                            file_path: rel_path.to_string(),
+                            line_start: 1,
+                            line_end: 1,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: svc_id.clone(),
+                            target_node_id: node_id,
+                            label: label.to_string(),
+                            weight: 1.0,
+                            context: format!("{} {}", key, value),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Ф50.4: Kubernetes/Helm YAML — документы с `kind:` → K8sResource
+    /// (k8s:, label = kind/name), image → BaseImage + DEPENDS_ON,
+    /// configMapRef/secretRef/envFrom/serviceAccountName/ingress→service →
+    /// PendingRef, selector ↔ labels → BINDS_SELECTOR (INFERRED, в пределах
+    /// файла). Helm-шаблоны не рендерим (пометка templated). Возвращает true,
+    /// если найден хотя бы один документ с kind:.
+    fn parse_k8s(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) -> bool {
+        let docs = Self::split_yaml_docs(content);
+        let templated = content.contains("{{");
+        let mut found = false;
+        let mut doc_nodes: Vec<(String, String, serde_json::Value)> = Vec::new(); // id, "kind/name", doc
+
+        for doc in &docs {
+            let Some(kind) = doc.get("kind").and_then(|k| k.as_str()) else {
+                continue;
+            };
+            found = true;
+            let name = doc
+                .get("metadata")
+                .and_then(|m| m.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("unnamed");
+            let ns = doc
+                .get("metadata")
+                .and_then(|m| m.get("namespace"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("default");
+            let node_id = format!("k8s:{}:{}/{}", rel_path, kind, name);
+            let label = format!("{}/{}", kind, name);
+            out.nodes.push(AstNode {
+                node_id: node_id.clone(),
+                label: label.clone(),
+                node_type: "K8sResource".to_string(),
+                description: format!(
+                    "K8s {} `{}` (namespace: {}{}) в {}",
+                    kind,
+                    name,
+                    ns,
+                    if templated { ", templated" } else { "" },
+                    rel_path
+                ),
+                file_path: rel_path.to_string(),
+                line_start: 1,
+                line_end: 1,
+            });
+            out.edges.push(AstEdge {
+                source_node_id: file_node_id.to_string(),
+                target_node_id: node_id.clone(),
+                label: "DEFINES".to_string(),
+                weight: 1.0,
+                context: format!("kind: {}", kind),
+                provenance: "EXTRACTED".to_string(),
+            });
+            doc_nodes.push((node_id.clone(), label, doc.clone()));
+
+            // image → BaseImage + DEPENDS_ON
+            let images = find_yaml_strings(doc, "image");
+            for img in images.iter().take(3) {
+                out.nodes.push(AstNode {
+                    node_id: format!("image:{}", img),
+                    label: img.clone(),
+                    node_type: "BaseImage".to_string(),
+                    description: format!("Образ `{}` (image в {})", img, rel_path),
+                    file_path: rel_path.to_string(),
+                    line_start: 1,
+                    line_end: 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: node_id.clone(),
+                    target_node_id: format!("image:{}", img),
+                    label: "DEPENDS_ON".to_string(),
+                    weight: 1.0,
+                    context: format!("image {}", img),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+
+            // configMapRef/secretRef/envFrom/serviceAccountName → PendingRef
+            for ref_name in find_yaml_strings(doc, "configMapRef").iter().map(|s| s.to_string()) {
+                out.pending_refs.push(PendingRef {
+                    source_node_id: node_id.clone(),
+                    target_prefix: "k8s:".to_string(),
+                    target_suffix: format!("ConfigMap/{}", ref_name),
+                    label: "DEPENDS_ON".to_string(),
+                    context: format!("configMapRef {}", ref_name),
+                });
+            }
+            for ref_name in find_yaml_strings(doc, "secretRef").iter().map(|s| s.to_string()) {
+                out.pending_refs.push(PendingRef {
+                    source_node_id: node_id.clone(),
+                    target_prefix: "k8s:".to_string(),
+                    target_suffix: format!("Secret/{}", ref_name),
+                    label: "DEPENDS_ON".to_string(),
+                    context: format!("secretRef {}", ref_name),
+                });
+            }
+            for sa in find_yaml_strings(doc, "serviceAccountName") {
+                out.pending_refs.push(PendingRef {
+                    source_node_id: node_id.clone(),
+                    target_prefix: "k8s:".to_string(),
+                    target_suffix: format!("ServiceAccount/{}", sa),
+                    label: "DEPENDS_ON".to_string(),
+                    context: format!("serviceAccountName {}", sa),
+                });
+            }
+            // Ingress → Service (backend.service.name)
+            if kind == "Ingress" {
+                for svc_name in find_yaml_strings(doc, "name").iter().take(5) {
+                    // только имена, попадающие в правила (rule → backend.service.name)
+                    if content.contains("backend") && content.contains("service") {
+                        out.pending_refs.push(PendingRef {
+                            source_node_id: node_id.clone(),
+                            target_prefix: "k8s:".to_string(),
+                            target_suffix: format!("Service/{}", svc_name),
+                            label: "DEPENDS_ON".to_string(),
+                            context: format!("ingress → service {}", svc_name),
+                        });
+                    }
+                }
+            }
+        }
+
+        // selector ↔ labels внутри файла (BINDS_SELECTOR, INFERRED)
+        let label_sets: Vec<(String, serde_json::Value)> = doc_nodes
+            .iter()
+            .filter_map(|(id, _, doc)| {
+                doc.pointer("/metadata/labels").map(|l| (id.clone(), l.clone()))
+            })
+            .collect();
+        for (id, _, doc) in &doc_nodes {
+            if let Some(selector) = doc.pointer("/spec/selector/matchLabels") {
+                for (sel_id, labels) in &label_sets {
+                    if sel_id == id {
+                        continue;
+                    }
+                    let matches = selector.as_object().is_some_and(|sel| {
+                        sel.iter().all(|(k, v)| {
+                            labels.get(k).and_then(|l| l.as_str()) == v.as_str()
+                        })
+                    });
+                    if matches {
+                        out.edges.push(AstEdge {
+                            source_node_id: id.clone(),
+                            target_node_id: sel_id.clone(),
+                            label: "BINDS_SELECTOR".to_string(),
+                            weight: 1.0,
+                            context: "selector ↔ labels".to_string(),
+                            provenance: "INFERRED".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        found
+    }
+
     fn parse_scala(
         &self,
         rel_path: &str,
@@ -5126,6 +6004,14 @@ impl Parser {
             Parser::OpenApi => {
                 ex.parse_openapi(rel_path, file_node_id, content, out);
             }
+            Parser::Terraform => ex.parse_terraform(rel_path, file_node_id, content, out),
+            Parser::Dockerfile => ex.parse_dockerfile(rel_path, file_node_id, content, out),
+            Parser::Compose => {
+                ex.parse_compose(rel_path, file_node_id, content, out);
+            }
+            Parser::K8s => {
+                ex.parse_k8s(rel_path, file_node_id, content, out);
+            }
         }
     }
 }
@@ -5155,6 +6041,37 @@ fn collect_http_calls(rel_path: &str, content: &str, re: &Regex, out: &mut AstSc
 fn find_ref_name(v: &serde_json::Value) -> Option<String> {
     let rf = v.get("$ref").and_then(|r| r.as_str())?;
     rf.rsplit('/').next().map(|s| s.to_string())
+}
+
+/// Ф50.4: все строковые значения по ключу в глубине YAML-документа
+/// (image/configMapRef/serviceAccountName — на любой глубине podspec'а).
+fn find_yaml_strings(v: &serde_json::Value, key: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    fn walk(v: &serde_json::Value, key: &str, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                for (k, val) in m {
+                    if k == key {
+                        if let Some(s) = val.as_str() {
+                            out.push(s.to_string());
+                        } else if let Some(name) = val.get("name").and_then(|n| n.as_str()) {
+                            // configMapRef: { name: x }
+                            out.push(name.to_string());
+                        }
+                    }
+                    walk(val, key, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for it in items {
+                    walk(it, key, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(v, key, &mut out);
+    out
 }
 
 /// Нормализация пути для сопоставления контракта и кода (49.4а):
@@ -5257,6 +6174,30 @@ pub fn resolve_bridges(scan: &mut AstScanResult) -> usize {
                     weight: 1.0,
                     context: format!("gql {}", g.field),
                     provenance: "INFERRED".to_string(),
+                });
+                added += 1;
+            }
+        }
+    }
+
+    // Ф50: PendingRef → DEPENDS_ON (tf depends_on по type.name, k8s refs по
+    // label kind/name); неразрешённые отбрасываются
+    for r in &scan.pending_refs {
+        if let Some(target) = scan.nodes.iter().find(|n| {
+            n.node_id.starts_with(&r.target_prefix) && n.node_id.ends_with(&r.target_suffix)
+        }) {
+            if seen.insert((
+                r.source_node_id.clone(),
+                target.node_id.clone(),
+                r.label.clone(),
+            )) {
+                scan.edges.push(AstEdge {
+                    source_node_id: r.source_node_id.clone(),
+                    target_node_id: target.node_id.clone(),
+                    label: r.label.clone(),
+                    weight: 1.0,
+                    context: r.context.clone(),
+                    provenance: "EXTRACTED".to_string(),
                 });
                 added += 1;
             }

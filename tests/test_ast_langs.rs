@@ -702,6 +702,160 @@ fn test_rpc_bridge() {
         && e.target_node_id == "fn:proto/demo.proto:GetUser"));
 }
 
+// --- Ф50: IaC (Terraform / Dockerfile / compose / k8s) ---
+
+#[test]
+fn test_spec_terraform() {
+    let mut res = parse("terraform", "infra/main.tf");
+    ob2h::project::ast::resolve_bridges(&mut res);
+    assert_has_node(&res, "yandex_compute_instance.app");
+    let r = res
+        .nodes
+        .iter()
+        .find(|n| n.label == "yandex_compute_instance.app")
+        .unwrap();
+    assert_eq!(r.node_type, "Resource");
+    assert!(r.description.contains("провайдер: yandex"));
+    assert_has_node(&res, "network");
+    assert_has_node(&res, "region");
+    assert_has_node(&res, "endpoint");
+    // module source ./modules/vpc → file:
+    assert!(res.edges.iter().any(|e| e.label == "DEPENDS_ON"
+        && e.source_node_id.ends_with("module:infra/main.tf:network")
+        && e.target_node_id == "file:modules/vpc"));
+    // depends_on → ресурс из этого же скана (PendingRef резолв)
+    assert!(res.edges.iter().any(|e| e.label == "DEPENDS_ON"
+        && e.target_node_id.ends_with("resource:infra/main.tf:yandex_compute_instance.app")));
+}
+
+#[test]
+fn test_spec_dockerfile() {
+    let res = parse("dockerfile", "Dockerfile");
+    // два FROM (multi-stage) → два BaseImage, без узлов стейджей
+    let images: Vec<_> = res
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == "BaseImage")
+        .map(|n| n.label.as_str())
+        .collect();
+    assert!(images.contains(&"node:20-alpine"), "{:?}", images);
+    assert!(images.contains(&"nginx:1.27"), "{:?}", images);
+    assert_eq!(images.len(), 2);
+    // ARG/ENV → EnvVar
+    let envs: Vec<_> = res
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == "EnvVar")
+        .map(|n| n.label.as_str())
+        .collect();
+    assert!(envs.contains(&"NODE_ENV"), "{:?}", envs);
+    assert!(envs.contains(&"APP_HOME"), "{:?}", envs);
+    // COPY локальных путей → DEPENDS_ON к file:
+    assert!(res.edges.iter().any(|e| e.label == "DEPENDS_ON"
+        && e.target_node_id == "file:package.json"));
+    // WORKDIR/EXPOSE/CMD — в description файла
+    let file = res.nodes.iter().find(|n| n.node_type == "File").unwrap();
+    assert!(file.description.contains("EXPOSE 3000"));
+    assert!(file.description.contains("CMD"));
+}
+
+#[test]
+fn test_spec_compose() {
+    let res = parse("compose", "compose.yaml");
+    assert_has_node(&res, "api");
+    assert_has_node(&res, "db");
+    let api = res.nodes.iter().find(|n| n.label == "api").unwrap();
+    assert_eq!(api.node_type, "Service");
+    // image → BaseImage
+    assert!(res
+        .nodes
+        .iter()
+        .any(|n| n.node_type == "BaseImage" && n.label == "postgres:16"));
+    // build → file:api/Dockerfile
+    assert!(res.edges.iter().any(|e| e.label == "DEPENDS_ON"
+        && e.source_node_id.ends_with("svc:compose.yaml:api")
+        && e.target_node_id == "file:api/Dockerfile"));
+    // depends_on api → db
+    assert!(res.edges.iter().any(|e| e.label == "DEPENDS_ON"
+        && e.source_node_id.ends_with("svc:compose.yaml:api")
+        && e.target_node_id.ends_with("svc:compose.yaml:db")));
+    // ports → Port, volumes/networks → MOUNTS
+    assert!(res.nodes.iter().any(|n| n.node_type == "Port" && n.label.contains("8080")));
+    assert!(res.edges.iter().any(|e| e.label == "MOUNTS"
+        && e.source_node_id.ends_with("svc:compose.yaml:api")));
+    // environment → EnvVar
+    assert!(res.nodes.iter().any(|n| n.node_type == "EnvVar" && n.label == "RUST_LOG"));
+}
+
+#[test]
+fn test_spec_k8s() {
+    let mut res = parse("k8s", "k8s/app.yaml");
+    ob2h::project::ast::resolve_bridges(&mut res);
+    assert_has_node(&res, "Deployment/api");
+    assert_has_node(&res, "ConfigMap/api-config");
+    let dep = res
+        .nodes
+        .iter()
+        .find(|n| n.label == "Deployment/api")
+        .unwrap();
+    assert_eq!(dep.node_type, "K8sResource");
+    // image → BaseImage
+    assert!(res
+        .nodes
+        .iter()
+        .any(|n| n.node_type == "BaseImage" && n.label == "ghcr.io/example/api:1.4.2"));
+    // configMapRef → DEPENDS_ON к ConfigMap (PendingRef резолв)
+    assert!(res.edges.iter().any(|e| e.label == "DEPENDS_ON"
+        && e.source_node_id.ends_with("k8s:k8s/app.yaml:Deployment/api")
+        && e.target_node_id.ends_with("ConfigMap/api-config")));
+    // selector ↔ labels → BINDS_SELECTOR
+    assert!(res.edges.iter().any(|e| e.label == "BINDS_SELECTOR"
+        && e.source_node_id.ends_with("Deployment/api")
+        && e.target_node_id.ends_with("ConfigMap/api-config")));
+}
+
+/// 50.5: обычный YAML (CI-workflow, application.yaml) не порождает узлов
+/// кроме File; k8s-спека матчится только по каталогу.
+#[test]
+fn test_yaml_classifier() {
+    let ex = AstCodeExtractor::new();
+    for (path, content) in [
+        (
+            ".github/workflows/ci.yml",
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n",
+        ),
+        (
+            "config/application.yaml",
+            "server:\n  port: 8080\nspring:\n  datasource: db\n",
+        ),
+        (
+            "k8s/notes.yaml",
+            "# просто заметки\nkey: value\n",
+        ),
+    ] {
+        let mut res = AstScanResult::default();
+        ex.parse_file(path, content, &mut res);
+        assert!(
+            res.nodes.iter().all(|n| n.node_type == "File"),
+            "{}: лишние узлы {:?}",
+            path,
+            res.nodes
+                .iter()
+                .map(|n| n.node_type.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+    assert!(LangSpec::for_path("k8s/app.yaml").unwrap().name == "k8s");
+    assert!(LangSpec::for_path("deploy/svc.yml").unwrap().name == "k8s");
+    assert!(LangSpec::for_path("chart/values.yaml").unwrap().name == "k8s");
+    // случайный корневой yaml — не k8s и не compose
+    assert!(LangSpec::for_path("config/application.yaml").is_none());
+    assert_eq!(LangSpec::for_path("compose.yaml").unwrap().name, "compose");
+    assert_eq!(LangSpec::for_path("Dockerfile").unwrap().name, "dockerfile");
+    assert_eq!(LangSpec::for_path("api/Dockerfile.web").unwrap().name, "dockerfile");
+    assert_eq!(LangSpec::for_path("infra/main.tf").unwrap().name, "terraform");
+}
+
 #[test]
 fn test_spec_scala() {
     let res = parse("scala", "src/main/scala/UserService.scala");
