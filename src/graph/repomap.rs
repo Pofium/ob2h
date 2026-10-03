@@ -82,6 +82,13 @@ fn load_files(conn: &Connection, project_id: &str) -> rusqlite::Result<Vec<FileE
         })
     })?;
     let mut files: Vec<FileEntry> = rows.collect::<Result<_, _>>()?;
+    // Ф53.1 (PLAN_v1.7): в repo-map — только файлы кода; манифесты/стили/
+    // инфраструктура (не парсятся символами) в token-budget карту не идут.
+    files.retain(|f| {
+        crate::project::ast::LangSpec::for_path(&f.path)
+            .map(|s| s.parser.is_code())
+            .unwrap_or(true)
+    });
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
 }

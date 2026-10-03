@@ -3,6 +3,72 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [1.7.0] — 2026-10-03
+
+### Added
+- **AST-скан: новые форматы и языки (Ф47–Ф52 PLAN_v1.7)** — контракт MCP не менялся
+  (36 инструментов), схема БД без миграций, все парсеры детерминированные (без LLM).
+- **Ф47. Единый реестр `LangSpec`/`LANGS`** (ADR-AST-2): три дублирующих whitelist'а
+  расширений (collect_files, watcher::is_code_file, диспетчер parse_file) сведены к
+  одной таблице; единый `SKIP_DIRS` (+`vendor` для вотчера, `logs`/`backups` для
+  обходчика); cap размера файла `max_bytes` (для текущих языков NO_CAP — поведение 1:1);
+  `NODE_TYPE_BY_PREFIX` для авто-создаваемых целей рёбер (ADR-AST-6);
+  `tests/test_ast_langs.rs` с инвариантом консистентности реестра. Словари
+  node_type/edge_label задокументированы до полного перечня v1.7.
+- **Ф48. Веб: HTML/CSS/SCSS/blade + SFC template/style.** `parse_html`: теги с `id` →
+  `Element` (`el:`), `<script src>` → IMPORTS (file:/module:), `<link rel=stylesheet>` →
+  STYLES (file:/css: Stylesheet), `class` → BINDS_CLASS (INFERRED, `cssclass:`),
+  `form action`/`href`/`hx-*` → ROUTE (INFERRED, только in-app пути). `parse_css`:
+  `.foo` → CssClass, `#bar` → CssId, `--var` → CssVar, `@import` → IMPORTS; дедуп
+  классов по файлу. Laravel blade (`.blade.php`) идёт HTML-парсером через
+  `Matcher::Predicate`. `parse_sfc` дополнен разбором `<template>` (BINDS_CLASS +
+  PascalCase-компоненты → IMPORTS) и `<style>` (parse_css с line_offset).
+- **Ф49. API-контракты: proto, GraphQL, OpenAPI (json+yaml) и мосты.** `parse_proto`
+  (package/service/rpc/message/enum/import/USES_SCHEMA), `parse_graphql` (type/input/
+  interface/enum/schema; поля Query/Mutation/Subscription → Function), `parse_openapi`
+  (json через serde_json, yaml через serde_yaml_ng; paths×методы → Endpoint +
+  парный `route:`-узел — совместим с dead-code Ф40; components/schemas → Struct;
+  $ref → USES_SCHEMA; parameters/requestBody → Field). `resolve_bridges` —
+  INFERRED-мосты: fetch/axios/requests path-литерал → SERVES_ENDPOINT к route:
+  (только точные совпадения путей, нормализация `{id}`↔`:id`↔`<id>`), gql-поля →
+  QUERIES_FIELD, proto rpc ↔ хендлер по snake/camel → PROVIDES_RPC.
+- **Ф50. IaC: Terraform, Dockerfile, compose, K8s/Helm.** `parse_terraform`
+  (resource/data/module/variable/output; depends_on → резолв по type.name по скану),
+  `parse_dockerfile` (FROM → BaseImage, ARG/ENV → EnvVar, COPY → DEPENDS_ON file:),
+  `parse_compose` (services → Service (svc:), image → BaseImage, build/depends_on →
+  DEPENDS_ON, ports → Port, volumes/networks → MOUNTS), `parse_k8s` (документы с
+  `kind:` → K8sResource; configMapRef/secretRef/serviceAccountName → DEPENDS_ON;
+  selector↔labels → BINDS_SELECTOR; Helm-шаблоны — пометка `templated`, без рендера).
+  Классификатор YAML: узлы создаются только при характерном корневом ключе
+  (`kind:`/`services:`/`openapi:`) — CI-workflow (jobs:) и application.yaml не
+  порождают узлов.
+- **Ф51. Манифесты пакетов и граф внешних зависимостей.** Парсеры: Cargo.toml
+  (toml-крейт; path-зависимости → file:, git → module:), package.json (+scripts →
+  Script-узлы), pyproject.toml (PEP 621 + poetry + dependency-groups),
+  requirements.txt (unpinned-строки), go.mod (require-блок, indirect), pubspec.yaml,
+  composer.json. Рёбра file →(DEPENDS_ON)→ `pkg:<eco>:<name>` (ExternalPackage),
+  вес: 1.0 точный пин / 0.5 диапазон / 0.3 dev-peer-build; версия в context ребра
+  и description узла; lock-файлы исключены. `package_of_module` + слияние внешних
+  импортов с pkg:-узлами (use serde_json + Cargo.toml → один узел с версией).
+  tech_stack-маркеры: openapi/protobuf/graphql/docker/terraform/kubernetes
+  (+ jupyter/solidity/zig при ≥2 файлах).
+- **Ф52. Спец-языки: Jupyter, Solidity, Zig.** `.ipynb` — только code-ячейки через
+  parse_python со сквозным line_offset (outputs не читаются, cap 5 МБ, узел Notebook);
+  `.sol` — contract/interface/library, `is A, B` → INHERITS+IMPLEMENTS,
+  modifier/event/error/constructor → Function, mapping → Mapping, using → USES_SCHEMA;
+  `.zig` — fn/const-структуры, `@import("std")` → pkg:zig:std, test → label `test_*`
+  (совместимо с dead-code).
+- **Read-path (Ф53.1):** node_id включён в текстовый скоринг
+  `project_graph_search` (поиск по `cssclass:`/`pkg:`/`route:`/`file:` по полному id);
+  инфраструктурные типы (ExternalPackage/BaseImage/CssClass) исключены из кандидатов
+  в god nodes; repo-map (`project_context mode=repo_map`) включает только файлы кода.
+
+### Changed
+- **Зависимости (ADR-AST-3, `cargo tree` — без тяжёлых транзитивных):** `toml` 0.9
+  (Cargo.toml/pyproject.toml), `serde_yaml_ng` 0.10 (compose/k8s/openapi.yaml/pubspec).
+- Внешние импорты кода теперь консолидируются в `pkg:`-узлы (раньше — `module:` без
+  версий); инкрементальный первый скан после апгрейда рекомендуется полным.
+
 ## [Unreleased]
 
 ### Added

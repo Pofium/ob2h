@@ -43,8 +43,25 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   со 100% точностью (Graphify-подход) без вызовов LLM; скан идёт в фоне и не упирается
   в таймаут MCP-клиента — по умолчанию инструмент ждёт до 45 с, долгий скан отвечает
   «still running», результат досматривается `project_scan_status` (там же сводка из БД).
+- Детерминированный AST-граф кода: `project_scan` извлекает классы, функции, трейты и связи
+  со 100% точностью (Graphify-подход) без вызовов LLM; скан идёт в фоне и не упирается
+  в таймаут MCP-клиента — по умолчанию инструмент ждёт до 45 с, долгий скан отвечает
+  «still running», результат досматривается `project_scan_status` (там же сводка из БД).
   CLI для этого агенту не нужен. `project_report` и `project_context`
   выделяют центральные хабы архитектуры (God Nodes).
+- Форматы сканера (v1.7): 31 расширение кода (rs/py/ts/tsx/js/jsx/go/sql/c/cpp/cc/cxx/
+  h/hpp/hxx/php/dart/java/cs/kt/kts/swift/rb/vue/svelte/scala/lua/ex/exs/sh/bash) +
+  веб-разметка и стили (html/htm, css/scss, blade), контракты (proto, graphql/gql,
+  openapi.json|yaml), IaC (Dockerfile*, .tf/.hcl, docker-compose|compose.yml|yaml,
+  k8s|deploy|helm|chart*/*.yaml|yml), манифесты (Cargo.toml, package.json,
+  pyproject.toml, requirements.txt, go.mod, pubspec.yaml, composer.json; lock-файлы
+  исключены), спец-языки (.ipynb без outputs, .sol, .zig). Импорты внешних пакетов
+  сливаются с манифестами в узлы `pkg:<eco>:<name>` (версия в description).
+- Полезные запросы v1.7: `project_graph_search("pkg:rust:serde_json")` — пакет и его
+  потребители; `project_graph_search("cssclass:<имя>")` — где определён CSS-класс;
+  `project_impact("openapi.yaml")` / `project_impact("Dockerfile")` / `project_impact("Cargo.toml")`
+  — что заденет правка контракта/образа/зависимости; `project_call_path` проходит
+  фронт → `route:` → хендлер (INFERRED-мосты SERVES_ENDPOINT/PROVIDES_RPC).
 - AutoDreamWorker: гейты ≥4ч и ≥10 событий, lock, git-история правок, бэкапы
   (full/quick, verify, раздельная ротация), ночной bench-гейт (откат дрима при
   деградации recall/MRR). CLI: `ob2h stats | doctor [--fix] | dream run/status/log/restore |

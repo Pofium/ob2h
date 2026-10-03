@@ -363,3 +363,36 @@ ROUTE/QUERIES_TABLE, связка memory↔code (`meta.code_symbols`).
 **Синк v2:** дельта-бандлы по курсору, поле-уровневый merge с журналом
 `sync/conflicts.jsonl` (+`OB2H_SYNC_KEEP_LOSERS` → `meta.conflict_versions`),
 `ob2h sync verify` — см. `SYNC.md`.
+
+## Аддендум v1.7 (2026-10-03) — словарь AST-сканера и реестр LangSpec
+
+**Единый реестр языков/форматов** — `LANGS` в `src/project/ast.rs` (ADR-AST-2): единственный
+whitelist для обходчика (`collect_files`), вотчера (`watcher::is_code_file`) и диспетчера
+`parse_file`. Новый формат = запись в `LANGS` (name, matcher `Ext|FileName|Predicate`,
+словари узлов/рёбер, `max_bytes`, тег `Parser`, фикстура) + `parse_*`-функция; тест
+консистентности (`tests/test_ast_langs.rs`) покрывает автоматически. Единый `SKIP_DIRS`
+исключает `.git/target/node_modules/dist/build/venv/.venv/vendor/data/logs/backups/__pycache__`.
+
+**Словарь `node_type`:**
+- код: `Module | Struct | Class | Interface | Trait | Enum | Function | Table | File`
+- веб (Ф48): `Element` (el:), `CssClass` (cssclass:), `CssId` (cssid:), `CssVar` (cssvar:),
+  `Stylesheet` (css:), цели `File` (file:)
+- контракты (Ф49): `Service` (service:/svc:), `Endpoint` (endpoint:), `Schema` (schema:),
+  `Route` (route:), `Field`; цели `ExternalPackage` (pkg:)
+- IaC (Ф50): `Resource` (resource:), `DataSource`, `BaseImage` (image:), `EnvVar`, `Port`,
+  `Volume`, `Network`, `K8sResource` (k8s:)
+- манифесты/спец (Ф51–52): `ExternalPackage`, `Script`, `Notebook`, `Mapping`, `Variable`,
+  `Output`
+- авто-цели без префикса из `NODE_TYPE_BY_PREFIX`: `ExternalModule`
+
+**Словарь `edge_label`:**
+- кодовые: `IMPORTS | CALLS | DEFINES | IMPLEMENTS | INHERITS | DEPENDS_ON | FOREIGN_KEY_TO`
+- эвристики Ф40.2: `ROUTE | QUERIES_TABLE` (INFERRED)
+- v1.7 (ADR-AST-5, в `USAGE_EDGE_LABELS` не входят): `STYLES | BINDS_CLASS` (INFERRED,
+  Ф48), `SERVES_ENDPOINT | QUERIES_FIELD | PROVIDES_RPC | USES_SCHEMA` (Ф49),
+  `MOUNTS | BINDS_SELECTOR` (Ф50)
+
+**PPR-веса (ADR-AST-5):** кодовые рёбра и метки v1.7 получают `PPR_UNKNOWN_WEIGHT` (0.5);
+явные веса в `DEFAULT_PPR_WEIGHTS` — только по замерам (гейт ADR-13), opt-in через
+`OB2H_PPR_WEIGHTS`. God Nodes: `ExternalPackage/BaseImage/CssClass` исключены из кандидатов;
+repo-map включает только файлы кода (`Parser::is_code`).

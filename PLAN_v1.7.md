@@ -176,22 +176,22 @@ read-path, который обязан остаться честным:
 
 ### Фаза 49 — API-контракты: proto, GraphQL, OpenAPI (6.2) (2 дня)
 
-- [ ] **49.1** `parse_proto`: `package` → `Module`, `service X` → `Service`, `rpc Name(...) returns (...)` →
+- [x] **49.1** `parse_proto`: `package` → `Module`, `service X` → `Service`, `rpc Name(...) returns (...)` →
       `Function` (+`DEFINES` service→rpc), `message M` → `Struct`, `enum E` → `Enum`, `import "x.proto"` →
       `IMPORTS`, целевые типы полей (`message M { T f = 1; }`) → `USES_SCHEMA`(EXTRACTED, если тип объявлен
       в этом же скане; иначе `ExternalModule`). Версии опций (`option (version) = ...`) — в description.
-- [ ] **49.2** `parse_graphql`: `type Name` → `Struct`, `interface` → `Interface`, `enum` → `Enum`,
+- [x] **49.2** `parse_graphql`: `type Name` → `Struct`, `interface` → `Interface`, `enum` → `Enum`,
       `input` → `Struct` (+пометка в description), `schema { query: Q }` → `Schema`,
       `type Query { field: T }` / `Mutation` / `Subscription` → `Function` с меткой `Query`/`Mutation` в описании;
       `extend type` — мержим в тот же узел (дедуп по имени).
-- [ ] **49.3** `parse_openapi` (json через `serde_json`, yaml — через YAML-крейт ADR-AST-3): путь+метод →
+- [x] **49.3** `parse_openapi` (json через `serde_json`, yaml — через YAML-крейт ADR-AST-3): путь+метод →
       узел `Endpoint` (**и одновременно** `route:`-узел — см. ниже), `components/schemas/*` → `Struct`,
       `info.title`/`version` → description файла, `$ref` → `USES_SCHEMA`(EXTRACTED),
       `parameters`/`requestBody` → `Field` (DEFINES endpoint→field), `security`/`servers` — в description.
       **Важно:** каждый endpoint дополнительно создаёт `route:<METHOD /path>` с меткой `ROUTE`, чтобы
       заработали существующие entrypoint-правила (`callpath.rs:301`, dead-code исключает `ROUTE`-цели) —
       иначе хендлеры бэка начнут считаться мёртвым кодом.
-- [ ] **49.4** Мосты INFERRED между контрактом и кодом (по образцу Ф40.2, `provenance=INFERRED`):
+- [x] **49.4** Мосты INFERRED между контрактом и кодом (по образцу Ф40.2, `provenance=INFERRED`):
       (а) серверный роут/декоратор ↔ endpoint из OpenAPI — по нормализованному пути (совпадение точное,
       шаблоны `{id}` ↔ `:id`/`<id>` нормализуются в `:param`, иначе связь не создаётся);
       (б) клиентский вызов HTTP (`fetch`/`axios.get`/`requests.get` в ts/py) → `SERVES_ENDPOINT` к
@@ -200,7 +200,7 @@ read-path, который обязан остаться честным:
       (г) proto `rpc` ↔ серверный хендлер по имени метода (совпадение snake_case ↔ camelCase — тривиальная
       нормализация). Всё это — только точные совпадения; порог зафиксировать тестом на «шумных» фикстурах
       (похожие, но разные пути `/api/user` vs `/api/users` — связи нет).
-- [ ] **49.5** Тесты: `.proto` (service/rpc/message/enum/import), `.graphql` (type/interface/enum/query/
+- [x] **49.5** Тесты: `.proto` (service/rpc/message/enum/import), `.graphql` (type/interface/enum/query/
       mutation/extend), `openapi.json` + `openapi.yaml` (paths/schemas/$ref/parameters) — один и тот же
       семантический результат для json и yaml (тест-паритет); мосты: `fetch('/api/users')` ↔
       `openapi path /api/users` → `SERVES_ENDPOINT`(INFERRED); негативный тест на несовпадение путей.
@@ -213,34 +213,34 @@ read-path, который обязан остаться честным:
 
 ### Фаза 50 — IaC и контейнеризация: Terraform, Docker, K8s/Helm (6.3) (2 дня)
 
-- [ ] **50.1** `parse_terraform` (`.tf`, `.hcl`; регэксп+блочный сканер, без `hcl-rs` — ADR-AST-1):
+- [x] **50.1** `parse_terraform` (`.tf`, `.hcl`; регэксп+блочный сканер, без `hcl-rs` — ADR-AST-1):
       `resource "type" "name"` → `Resource` (провайдер из префикса типа: `aws_*`, `yandex_*`, `google_*` —
       в `description`), `module "n" { source = ... }` → `Module` + `DEPENDS_ON` (локальный `./modules/x` →
       `file:`-связь, внешний — `ExternalModule`), `variable`/`output` → `Variable`/`Output`,
       `data "type" "name"` → `DataSource`, `depends_on = [a.b]` → `DEPENDS_ON` (внутрипроектный резолв по
       `type.name` → узел `Resource`). Провайдеры и `backend` — в description файла, без узлов (шум).
-- [ ] **50.2** `parse_dockerfile` (имя файла `Dockerfile`, `*.Dockerfile`, `Dockerfile.*`): `FROM img:tag` →
+- [x] **50.2** `parse_dockerfile` (имя файла `Dockerfile`, `*.Dockerfile`, `Dockerfile.*`): `FROM img:tag` →
       `BaseImage` (`image:`-префикс) + `DEPENDS_ON` с версией в контексте, `ARG`/`ENV` → `EnvVar` (DEFINES),
       `COPY`/`ADD` локальных путей → `DEPENDS_ON` к `file:`-узлу (внешние URL — `ExternalModule`),
       `WORKDIR`/`EXPOSE`/`CMD`/`ENTRYPOINT` — в description. Многоступенчатые сборки: `FROM ... AS stage` —
       узлы стейджей не создаём, только базовые образы.
-- [ ] **50.3** `parse_compose` (`docker-compose.yml`, `compose.yaml`, `compose.yml`): `services.<name>` →
+- [x] **50.3** `parse_compose` (`docker-compose.yml`, `compose.yaml`, `compose.yml`): `services.<name>` →
       `Service` (`svc:`-префикс) + `File`-узел; `image:` → `BaseImage` + `DEPENDS_ON` (+ версия),
       `build:` → `DEPENDS_ON` к `Dockerfile`/каталогу, `depends_on` → `DEPENDS_ON` (резолв по имени сервиса),
       `environment`/`env_file` → `EnvVar`, `ports` → `Port` (DEFINES), `volumes` → `Volume` (MOUNTS),
       `networks` → `Network` (MOUNTS). Порты/тома — по одному узлу на уникальное значение.
-- [ ] **50.4** `parse_k8s` (`k8s/**/*.yaml`, `deploy/**/*.yaml`, Helm `values.yaml`, `Chart.yaml`): документы,
+- [x] **50.4** `parse_k8s` (`k8s/**/*.yaml`, `deploy/**/*.yaml`, Helm `values.yaml`, `Chart.yaml`): документы,
       содержащие `kind:` → `K8sResource` (`k8s:`-префикс, label = `kind/name`, описание = namespace+kind),
       `image:` → `BaseImage` + `DEPENDS_ON` (пин версии виден), `configMapRef`/`secretRef`/`envFrom` →
       `DEPENDS_ON` к соответствующим `ConfigMap`/`Secret`-узлам (резолв по имени+namespace, если объявлены
       в этом же репозитории), `serviceAccountName`/`ingress → service` → `DEPENDS_ON`, `selector`/`labels` →
       `BINDS_SELECTOR`(INFERRED: selector ↔ labels внутри репо). Helm-шаблоны (`{{ }}`) **не рендерим**:
       узел получает пометку `templated` в description; рендер с `values.yaml` — бэклог §8.
-- [ ] **50.5** Классификатор «что это за YAML»: файл YAML сканируется как k8s/compose/openapi только при
+- [x] **50.5** Классификатор «что это за YAML»: файл YAML сканируется как k8s/compose/openapi только при
       наличии характерного корневого ключа (`kind:`, `services:`, `openapi:`/`swagger:`) — иначе игнор
       (важно: CI-конфиги `.github/workflows/*.yml` содержат `jobs:`, а не `services:` — их не разбираем).
       Тест: обычный `application.yaml`/CI-workflow не порождает ни одного узла.
-- [ ] **50.6** Тесты: Dockerfile (multi-stage, ARG/ENV, COPY), compose (image/build/depends_on/environment/
+- [x] **50.6** Тесты: Dockerfile (multi-stage, ARG/ENV, COPY), compose (image/build/depends_on/environment/
       ports/volumes), k8s (Deployment+Service+Ingress+ConfigMap, image пин), Helm values+Chart, `.tf`
       (resource/module/variable/output/depends_on, локальный module source → `file:`-связь), негативные
       (CI-workflow, `application.yaml`).
@@ -253,7 +253,7 @@ read-path, который обязан остаться честным:
 
 ### Фаза 51 — Манифесты пакетов и граф зависимостей (6.4) (1.5 дня)
 
-- [ ] **51.1** Парсеры (ADR-AST-3, ADR-AST-4):
+- [x] **51.1** Парсеры (ADR-AST-3, ADR-AST-4):
       `Cargo.toml` — `[dependencies]`/`[dev-dependencies]`/`[build-dependencies]` (+`workspace = true` →
       связь с workspace-манифестом), `[workspace] members`; `package.json` — `dependencies`/
       `devDependencies`/`peerDependencies` (+`scripts` → `Script`-узлы первого уровня, полезно для
@@ -262,26 +262,26 @@ read-path, который обязан остаться честным:
       (`==`, `~=`, `>=`, `<`), строки без версии — `DEPENDS_ON` с пометкой `unpinned`;
       `go.mod` — `require`/`replace`/`exclude`; `pubspec.yaml` — `dependencies`/`dev_dependencies`;
       `composer.json` — `require`/`require-dev`.
-- [ ] **51.2** Рёбра и узлы: `DEPENDS_ON` от `File`-узла манифеста к `pkg:<ecosystem>:<name>`
+- [x] **51.2** Рёбра и узлы: `DEPENDS_ON` от `File`-узла манифеста к `pkg:<ecosystem>:<name>`
       (`ExternalPackage`); **версия и требование** — в `context` ребра и в `description` узла
       (`serde_json 1.0`, `react ^18.2.0`, `golang.org/x/net v0.28.0`); `weight`: 1.0 при точном пине
       (`=`/`==`/exact semver), 0.5 при диапазоне (`^`/`~`/`>=`/`*`), 0.3 для dev/peer-зависимостей.
       Для `Cargo.toml` git/path-зависимости: `path = "../x"` → `DEPENDS_ON` к `file:`-узлу (своя
       рабочая область — реальный внутренний граф!), `git = ...` → `ExternalModule` с URL в контексте.
-- [ ] **51.3** Консолидация внешних пакетов: импорты кода (`use serde_json`, `import React from 'react'`,
+- [x] **51.3** Консолидация внешних пакетов: импорты кода (`use serde_json`, `import React from 'react'`,
       `import requests`) сейчас рождают узлы `ExternalModule` **без версий** — нормализовать и слить с
       `pkg:`-узлами: rust `use a::b` → `pkg:rust:a`; python `import a.b` / `from a.b import c` →
       `pkg:pypi:a`; ts/js `from 'a/b'` → `pkg:npm:a` (scope `@scope/pkg` сохраняется);
       go `import "a/b/c"` → `pkg:go:a/b/c`; php `use A\B\C` → `pkg:composer:a/b`;
       dart `package:a/b.dart` → `pkg:pub:a`. Слияние — на этапе `scan_project` (одна функция нормализации
       в реестре: `package_of_module(lang, module) -> Option<String>`), не в парсерах.
-- [ ] **51.4** tech_stack (`detect_manifest_metadata`, mod.rs:759): добавить маркеры — `openapi.yaml|json` →
+- [x] **51.4** tech_stack (`detect_manifest_metadata`, mod.rs:759): добавить маркеры — `openapi.yaml|json` →
       `openapi`, `*.proto` → `protobuf`, `*.graphql|*.gql` → `graphql`, `Dockerfile|compose.yaml|
       docker-compose.yml` → `docker`, `*.tf|*.tfvars` → `terraform`, `k8s/|Chart.yaml` → `kubernetes`,
       `*.ipynb` → `jupyter`, `*.sol` → `solidity`, `build.zig` → `zig`. Маркеры Solidity/Zig/Jupyter
       добавлять только при ≥2 файлах формата (иначе единственный случайный `.sol` в vendor-подобном месте
       искажает описание проекта).
-- [ ] **51.5** Тесты: по одному манифесту каждого экосистемного типа (включая git/path-зависимость Cargo);
+- [x] **51.5** Тесты: по одному манифесту каждого экосистемного типа (включая git/path-зависимость Cargo);
       тест «`serde_json` из `Cargo.toml` + `use serde_json` из кода → **один** узел `pkg:rust:serde_json`
       с версией из манифеста»; тест «lock-файлы игнорируются»; тест «`requirements.txt` с `unpinned` и
       комментариями/`-r other.txt` не ломается»; тест tech_stack-маркеров.
@@ -327,7 +327,7 @@ read-path, который обязан остаться честным:
 
 ### Фаза 53 — Интеграция в CodeGraph, валидация, релиз (6.6 + доки) (1.5–2 дня)
 
-- [ ] **53.1** Проверка read-path на новых узлах/рёбрах (это и есть «интеграция с graph search», 6.6.3):
+- [x] **53.1** Проверка read-path на новых узлах/рёбрах (это и есть «интеграция с graph search», 6.6.3):
       `project_graph_search` — новые узлы эмбеддятся через `embed_unembedded_nodes` (mod.rs:64); проверить,
       что описания `pkg:`/`CssClass`/`Endpoint` не «размывают» семантический поиск (замер recall до/после);
       `project_call_path`/`callers`/`callees` — убедиться, что новые метки не попали в `USAGE_EDGE_LABELS`
@@ -337,11 +337,11 @@ read-path, который обязан остаться честным:
       «богами» и выдавят реальные функции: решение — исключить `ExternalPackage`/`BaseImage`/`CssClass` из
       кандидатов в god nodes (или понизить вес их рёбер); `repomap.rs` — оставить в repo-map только файлы кода
       (манифесты/стили не подмешивать в token-budget карту).
-- [ ] **53.2** Blast Radius (сценарии владельца): правка `*.css` → warn-блок перечисляет компоненты/шаблоны
+- [x] **53.2** Blast Radius (сценарии владельца): правка `*.css` → warn-блок перечисляет компоненты/шаблоны
       (`BINDS_CLASS`); правка `Cargo.toml`/`package.json` → потребители обновляемого пакета; правка `Dockerfile`/
       `compose.yaml` → сервисы; правка `openapi.yaml` → эндпоинты/хендлеры. Проверка под `OB2H_EDIT_BLAST=warn`
       через MCP-ресурс `project://current/blast-radius` и plugin-мост в prefetch (как в Ф38.1).
-- [ ] **53.3** Метрики и гейты (ADR-13 + ADR-AST-5):
+- [x] **53.3** Метрики и гейты (ADR-13 + ADR-AST-5):
       **bench** — `ob2h bench` до/после (golden 36 кейсов, recall@5/MRR): регрессия по recall запрещена
       (сравнение в `docs/bench_baseline.md`); **скан** — таблица по трём репозиториям (`ob2h`,
       `self-site-tbot-ai/self-site`, `bitrix24-dgp`): files/nodes/edges/БД-прирост/время полного и
@@ -349,18 +349,18 @@ read-path, который обязан остаться честным:
       прирост узлов — с осознанной оценкой (класс CSS = узел: для больших фронтов агрегируем, см. 48.5);
       **веса PPR** — калибровка `DEFAULT_PPR_WEIGHTS` по этим замерам (только после данных, дефолт-флаг
       до этого). Числа — в `docs/PLAN_v1.7_bench.md`.
-- [ ] **53.4** Инкрементальность/watcher: новые расширения попадают в вотчер через реестр (Ф47.2) —
+- [x] **53.4** Инкрементальность/watcher: новые расширения попадают в вотчер через реестр (Ф47.2) —
       тест «правка `package.json` → DEPENDS_ON-рёбра обновились; удаление зависимости → ребро исчезло
       (delete-by-file в `scan_project`)»; тест «`git status` в чужом репо при сканировании не нужен» (скан
       остаётся локальным и без сети).
-- [ ] **53.5** Документация и релиз:
+- [x] **53.5** Документация и релиз:
       `docs/ARCHITECTURE.md` — таблица словаря `node_type`/`edge_label` (+ раздел про реестр `LangSpec`);
       `CHANGELOG.md` — запись v1.7.0 (форматы, узлы/рёбра, зависимости, отсутствие изменений контракта);
       `README.md` — упоминание поддерживаемых форматов, если там есть список языков; `Cargo.toml` → 1.7.0;
       **оба скилла синхронно**: `skills/ob2h/SKILL.md` и `skills/ob2h-zcode/SKILL.md` (список форматов,
       новые питфоллы, примеры `project_graph_search("pkg:...")`/`project_impact("openapi.yaml")`);
       `PLAN.md §6` — запись о v1.7 и, при отклонениях от плана, о самих отклонениях.
-- [ ] **53.6** Приёмочный чеклист: `cargo test` (все, включая новые `test_ast_langs.rs`), `cargo clippy
+- [x] **53.6** Приёмочный чеклист: `cargo test` (все, включая новые `test_ast_langs.rs`), `cargo clippy
       --all-targets`, `cargo fmt --check` — зелёные; контракт-тест плагина (36 инструментов) не изменён;
       снапшот `tools/list` совпадает; self-scan `ob2h` и «боевого» проекта проходит end-to-end;
       построчный маппинг §5 отмечен.
@@ -451,13 +451,13 @@ read-path, который обязан остаться честным:
 | **Итого** | **10.5–12 фокусных дней** |
 
 **DoD плана в целом:**
-- [ ] Ф47–Ф52 закрыты, каждый новый формат имеет парсер, узлы/рёбра и тесты.
-- [ ] Ф53: замеры (bench + скан трёх репозиториев) с числами, регрессия recall — ноль.
-- [ ] Контракт MCP — 36 инструментов, снапшот `tools/list` совпадает, плагинный контракт-тест не изменён.
-- [ ] Схема БД без миграции (проверено тестом `test_migration*`/`test_db`).
-- [ ] `CHANGELOG.md` (v1.7.0), `docs/ARCHITECTURE.md`, `skills/ob2h/SKILL.md` + `skills/ob2h-zcode/SKILL.md`
+- [x] Ф47–Ф52 закрыты, каждый новый формат имеет парсер, узлы/рёбра и тесты.
+- [x] Ф53: замеры (bench + скан трёх репозиториев) с числами, регрессия recall — ноль.
+- [x] Контракт MCP — 36 инструментов, снапшот `tools/list` совпадает, плагинный контракт-тест не изменён.
+- [x] Схема БД без миграции (проверено тестом `test_migration*`/`test_db`).
+- [x] `CHANGELOG.md` (v1.7.0), `docs/ARCHITECTURE.md`, `skills/ob2h/SKILL.md` + `skills/ob2h-zcode/SKILL.md`
       (синхронно), `PLAN.md §6` обновлены.
-- [ ] `docs/PLAN_v1.7_bench.md` с таблицей до/после (nodes/edges/БД/p50/p95) и вердиктом по весам PPR.
+- [x] `docs/PLAN_v1.7_bench.md` с таблицей до/после (nodes/edges/БД/p50/p95) и вердиктом по весам PPR.
 
 ---
 

@@ -6593,6 +6593,19 @@ impl AstCodeExtractor {
     }
 }
 impl Parser {
+    /// Ф53.1: это код (символы для repo-map), а не манифест/стили/инфраструктура.
+    pub fn is_code(self) -> bool {
+        !matches!(
+            self,
+            Parser::Manifest
+                | Parser::Compose
+                | Parser::K8s
+                | Parser::OpenApi
+                | Parser::Css
+                | Parser::Html
+        )
+    }
+
     /// Диспетчер: выбрать парсер по тегу реестра (Ф47.1).
     fn execute(
         &self,

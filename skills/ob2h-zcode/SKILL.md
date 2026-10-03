@@ -79,6 +79,13 @@ description: "Долговременная память, граф знаний, 
 
 Детерминированный AST-граф: `project_scan` извлекает классы, функции, трейты и связи со 100%
 точностью (Graphify-подход) без LLM; `project_report`/`project_context` выделяют хабы (God Nodes).
+Форматы (v1.7): код (31 расширение) + html/css/blade + контракты (proto/graphql/openapi) +
+IaC (Dockerfile/.tf/compose/k8s) + манифесты (Cargo.toml/package.json/pyproject/go.mod/
+requirements/pubspec/composer; lock-файлы исключены) + .ipynb/.sol/.zig. Импорты внешних
+пакетов сливаются с манифестами в `pkg:<eco>:<name>` (версия в description).
+Полезные запросы: `project_graph_search("pkg:rust:serde_json")`, `project_graph_search("cssclass:<имя>")`,
+`project_impact("openapi.yaml")`, `project_impact("Cargo.toml")`; `project_call_path` проходит
+фронт → `route:` → хендлер (INFERRED-мосты). После апгрейда бинаря — полный `project_scan` проекта.
 AutoDreamWorker: гейты ≥4ч и ≥10 событий, lock, git-история правок, ночной bench-гейт
 (откат дрима при деградации recall/MRR).
 

@@ -131,13 +131,38 @@ impl GraphAnalytics {
 
         node_scores.sort_by_key(|b| std::cmp::Reverse(b.3));
 
+        // Ф53.1 (PLAN_v1.7): инфраструктурные узлы-хабы (пакеты, образы,
+        // CSS-классы) исключаются из кандидатов в god nodes — их большая
+        // in-degree «выдавила» бы реальные функции из отчёта.
+        const INFRA_GOD_EXCLUDE: &[&str] = &["ExternalPackage", "BaseImage", "CssClass"];
+        let mut type_stmt = conn.prepare(
+            "SELECT id, node_type FROM graph_nodes WHERE project_id = ?1 AND (deleted_at IS NULL OR deleted_at = '')",
+        )?;
+        let node_types: HashMap<i64, String> = type_stmt
+            .query_map(params![project_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let candidates: Vec<_> = node_scores
+            .into_iter()
+            .filter(|(pk, ..)| {
+                node_types
+                    .get(pk)
+                    .map(|t| !INFRA_GOD_EXCLUDE.contains(&t.as_str()))
+                    .unwrap_or(true)
+            })
+            .collect();
+
         // Берем топ 10% или минимум топ-5 наиболее связанных узлов
-        let top_count = (node_scores.len() / 10).clamp(3, 20).min(node_scores.len());
-        let god_nodes_pks: Vec<i64> = node_scores
+        let top_count = (candidates.len() / 10).clamp(3, 20).min(candidates.len());
+        let god_nodes_pks: Vec<i64> = candidates
             .iter()
             .take(top_count)
             .map(|(pk, ..)| *pk)
             .collect();
+        let god_nodes_info_src = candidates;
 
         // Маркируем в базе
         for pk in &god_nodes_pks {
@@ -149,7 +174,7 @@ impl GraphAnalytics {
 
         // Загружаем подробную информацию о God Nodes
         let mut god_nodes_info = Vec::new();
-        for (pk, in_deg, out_deg, total) in node_scores.into_iter().take(top_count) {
+        for (pk, in_deg, out_deg, total) in god_nodes_info_src.into_iter().take(top_count) {
             let mut q_stmt = conn.prepare(
                 "SELECT node_id, label, node_type, file_path, description FROM graph_nodes WHERE id = ?1",
             )?;
