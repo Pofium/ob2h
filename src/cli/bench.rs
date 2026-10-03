@@ -296,6 +296,7 @@ pub async fn cli_run(
     mode: &str,
     k_spec: &str,
     golden: Option<&str>,
+    project: Option<&str>,
     as_json: bool,
     save_baseline: bool,
 ) -> anyhow::Result<()> {
@@ -310,8 +311,8 @@ pub async fn cli_run(
         }
         return Ok(());
     }
-    if mode != "search" && mode != "context" && mode != "latency" {
-        anyhow::bail!("mode должен быть search|context|latency|history, получено: {mode}");
+    if mode != "search" && mode != "context" && mode != "code" && mode != "latency" {
+        anyhow::bail!("mode должен быть search|context|code|latency|history, получено: {mode}");
     }
     let ks: Vec<usize> = k_spec
         .split(',')
@@ -410,6 +411,48 @@ pub async fn cli_run(
             &crate::cli::bench_history::history_path(&ctx.settings.data_dir),
             &rec,
         );
+        return Ok(());
+    }
+
+    // Ф54 (PLAN.md): mode=code — PPR по кодовому графу проекта против
+    // golden_code.jsonl (query → ожидаемый node_id). Веса — OB2H_PPR_WEIGHTS
+    // (по умолчанию DEFAULT_PPR_WEIGHTS): калибровка дефолта делается числами.
+    if mode == "code" {
+        let Some(pid) = project else {
+            anyhow::bail!("mode=code требует --project <id> (PPR по кодовому графу)");
+        };
+        let path = golden
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| ctx.settings.data_dir.join("bench").join("golden_code.jsonl"));
+        let cases = load_golden(&path)?;
+        let damping = std::env::var("OB2H_PPR_DAMPING")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(crate::graph::pagerank::DAMPING_MAX);
+        let weights = crate::graph::pagerank::parse_ppr_weights(
+            &std::env::var("OB2H_PPR_WEIGHTS")
+                .unwrap_or_else(|_| crate::graph::pagerank::DEFAULT_PPR_WEIGHTS.to_string()),
+        );
+        let result = run_code_bench(&ctx.graph, &cases, pid, &ks, damping, &weights).await?;
+        if as_json {
+            println!(
+                "{}",
+                json!({
+                    "mode": "code",
+                    "project": pid,
+                    "cases": result.cases,
+                    "k": result.ks,
+                    "recall_at_k": result.recall,
+                    "mrr": result.mrr,
+                    "empty_count": result.empty_count,
+                    "p50_ms": (result.p50_ms * 10.0).round() / 10.0,
+                    "p95_ms": (result.p95_ms * 10.0).round() / 10.0,
+                    "missing_keys": result.missing_keys,
+                })
+            );
+        } else {
+            print_human(&result, &path);
+        }
         return Ok(());
     }
 
@@ -760,4 +803,96 @@ mod tests {
         std::fs::write(&no_keys, "{\"query\":\"x\",\"expect_keys\":[]}\n").unwrap();
         assert!(load_golden(&no_keys).is_err());
     }
+}
+
+/// Ф54: прогон golden-набора по кодовому графу: PPR от семантических сидов
+/// (graph search) с расшисанием по рёбрам графа проекта; метрики — по
+/// позициям ожидаемых node_id в ранжированной выдаче.
+async fn run_code_bench(
+    graph: &crate::graph::GraphService,
+    cases: &[GoldenCase],
+    project_id: &str,
+    ks: &[usize],
+    damping: f64,
+    weights: &crate::graph::pagerank::PprWeights,
+) -> anyhow::Result<BenchResult> {
+    if ks.is_empty() {
+        anyhow::bail!("список k пуст");
+    }
+    let max_k = *ks.iter().max().unwrap();
+
+    // pk → node_id (строковый идентификатор узла) для сопоставления с golden
+    let id_map: std::collections::HashMap<i64, String> = graph
+        .all_node_ids(project_id)?
+        .into_iter()
+        .collect();
+
+    // Прогрев: первый вызов грузит модель эмбеддингов — вне метрик.
+    let _ = graph
+        .ppr_search("прогрев", Some(project_id), 5, damping, weights)
+        .await;
+
+    let mut recalls = vec![0.0f64; ks.len()];
+    let mut mrr_sum = 0.0f64;
+    let mut empty_count = 0usize;
+    let mut durations = Vec::with_capacity(cases.len());
+    let mut scored_cases = 0usize;
+    let mut missing_keys: Vec<String> = Vec::new();
+
+    for case in cases {
+        let expected: HashSet<String> = case
+            .expect_keys
+            .iter()
+            .filter(|k| id_map.values().any(|nid| nid == *k))
+            .cloned()
+            .collect();
+        for k in &case.expect_keys {
+            if !expected.contains(k) && !missing_keys.contains(k) {
+                missing_keys.push(k.clone());
+            }
+        }
+        if expected.is_empty() {
+            continue;
+        }
+        scored_cases += 1;
+
+        let started = Instant::now();
+        let hits = graph
+            .ppr_search(&case.query, Some(project_id), max_k * 2, damping, weights)
+            .await?;
+        let mut ranked: Vec<String> = Vec::new();
+        for hit in &hits {
+            if let Some(nid) = id_map.get(&hit.node_id) {
+                if !ranked.contains(nid) {
+                    ranked.push(nid.clone());
+                }
+            }
+        }
+        durations.push(started.elapsed().as_secs_f64() * 1000.0);
+        if ranked.is_empty() {
+            empty_count += 1;
+        }
+        for (i, &k) in ks.iter().enumerate() {
+            recalls[i] += recall_at_k(&ranked, &expected, k);
+        }
+        mrr_sum += mrr(&ranked, &expected);
+    }
+
+    let n = scored_cases.max(1) as f64;
+    let recalls: Vec<f64> = recalls.iter().map(|r| (r / n * 1000.0).round() / 1000.0).collect();
+    let mrr = (mrr_sum / n * 1000.0).round() / 1000.0;
+    let p50 = percentile(&mut durations, 50.0);
+    let p95 = percentile(&mut durations, 95.0);
+
+    Ok(BenchResult {
+        mode: format!("code:{}", project_id),
+        cases: scored_cases,
+        ks: ks.to_vec(),
+        recall: recalls,
+        mrr,
+        empty_count,
+        p50_ms: p50,
+        p95_ms: p95,
+        missing_keys,
+    })
 }

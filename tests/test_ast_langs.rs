@@ -175,11 +175,47 @@ fn test_spec_python() {
 
 #[test]
 fn test_spec_ts_js() {
-    let res = parse("ts-js", "src/app.ts");
+    let res = parse("ts-js", "src/app.tsx");
     assert_has_node(&res, "UserService");
     assert_has_node(&res, "Repo");
     assert_has_edge(&res, "IMPORTS");
     assert_has_edge(&res, "DEFINES");
+    // Ф55: className из фикстуры → BINDS_CLASS
+    assert_has_edge(&res, "BINDS_CLASS");
+}
+
+/// Ф55: React className="..." → BINDS_CLASS (INFERRED, дедуп по имени на файл);
+/// динамические значения (шаблоны, clsx) статикой не резолвим — граница.
+#[test]
+fn test_tsx_classname_binds_class() {
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    ex.parse_file(
+        "src/App.tsx",
+        r#"export const a = () => <div className="card wide">x</div>;
+export const b = () => <button className="card">y</button>;
+export const c = () => <div className={`card ${x}`}>z</div>;
+export const d = () => <div className={clsx("card", cond)}>w</div>;
+"#,
+        &mut res,
+    );
+    let binds: Vec<&str> = res
+        .edges
+        .iter()
+        .filter(|e| e.label == "BINDS_CLASS")
+        .map(|e| e.target_node_id.as_str())
+        .collect();
+    assert!(binds.contains(&"cssclass:card"), "{:?}", binds);
+    assert!(binds.contains(&"cssclass:wide"), "{:?}", binds);
+    // дедуп: card в двух статических литералах → одно ребро на имя
+    assert_eq!(
+        binds.iter().filter(|t| **t == "cssclass:card").count(),
+        1,
+        "{:?}",
+        binds
+    );
+    // шаблонная интерполяция и clsx — вне скоупа
+    assert_eq!(binds.len(), 2, "{:?}", binds);
 }
 
 #[test]
@@ -1040,4 +1076,36 @@ fn test_manifests_go_npm_composer() {
         .edges
         .iter()
         .any(|e| e.target_node_id == "pkg:pypi:pytest" && (e.weight - 0.3).abs() < 1e-9));
+}
+
+/// Ф54: многострочные сигнатуры функций не теряются (было: построчный матч
+/// rust_fn_re молча пропускал сигнатуры с переносом) — parse_ts_js и весь
+/// слой Ф49–Ф52 не попадали в граф.
+#[test]
+fn test_multiline_fn_signature() {
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    ex.parse_file(
+        "src/lib.rs",
+        r#"pub struct S {
+    x: u32,
+}
+
+impl S {
+    #[get("/items")]
+    fn build(
+        &self,
+        name: &str,
+    ) -> S {
+        S { x: 1 }
+    }
+}
+"#,
+        &mut res,
+    );
+    assert_has_node(&res, "build");
+    let build = res.nodes.iter().find(|n| n.label == "build").unwrap();
+    assert_eq!(build.line_start, 7);
+    // ROUTE-атрибут над многострочной сигнатурой всё ещё ловится
+    assert_has_edge(&res, "ROUTE");
 }

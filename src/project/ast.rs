@@ -271,10 +271,10 @@ def list_users():
         name: "ts-js",
         matcher: Matcher::Ext(&["ts", "tsx", "js", "jsx"]),
         node_types: &["File", "Class", "Interface", "Function"],
-        edge_labels: &["IMPORTS", "DEFINES"],
+        edge_labels: &["IMPORTS", "DEFINES", "BINDS_CLASS"],
         max_bytes: NO_CAP,
         parser: Parser::TsJs,
-        fixture: r"import { Store } from './store';
+        fixture: r#"import { Store } from './store';
 
 export class UserService extends Base implements Repo {
 }
@@ -285,7 +285,13 @@ export interface Repo {
 export function load(id) {
     return null;
 }
-",
+
+export const view = () => (
+    <div className="card wide">
+        <span className="title">x</span>
+    </div>
+);
+"#,
         sample_rel: "",
     },
     LangSpec {
@@ -1545,6 +1551,9 @@ pub struct AstCodeExtractor {
     /// Поле внутри Query/Mutation/Subscription-блока: `name(args): Type`.
     gql_field_re: Regex,
 
+    /// Ф55: React `className="..."` (статические строковые литералы;
+    /// шаблоны/clsx не резолвим — граница как у SCSS-миксинов).
+    ts_classname_re: Regex,
     /// Ф49.4б: клиентские HTTP-вызовы (ts/js: fetch/axios; py: requests).
     ts_http_re: Regex,
     py_http_re: Regex,
@@ -1591,7 +1600,8 @@ impl AstCodeExtractor {
     pub fn new() -> Self {
         Self {
             // Rust patterns
-            rust_fn_re: Regex::new(r"(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?fn\s+([a-zA-Z0-9_]+)\s*(?:<[^>]+>)?\s*\(([^)]*)\)(?:\s*->\s*([^{]+))?").unwrap(),
+            rust_fn_re: Regex::new(r"(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?(?:async\s+)?fn\s+([a-zA-Z0-9_]+)\s*(?:<[^>]+>)?\s*\(([^)]*)\)(?:\s*->\s*([^{
+]+))?").unwrap(),
             rust_struct_re: Regex::new(r"(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?(?:struct|enum)\s+([a-zA-Z0-9_]+)").unwrap(),
             rust_trait_re: Regex::new(r"(?m)^\s*(?:pub(?:\([^)]+\))?\s+)?trait\s+([a-zA-Z0-9_]+)").unwrap(),
             rust_impl_re: Regex::new(r"(?m)^\s*impl(?:<[^>]+>)?\s+(?:([a-zA-Z0-9_:]+)\s+for\s+)?([a-zA-Z0-9_:]+)").unwrap(),
@@ -1731,6 +1741,9 @@ impl AstCodeExtractor {
             gql_schema_re: Regex::new(r"schema\s*\{").unwrap(),
             gql_query_block_re: Regex::new(r"(?is)(?:type|extend type)\s+(Query|Mutation|Subscription)\s*\{([^{}]*)\}").unwrap(),
             gql_field_re: Regex::new(r"^\s*([a-z][a-zA-Z0-9_]*)\s*(?:\([^)]*\))?\s*:").unwrap(),
+
+            // Ф55: React className (статика)
+            ts_classname_re: Regex::new(r#"(?i)\sclassname\s*=\s*(?:"([^"]+)"|'([^']+)')"#).unwrap(),
 
             // Ф49.4: клиентские вызовы и gql-строки
             ts_http_re: Regex::new(r#"(?i)(?:fetch|axios(?:\.(get|post|put|delete|patch))?)\s*\(\s*["'`]([^"'`]+)["'`]"#).unwrap(),
@@ -1994,35 +2007,51 @@ impl AstCodeExtractor {
                 }
             }
         }
-        for (i, line) in lines.iter().enumerate() {
-            if let Some(cap) = self.rust_fn_re.captures(line) {
+        // Ф54: матч по всему содержимому — сигнатуры бывают многострочными
+        // (сигнатура переносится) и построчный матч их молча терял
+        // (parse_ts_js не был в графе с v1.0). Номер строки — от смещения матча.
+        for cap in self.rust_fn_re.captures_iter(content) {
+            {
                 if let Some(fn_match) = cap.get(1) {
                     let fn_name = fn_match.as_str();
                     let node_id = format!("fn:{}:{}", rel_path, fn_name);
-                    let sig = line.trim().trim_end_matches('{').trim();
+                    let m0 = cap.get(0).unwrap();
+                    // Ф54: сигнатура = сам матч (regex покрывает `fn name(args)
+                    // -> Type` без тела; переносы схлопываем в пробелы)
+                    let sig = m0
+                        .as_str()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let line = content[..m0.start()].matches('\n').count() + 1;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: fn_name.to_string(),
                         node_type: "Function".to_string(),
                         description: format!("Функция `{}` ({}) в {}", fn_name, sig, rel_path),
                         file_path: rel_path.to_string(),
-                        line_start: i + 1,
-                        line_end: i + 1,
+                        line_start: line,
+                        line_end: line,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
                         target_node_id: node_id.clone(),
                         label: "DEFINES".to_string(),
                         weight: 1.0,
-                        context: sig.to_string(),
+                        context: sig.clone(),
                         provenance: "EXTRACTED".to_string(),
                     });
                     // Ф40.2: ROUTE — framework edge (provenance=INFERRED):
                     // атрибут маршрута на этой или одной из двух предыдущих строк
-                    let route = [i.checked_sub(2), i.checked_sub(1), Some(i)]
-                        .into_iter()
-                        .flatten()
-                        .find_map(|k| route_by_line.get(&k).cloned());
+                    // (0-based ключи: line-3, line-2, line-1)
+                    let route = [
+                        line.checked_sub(3),
+                        line.checked_sub(2),
+                        line.checked_sub(1),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .find_map(|k| route_by_line.get(&k).cloned());
                     if let Some((method, path)) = route {
                         out.edges.push(AstEdge {
                             source_node_id: node_id,
@@ -2257,6 +2286,30 @@ impl AstCodeExtractor {
         out: &mut AstScanResult,
     ) {
         let lines: Vec<&str> = content.lines().collect();
+
+        // Ф55: React className="..." — BINDS_CLASS (INFERRED) к cssclass:{name};
+        // статические литералы, дедуп по имени в пределах файла
+        let mut seen_classes: HashSet<String> = HashSet::new();
+        for cap in self.ts_classname_re.captures_iter(content) {
+            let value = cap
+                .get(1)
+                .or_else(|| cap.get(2))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            for name in value.split_whitespace() {
+                if name.is_empty() || !seen_classes.insert(name.to_string()) {
+                    continue;
+                }
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("cssclass:{}", name),
+                    label: "BINDS_CLASS".to_string(),
+                    weight: 1.0,
+                    context: format!("className=\"{}\"", value),
+                    provenance: "INFERRED".to_string(),
+                });
+            }
+        }
 
         // Ф49.4б/в: клиентские HTTP-вызовы и gql-строки (кандидаты мостов)
         collect_http_calls(rel_path, content, &self.ts_http_re, out);

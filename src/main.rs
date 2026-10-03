@@ -53,14 +53,23 @@ async fn main() -> anyhow::Result<()> {
             mode,
             k,
             golden,
+            project,
             json,
             save_baseline,
         }) => {
             if let Some(BenchCommands::History { last }) = command {
                 ob2h::cli::bench::cli_history(&ctx.settings, last)?;
             } else {
-                ob2h::cli::bench::cli_run(&ctx, &mode, &k, golden.as_deref(), json, save_baseline)
-                    .await?;
+                ob2h::cli::bench::cli_run(
+                    &ctx,
+                    &mode,
+                    &k,
+                    golden.as_deref(),
+                    project.as_deref(),
+                    json,
+                    save_baseline,
+                )
+                .await?;
             }
         }
         Some(Commands::Doctor { fix }) => {

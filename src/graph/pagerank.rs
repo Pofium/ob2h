@@ -28,12 +28,17 @@ pub const DEFAULT_TOL: f64 = 1e-6;
 /// Дефолтные веса рёбер по типу (Ф33.1). Формат конфига `OB2H_PPR_WEIGHTS` —
 /// JSON-объект `{"kind": weight}`; зафиксировано тестом `default_weights_are_fixed`.
 ///
-/// **Ф47.4 (ADR-AST-5):** рёбра AST-графа кода (`CALLS`, `IMPORTS`, `DEFINES`,
-/// `INHERITS`, `IMPLEMENTS`, `DEPENDS_ON` и метки v1.7: `STYLES`, `BINDS_CLASS`,
-/// `SERVES_ENDPOINT`…) здесь **не** перечислены и получают
-/// [`PPR_UNKNOWN_WEIGHT`] (0.5). Явные веса задаются только по замерам Ф53.3
-/// (гейт ADR-13: без регрессии recall); до этого — opt-in через `OB2H_PPR_WEIGHTS`,
-/// дефолт не двигаем, чтобы не сдвинуть pending-поиск вслепую.
+/// **Ф54 (PLAN.md, 2026-10-03) — вердикт калибровки: дефолт НЕ меняем.**
+/// Замер по кодовому golden-набору (`data/bench/golden_code.jsonl`, 15 кейсов,
+/// `ob2h bench --mode code --project …`) показал, что выдача **не зависит от
+/// весов кодовых рёбер вовсе**: uniform 0.5, дифференцированные и даже крайние
+/// значения (все 5.0 / все 0.05) дают идентичный recall/MRR — цели находятся
+/// на этапе сидов (гибридный поиск), PPR-расширение не меняет ранги. Вывод:
+/// данных в пользу изменения нет (ADR-13), кодовые рёбра остаются на
+/// [`PPR_UNKNOWN_WEIGHT`]. Для осмысленной калибровки нужен multi-hop golden
+/// (цель достижима только через расширение) — бэклог. Инструментарий
+/// (`--mode code`) и детерминизм сидов сохранены; переопределение —
+/// `OB2H_PPR_WEIGHTS`.
 pub const DEFAULT_PPR_WEIGHTS: &str =
     r#"{"manual":1.0,"contradicts":0.8,"causes":0.8,"category":0.5,"same_project":0.3}"#;
 
@@ -376,6 +381,7 @@ mod tests {
         assert!((w["category"] - 0.5).abs() < 1e-12);
         assert!((w["same_project"] - 0.3).abs() < 1e-12);
         assert!((weight_for(&w, "manual") - 1.0).abs() < 1e-12);
+        assert!((weight_for(&w, "CALLS") - PPR_UNKNOWN_WEIGHT).abs() < 1e-12);
         assert!((weight_for(&w, "unknown-kind") - PPR_UNKNOWN_WEIGHT).abs() < 1e-12);
         // невалидный конфиг не ломает поиск — откат на дефолт
         assert_eq!(parse_ppr_weights("не json").len(), 5);

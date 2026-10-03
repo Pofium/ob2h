@@ -178,6 +178,8 @@ async fn entity_phrase_seeds_reach_unlinked_records() {
 #[test]
 fn default_weights_and_limits_are_fixed() {
     let s = Settings::from_env();
+    // Ф54: вердикт калибровки — дефолт без кодовых рёбер (см. pagerank.rs):
+    // выдача PPR не зависит от весов кодовых рёбер на golden_code
     assert_eq!(s.ppr_weights.len(), 5, "{:?}", s.ppr_weights);
     assert!((s.ppr_weights["manual"] - 1.0).abs() < 1e-12);
     assert!((s.ppr_weights["contradicts"] - 0.8).abs() < 1e-12);

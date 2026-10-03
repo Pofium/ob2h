@@ -318,7 +318,14 @@ impl GraphService {
         }
 
         let mut sorted_ids: Vec<i64> = scored.keys().copied().collect();
-        sorted_ids.sort_by(|a, b| scored[b].partial_cmp(&scored[a]).unwrap_or(std::cmp::Ordering::Equal));
+        // Ф54: тай-брейк по id — итерация HashMap случайна, без детерминизма
+        // состав top-k (и сиды PPR) плавал между запусками при равных скорах
+        sorted_ids.sort_by(|a, b| {
+            scored[b]
+                .partial_cmp(&scored[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.cmp(b))
+        });
         if sorted_ids.len() > limit {
             sorted_ids.truncate(limit);
         }
@@ -489,6 +496,22 @@ impl GraphService {
     /// матчинга (FTS/лексика/вектор, без 1-hop), рёбра проекта с весами по типу
     /// (edge-type-aware, идеи HippoRAG 2 / GAAMA). Многошаговое: mass доходит
     /// до узлов, недостижимых за один хоп.
+    /// Ф54: pk → node_id всех узлов проекта (для сопоставления с golden-набором).
+    pub fn all_node_ids(
+        &self,
+        project_id: &str,
+    ) -> anyhow::Result<Vec<(i64, String)>> {
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, node_id FROM graph_nodes                  WHERE project_id = ?1 AND (deleted_at IS NULL OR deleted_at = '')",
+            )?;
+            let rows = stmt.query_map(params![project_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?;
+            Ok(rows.flatten().collect())
+        })
+    }
+
     pub async fn ppr_search(
         &self,
         query: &str,
@@ -497,7 +520,10 @@ impl GraphService {
         damping: f64,
         weights: &crate::graph::pagerank::PprWeights,
     ) -> anyhow::Result<Vec<PprNodeHit>> {
-        let found = self.search(query, 10, false).await?;
+        // Ф54: окно сидов шире (50) — глобальный поиск без проектного фильтра
+        // топ-10 проектов-тёзок вытеснял, и PPR оставался без сидов (пусто).
+        // Фильтрация по project_id происходит ниже, при построении seeds.
+        let found = self.search(query, 50, false).await?;
         if found.nodes.is_empty() {
             return Ok(Vec::new());
         }

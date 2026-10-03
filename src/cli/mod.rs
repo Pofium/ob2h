@@ -99,9 +99,13 @@ pub enum Commands {
         /// Уровни k для recall@k, через запятую
         #[arg(long, default_value = "5,10")]
         k: String,
-        /// Путь к golden-набору (по умолчанию data/bench/golden.jsonl)
+        /// Путь к golden-набору (по умолчанию data/bench/golden.jsonl; для
+        /// mode=code — golden_code.jsonl)
         #[arg(long)]
         golden: Option<String>,
+        /// Проект для mode=code (PPR по кодовому графу, Ф54)
+        #[arg(long)]
+        project: Option<String>,
         /// Машиночитаемый JSON-вывод
         #[arg(long)]
         json: bool,
@@ -291,8 +295,7 @@ pub enum Vec0Commands {
         /// Ограничить число golden-запросов (по умолчанию — все)
         #[arg(long)]
         limit: Option<usize>,
-        /// Путь к golden-набору (по умолчанию data/bench/golden.jsonl)
-        #[arg(long)]
+        /// Путь к golden-набору (по умолчанию data/bench/golden.jsonl; для
         golden: Option<String>,
     },
 }
