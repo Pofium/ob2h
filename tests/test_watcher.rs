@@ -23,8 +23,11 @@ fn test_is_code_file_filtering() {
     assert!(!is_code_file(Path::new("node_modules/react/index.js")));
     assert!(!is_code_file(Path::new("dist/bundle.js")));
     assert!(!is_code_file(Path::new("README.md")));
-    assert!(!is_code_file(Path::new("package.json")));
-    assert!(!is_code_file(Path::new("Cargo.toml")));
+    // Ф51 (PLAN_v1.7): манифесты — исходники сканера (watcher видит изменения)
+    assert!(is_code_file(Path::new("package.json")));
+    assert!(is_code_file(Path::new("Cargo.toml")));
+    assert!(is_code_file(Path::new("openapi.yaml")));
+    assert!(is_code_file(Path::new("k8s/app.yaml")));
 }
 
 #[tokio::test]

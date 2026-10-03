@@ -194,6 +194,8 @@ pub enum Parser {
     Compose,
     /// Ф50.4: Kubernetes/Helm YAML.
     K8s,
+    /// Ф51: манифесты пакетов (диспетчер по имени файла).
+    Manifest,
 }
 
 /// Спецификация языка/формата в реестре [`LANGS`].
@@ -719,6 +721,143 @@ data:
         sample_rel: "k8s/app.yaml",
     },
     LangSpec {
+        name: "manifest-cargo",
+        matcher: Matcher::FileName(&["Cargo.toml"]),
+        node_types: &["File", "ExternalPackage"],
+        edge_labels: &["DEFINES", "DEPENDS_ON"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Manifest,
+        fixture: r#"[package]
+name = "demo"
+version = "0.1.0"
+
+[dependencies]
+serde_json = "1.0"
+local-crate = { path = "../local-crate" }
+git-crate = { git = "https://github.com/x/y" }
+
+[dev-dependencies]
+tempfile = "^3.10"
+"#,
+        sample_rel: "Cargo.toml",
+    },
+    LangSpec {
+        name: "manifest-npm",
+        matcher: Matcher::FileName(&["package.json"]),
+        node_types: &["File", "ExternalPackage", "Script"],
+        edge_labels: &["DEFINES", "DEPENDS_ON"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Manifest,
+        fixture: r#"{
+  "name": "demo",
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "axios": "1.7.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.5.0"
+  }
+}
+"#,
+        sample_rel: "package.json",
+    },
+    LangSpec {
+        name: "manifest-pyproject",
+        matcher: Matcher::FileName(&["pyproject.toml"]),
+        node_types: &["File", "ExternalPackage"],
+        edge_labels: &["DEFINES", "DEPENDS_ON"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Manifest,
+        fixture: r#"[project]
+name = "demo"
+dependencies = ["requests>=2.31", "pydantic==2.7.0"]
+
+[tool.poetry.dependencies]
+fastapi = "^0.111"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+"#,
+        sample_rel: "pyproject.toml",
+    },
+    LangSpec {
+        name: "manifest-requirements",
+        matcher: Matcher::FileName(&["requirements.txt"]),
+        node_types: &["File", "ExternalPackage"],
+        edge_labels: &["DEPENDS_ON"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Manifest,
+        fixture: r#"# комментарий
+requests==2.31.0
+flask>=3.0
+-r other.txt
+gunicorn
+"#,
+        sample_rel: "requirements.txt",
+    },
+    LangSpec {
+        name: "manifest-gomod",
+        matcher: Matcher::FileName(&["go.mod"]),
+        node_types: &["File", "ExternalPackage"],
+        edge_labels: &["DEPENDS_ON"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Manifest,
+        fixture: r#"module example.com/demo
+
+go 1.22
+
+require (
+    github.com/pkg/errors v0.9.1
+    golang.org/x/net v0.28.0 // indirect
+)
+
+require gopkg.in/yaml.v3 v3.0.1
+"#,
+        sample_rel: "go.mod",
+    },
+    LangSpec {
+        name: "manifest-pubspec",
+        matcher: Matcher::FileName(&["pubspec.yaml", "pubspec.yml"]),
+        node_types: &["File", "ExternalPackage"],
+        edge_labels: &["DEPENDS_ON"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Manifest,
+        fixture: r#"name: demo
+
+dependencies:
+  http: ^1.2.0
+  intl: 0.19.0
+
+dev_dependencies:
+  test: ^1.25.0
+"#,
+        sample_rel: "pubspec.yaml",
+    },
+    LangSpec {
+        name: "manifest-composer",
+        matcher: Matcher::FileName(&["composer.json"]),
+        node_types: &["File", "ExternalPackage"],
+        edge_labels: &["DEPENDS_ON"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Manifest,
+        fixture: r#"{
+  "name": "vendor/demo",
+  "require": {
+    "laravel/framework": "^12.0",
+    "guzzlehttp/guzzle": "7.8.0"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.0"
+  }
+}
+"#,
+        sample_rel: "composer.json",
+    },
+    LangSpec {
         name: "php",
         matcher: Matcher::Ext(&["php"]),
         node_types: &["File", "Class", "Interface", "Trait", "Function"],
@@ -1066,6 +1205,94 @@ pub fn node_type_for_prefix(node_id: &str) -> Option<(&'static str, String)> {
     NODE_TYPE_BY_PREFIX
         .iter()
         .find_map(|(p, t)| node_id.strip_prefix(p).map(|rest| (*t, rest.to_string())))
+}
+
+/// Ф51.3: нормализация внешнего модуля импорта в id пакета (`pkg:<eco>:<name>`).
+/// Внутренние/относительные пути → None (остаются module:-узлами).
+pub fn package_of_module(lang: &str, module: &str) -> Option<String> {
+    let m = module.trim();
+    if m.is_empty() {
+        return None;
+    }
+    match lang {
+        "rust" => {
+            if m.starts_with("crate::") || m.starts_with("self::") || m.starts_with("super::") {
+                return None;
+            }
+            let first = m.split("::").next()?;
+            Some(format!("pkg:rust:{}", first))
+        }
+        "python" => {
+            if m.starts_with('.') {
+                return None;
+            }
+            let first = m.split('.').next()?;
+            Some(format!("pkg:pypi:{}", first))
+        }
+        "ts-js" | "sfc" => {
+            if m.starts_with('.') || m.starts_with('/') {
+                return None;
+            }
+            if let Some(rest) = m.strip_prefix('@') {
+                // scope сохраняется: @scope/pkg → pkg:npm:@scope
+                let (scope, _) = rest.split_once('/')?;
+                Some(format!("pkg:npm:@{}", scope))
+            } else {
+                let first = m.split('/').next()?;
+                Some(format!("pkg:npm:{}", first))
+            }
+        }
+        "go" => {
+            if m.contains("://") {
+                None
+            } else {
+                Some(format!("pkg:go:{}", m.trim_matches('"')))
+            }
+        }
+        "php" => {
+            let parts: Vec<&str> = m.split('\\').filter(|p| !p.is_empty()).collect();
+            if parts.len() < 2 {
+                return None; // vendor\package минимум
+            }
+            Some(format!(
+                "pkg:composer:{}/{}",
+                parts[0].to_lowercase(),
+                parts[1].to_lowercase()
+            ))
+        }
+        "dart" => {
+            let rest = m.strip_prefix("package:")?;
+            let first = rest.split('/').next()?;
+            Some(format!("pkg:pub:{}", first))
+        }
+        _ => None,
+    }
+}
+
+/// Ф51.3: слияние внешних импортов с pkg:-узлами манифестов — на этапе
+/// scan_project (не в парсерах). IMPORTS-рёбра file → module:X переписываются
+/// в file → pkg:<eco>:X по нормализации [`package_of_module`]; internal/relative
+/// модули не трогаются. Возвращает число переписанных рёбер.
+pub fn consolidate_external_imports(scan: &mut AstScanResult) -> usize {
+    let mut rewritten = 0usize;
+    for edge in scan.edges.iter_mut() {
+        if edge.label != "IMPORTS" || !edge.source_node_id.starts_with("file:") {
+            continue;
+        }
+        if !edge.target_node_id.starts_with("module:") {
+            continue;
+        }
+        let module = edge.target_node_id.strip_prefix("module:").unwrap_or("");
+        let rel_path = edge.source_node_id.strip_prefix("file:").unwrap_or("");
+        let Some(spec) = LangSpec::for_path(rel_path) else {
+            continue;
+        };
+        if let Some(pkg_id) = package_of_module(spec.name, module) {
+            edge.target_node_id = pkg_id;
+            rewritten += 1;
+        }
+    }
+    rewritten
 }
 
 /// Cap размера файла по умолчанию — 2 МБ (ADR-AST-4); для `.ipynb` — свой cap (Ф52).
@@ -5021,9 +5248,8 @@ impl AstCodeExtractor {
                                 .trim_end_matches('/')
                                 .trim_start_matches("../")
                         )
-                    } else if s.contains("://") || s.starts_with("registry") || s.starts_with("app.terraform") {
-                        format!("module:{}", s)
                     } else {
+                        // внешний source (registry/ git) — ExternalModule
                         format!("module:{}", s)
                     };
                     out.edges.push(AstEdge {
@@ -5612,6 +5838,407 @@ impl AstCodeExtractor {
         found
     }
 
+    /// Ф51.1: манифесты пакетов — диспетчер по имени файла. Рёбра
+    /// file →(DEPENDS_ON)→ `pkg:<ecosystem>:<name>` (ExternalPackage); версия —
+    /// в context ребра; weight: 1.0 точный пин, 0.5 диапазон/без версии,
+    /// 0.3 dev/peer/build-зависимости; path/git-зависимости Cargo — к file:/module:.
+    fn parse_manifest(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
+        match name.to_lowercase().as_str() {
+            "cargo.toml" => self.parse_manifest_cargo(rel_path, file_node_id, content, out),
+            "package.json" => self.parse_manifest_package_json(rel_path, file_node_id, content, out),
+            "pyproject.toml" => self.parse_manifest_pyproject(rel_path, file_node_id, content, out),
+            "requirements.txt" => {
+                self.parse_manifest_requirements(rel_path, file_node_id, content, out)
+            }
+            "go.mod" => self.parse_manifest_gomod(rel_path, file_node_id, content, out),
+            "pubspec.yaml" | "pubspec.yml" => {
+                self.parse_manifest_pubspec(rel_path, file_node_id, content, out)
+            }
+            "composer.json" => self.parse_manifest_composer(rel_path, file_node_id, content, out),
+            _ => {}
+        }
+    }
+
+    /// Вес зависимости (51.2): 1.0 точный пин, 0.5 диапазон/без версии.
+    fn dep_weight(req: &str) -> f64 {
+        let r = req.trim();
+        if r.is_empty() {
+            return 0.5;
+        }
+        if r.starts_with('^')
+            || r.starts_with('~')
+            || r == "*"
+            || r.starts_with('>')
+            || r.starts_with('<')
+        {
+            0.5
+        } else {
+            1.0
+        }
+    }
+
+    fn push_dep(
+        &self,
+        out: &mut AstScanResult,
+        file_node_id: &str,
+        ecosystem: &str,
+        name: &str,
+        req: &str,
+        weight: f64,
+    ) {
+        let pkg_id = format!("pkg:{}:{}", ecosystem, name);
+        out.nodes.push(AstNode {
+            node_id: pkg_id.clone(),
+            label: name.to_string(),
+            node_type: "ExternalPackage".to_string(),
+            description: format!(
+                "Внешний пакет `{} {}` ({}), потребители: {}",
+                name,
+                if req.is_empty() { "*" } else { req },
+                ecosystem,
+                file_node_id
+            ),
+            file_path: String::new(),
+            line_start: 0,
+            line_end: 0,
+        });
+        out.edges.push(AstEdge {
+            source_node_id: file_node_id.to_string(),
+            target_node_id: pkg_id,
+            label: "DEPENDS_ON".to_string(),
+            weight,
+            context: format!("{} {}", name, req),
+            provenance: "EXTRACTED".to_string(),
+        });
+    }
+
+    fn parse_manifest_cargo(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let Ok(v) = toml::from_str::<serde_json::Value>(content) else {
+            return;
+        };
+        let _ = rel_path;
+        for (section, mult) in [
+            ("dependencies", 1.0),
+            ("dev-dependencies", 0.3),
+            ("build-dependencies", 0.3),
+        ] {
+            let Some(deps) = v.get(section).and_then(|d| d.as_object()) else {
+                continue;
+            };
+            for (name, spec) in deps {
+                match spec {
+                    serde_json::Value::String(req) => {
+                        let w = if mult < 1.0 { 0.3 } else { Self::dep_weight(req) };
+                        self.push_dep(out, file_node_id, "rust", name, req, w);
+                    }
+                    serde_json::Value::Object(t) => {
+                        if let Some(path) = t.get("path").and_then(|p| p.as_str()) {
+                            // path-зависимость — внутренний крейт рабочей области
+                            let target = format!(
+                                "file:{}/Cargo.toml",
+                                path.trim_end_matches('/').trim_start_matches("./")
+                            );
+                            out.edges.push(AstEdge {
+                                source_node_id: file_node_id.to_string(),
+                                target_node_id: target,
+                                label: "DEPENDS_ON".to_string(),
+                                weight: 1.0,
+                                context: format!("{} path = {}", name, path),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        } else if let Some(git) = t.get("git").and_then(|g| g.as_str()) {
+                            out.edges.push(AstEdge {
+                                source_node_id: file_node_id.to_string(),
+                                target_node_id: format!("module:{}", git),
+                                label: "DEPENDS_ON".to_string(),
+                                weight: 0.5 * mult,
+                                context: format!("{} git = {}", name, git),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        } else {
+                            let req = t.get("version").and_then(|v| v.as_str()).unwrap_or("*");
+                            let w = if mult < 1.0 { 0.3 } else { Self::dep_weight(req) };
+                            self.push_dep(out, file_node_id, "rust", name, req, w);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn parse_manifest_package_json(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
+            return;
+        };
+        for (section, mult) in [
+            ("dependencies", 1.0),
+            ("devDependencies", 0.3),
+            ("peerDependencies", 0.3),
+        ] {
+            let Some(deps) = v.get(section).and_then(|d| d.as_object()) else {
+                continue;
+            };
+            for (name, spec) in deps {
+                let Some(req) = spec.as_str() else { continue };
+                let w = if mult < 1.0 { 0.3 } else { Self::dep_weight(req) };
+                self.push_dep(out, file_node_id, "npm", name, req, w);
+            }
+        }
+        // scripts → Script-узлы первого уровня (поиск `script:build`)
+        if let Some(scripts) = v.get("scripts").and_then(|s| s.as_object()) {
+            for (sname, cmd) in scripts {
+                let node_id = format!("script:{}:{}", rel_path, sname);
+                out.nodes.push(AstNode {
+                    node_id: node_id.clone(),
+                    label: sname.clone(),
+                    node_type: "Script".to_string(),
+                    description: format!(
+                        "npm script `{}`: {} ({})",
+                        sname,
+                        cmd.as_str().unwrap_or(""),
+                        rel_path
+                    ),
+                    file_path: rel_path.to_string(),
+                    line_start: 1,
+                    line_end: 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: node_id,
+                    label: "DEFINES".to_string(),
+                    weight: 1.0,
+                    context: format!("script {}", sname),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+    }
+
+    fn parse_manifest_pyproject(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let Ok(v) = toml::from_str::<serde_json::Value>(content) else {
+            return;
+        };
+        let _ = rel_path;
+        // PEP 621: [project].dependencies — строки "name>=1.0"
+        if let Some(deps) = v
+            .get("project")
+            .and_then(|p| p.get("dependencies"))
+            .and_then(|d| d.as_array())
+        {
+            for d in deps {
+                let Some(d) = d.as_str() else { continue };
+                let name: String = d
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                    .collect();
+                if name.is_empty() {
+                    continue;
+                }
+                let req = d[name.len()..].trim();
+                let w = if d.contains("==") { 1.0 } else { 0.5 };
+                self.push_dep(out, file_node_id, "pypi", &name, req, w);
+            }
+        }
+        // Poetry: [tool.poetry.dependencies]
+        if let Some(deps) = v
+            .pointer("/tool/poetry/dependencies")
+            .and_then(|d| d.as_object())
+        {
+            for (name, spec) in deps {
+                let Some(req) = spec.as_str() else { continue };
+                if name == "python" {
+                    continue;
+                }
+                self.push_dep(out, file_node_id, "pypi", name, req, Self::dep_weight(req));
+            }
+        }
+        // [dependency-groups] (PEP 735) — dev-вес
+        if let Some(groups) = v.get("dependency-groups").and_then(|d| d.as_object()) {
+            for (_, items) in groups {
+                let Some(items) = items.as_array() else { continue };
+                for d in items {
+                    let Some(d) = d.as_str() else { continue };
+                    let name: String = d
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                        .collect();
+                    if !name.is_empty() {
+                        self.push_dep(out, file_node_id, "pypi", &name, d, 0.3);
+                    }
+                }
+            }
+        }
+    }
+
+    fn parse_manifest_requirements(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let _ = rel_path;
+        for line in content.lines() {
+            let t = line.trim();
+            if t.is_empty()
+                || t.starts_with('#')
+                || t.starts_with("-r")
+                || t.starts_with("-e")
+                || t.starts_with("--")
+            {
+                continue;
+            }
+            let name: String = t
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+                .collect();
+            if name.is_empty() {
+                continue;
+            }
+            let req = t[name.len()..].trim();
+            // строки без версии — unpinned (51.1)
+            let (req_norm, w) = if req.is_empty() {
+                ("unpinned".to_string(), 0.5)
+            } else if req.contains("==") {
+                (req.to_string(), 1.0)
+            } else {
+                (req.to_string(), 0.5)
+            };
+            self.push_dep(out, file_node_id, "pypi", &name, &req_norm, w);
+        }
+    }
+
+    fn parse_manifest_gomod(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let _ = rel_path;
+        let mut in_require = false;
+        for line in content.lines() {
+            let t = line.trim();
+            if t.starts_with("require (") {
+                in_require = true;
+                continue;
+            }
+            if in_require && t == ")" {
+                in_require = false;
+                continue;
+            }
+            let item = if in_require {
+                t
+            } else if let Some(rest) = t.strip_prefix("require ") {
+                rest.trim()
+            } else {
+                continue;
+            };
+            let mut parts = item.split_whitespace();
+            let Some(path) = parts.next() else { continue };
+            let Some(ver) = parts.next() else { continue };
+            if ver.starts_with("//") {
+                continue;
+            }
+            let w = if item.contains("// indirect") {
+                0.3
+            } else {
+                Self::dep_weight(ver)
+            };
+            self.push_dep(out, file_node_id, "go", path, ver, w);
+        }
+    }
+
+    fn parse_manifest_pubspec(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let Ok(v) = serde_yaml_ng::from_str::<serde_json::Value>(content) else {
+            return;
+        };
+        let _ = rel_path;
+        for (section, mult) in [("dependencies", 1.0), ("dev_dependencies", 0.3)] {
+            let Some(deps) = v.get(section).and_then(|d| d.as_object()) else {
+                continue;
+            };
+            for (name, spec) in deps {
+                let Some(req) = spec.as_str() else { continue };
+                if name == "flutter" || name == "sdk" {
+                    continue;
+                }
+                self.push_dep(
+                    out,
+                    file_node_id,
+                    "pub",
+                    name,
+                    req,
+                    if mult < 1.0 { 0.3 } else { Self::dep_weight(req) },
+                );
+            }
+        }
+    }
+
+    fn parse_manifest_composer(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
+            return;
+        };
+        let _ = rel_path;
+        for (section, mult) in [("require", 1.0), ("require-dev", 0.3)] {
+            let Some(deps) = v.get(section).and_then(|d| d.as_object()) else {
+                continue;
+            };
+            for (name, spec) in deps {
+                let Some(req) = spec.as_str() else { continue };
+                if name == "php" || name.starts_with("ext-") {
+                    continue;
+                }
+                self.push_dep(
+                    out,
+                    file_node_id,
+                    "composer",
+                    name,
+                    req,
+                    if mult < 1.0 { 0.3 } else { Self::dep_weight(req) },
+                );
+            }
+        }
+    }
+
     fn parse_scala(
         &self,
         rel_path: &str,
@@ -6011,6 +6638,9 @@ impl Parser {
             }
             Parser::K8s => {
                 ex.parse_k8s(rel_path, file_node_id, content, out);
+            }
+            Parser::Manifest => {
+                ex.parse_manifest(rel_path, file_node_id, content, out);
             }
         }
     }

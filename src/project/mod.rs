@@ -461,6 +461,12 @@ impl ProjectService {
             info!("Bridges: добавлено {bridges} INFERRED-мостов (SERVES_ENDPOINT/QUERIES_FIELD/PROVIDES_RPC)");
         }
 
+        // Ф51.3: слияние внешних импортов с pkg:-узлами манифестов
+        let merged = crate::project::ast::consolidate_external_imports(&mut scan_res);
+        if merged > 0 {
+            info!("Manifests: слито {merged} внешних импортов в pkg:-узлы");
+        }
+
         // Если ничего не изменилось и нет удалённых файлов
         if incremental && scan_res.files_scanned == 0 && deleted_files.is_empty() {
             info!(
@@ -976,6 +982,81 @@ pub fn detect_manifest_metadata(root: &Path) -> (String, Vec<String>, Option<Str
                     description = Some(trimmed.chars().take(200).collect());
                     break;
                 }
+            }
+        }
+    }
+
+    // Ф51.4: маркеры форматов v1.7 по файлам репозитория (шумоустойчиво:
+    // Solidity/Zig/Jupyter — только при ≥2 файлах формата)
+    {
+        use std::collections::HashMap;
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        let mut walker = ignore::WalkBuilder::new(root);
+        walker.hidden(true).git_ignore(true);
+        for entry in walker.build().flatten().take(20_000) {
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                continue;
+            }
+            let p = entry.path();
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            let ext = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
+            let path_l = p.to_string_lossy().to_lowercase();
+            if name == "openapi.yaml" || name == "openapi.json" || name == "swagger.json" {
+                *counts.entry("openapi").or_default() += 1;
+            }
+            if ext == "proto" {
+                *counts.entry("protobuf").or_default() += 1;
+            }
+            if ext == "graphql" || ext == "gql" {
+                *counts.entry("graphql").or_default() += 1;
+            }
+            if name == "dockerfile"
+                || name.ends_with(".dockerfile")
+                || name.starts_with("dockerfile.")
+                || name == "compose.yaml"
+                || name == "compose.yml"
+                || name == "docker-compose.yml"
+            {
+                *counts.entry("docker").or_default() += 1;
+            }
+            if ext == "tf" || ext == "tfvars" || ext == "hcl" {
+                *counts.entry("terraform").or_default() += 1;
+            }
+            if path_l.contains("k8s/") || path_l.contains("kubernetes/") || name == "chart.yaml" {
+                *counts.entry("kubernetes").or_default() += 1;
+            }
+            if ext == "ipynb" {
+                *counts.entry("jupyter").or_default() += 1;
+            }
+            if ext == "sol" {
+                *counts.entry("solidity").or_default() += 1;
+            }
+            if name == "build.zig" {
+                *counts.entry("zig").or_default() += 1;
+            }
+        }
+        for (marker, min_count) in [
+            ("openapi", 1),
+            ("protobuf", 1),
+            ("graphql", 1),
+            ("docker", 1),
+            ("terraform", 1),
+            ("kubernetes", 1),
+            ("jupyter", 2),
+            ("solidity", 2),
+            ("zig", 2),
+        ] {
+            if counts.get(marker).copied().unwrap_or(0) >= min_count
+                && !tech_stack.contains(&marker.to_string())
+            {
+                tech_stack.push(marker.to_string());
             }
         }
     }

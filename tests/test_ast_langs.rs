@@ -911,3 +911,133 @@ fn test_node_type_for_prefix() {
 
     assert!(ob2h::project::ast::node_type_for_prefix("module:std").is_none());
 }
+
+
+// --- Ф51: манифесты пакетов и граф зависимостей ---
+
+/// 51.5: serde_json из Cargo.toml + use serde_json из кода → ОДИН узел
+/// pkg:rust:serde_json с версией из манифеста.
+#[test]
+fn test_manifest_import_merge() {
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    ex.parse_file("Cargo.toml", spec("manifest-cargo").fixture, &mut res);
+    ex.parse_file(
+        "src/lib.rs",
+        r#"use serde_json::Value;
+
+pub fn parse(v: &str) -> Value {
+    serde_json::from_str(v).unwrap()
+}
+"#,
+        &mut res,
+    );
+    ob2h::project::ast::consolidate_external_imports(&mut res);
+
+    let pkg_nodes: Vec<_> = res
+        .nodes
+        .iter()
+        .filter(|n| n.node_id == "pkg:rust:serde_json")
+        .collect();
+    assert_eq!(pkg_nodes.len(), 1, "узел пакета должен быть один");
+    assert!(pkg_nodes[0].description.contains("1.0"), "версия из манифеста");
+    assert!(res.edges.iter().any(|e| e.label == "IMPORTS"
+        && e.source_node_id == "file:src/lib.rs"
+        && e.target_node_id == "pkg:rust:serde_json"));
+    // path-зависимость Cargo → внутренний граф (file:)
+    assert!(res.edges.iter().any(|e| e.label == "DEPENDS_ON"
+        && e.source_node_id == "file:Cargo.toml"
+        && e.target_node_id == "file:../local-crate/Cargo.toml"));
+    // git-зависимость → ExternalModule
+    assert!(res.edges.iter().any(|e| e.label == "DEPENDS_ON"
+        && e.target_node_id == "module:https://github.com/x/y"));
+    // dev-зависимость — вес 0.3
+    assert!(res.edges.iter().any(|e| e.label == "DEPENDS_ON"
+        && e.target_node_id == "pkg:rust:tempfile"
+        && (e.weight - 0.3).abs() < 1e-9));
+}
+
+/// 51.5: lock-файлы не матчатся ни одной спецификацией.
+#[test]
+fn test_lock_files_ignored() {
+    for f in [
+        "Cargo.lock",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "yarn.lock",
+    ] {
+        assert!(LangSpec::for_path(f).is_none(), "{f} не должен парситься");
+    }
+}
+
+/// 51.5: requirements.txt — unpinned/комментарии/-r не ломают разбор.
+#[test]
+fn test_requirements_unpinned() {
+    let res = parse("manifest-requirements", "requirements.txt");
+    let deps: Vec<(&str, f64)> = res
+        .edges
+        .iter()
+        .filter(|e| e.label == "DEPENDS_ON")
+        .map(|e| {
+            (
+                e.target_node_id.strip_prefix("pkg:pypi:").unwrap_or(""),
+                e.weight,
+            )
+        })
+        .collect();
+    assert!(deps.contains(&("requests", 1.0)), "{:?}", deps);
+    assert!(deps.contains(&("flask", 0.5)), "{:?}", deps);
+    assert!(deps.contains(&("gunicorn", 0.5)), "{:?}", deps);
+    assert!(!deps.iter().any(|(n, _)| n.contains("other")));
+    assert_eq!(deps.len(), 3);
+}
+
+/// 51.5: go.mod (require-блок, indirect), npm scripts, composer, pubspec, pyproject.
+#[test]
+fn test_manifests_go_npm_composer() {
+    let go = parse("manifest-gomod", "go.mod");
+    assert!(go.edges.iter().any(|e| e.target_node_id == "pkg:go:github.com/pkg/errors"
+        && (e.weight - 1.0).abs() < 1e-9));
+    assert!(go.edges.iter().any(|e| e.target_node_id == "pkg:go:golang.org/x/net"
+        && (e.weight - 0.3).abs() < 1e-9));
+
+    let npm = parse("manifest-npm", "package.json");
+    assert!(npm
+        .nodes
+        .iter()
+        .any(|n| n.node_type == "Script" && n.label == "build"));
+    assert!(npm.edges.iter().any(|e| e.target_node_id == "pkg:npm:react"
+        && (e.weight - 0.5).abs() < 1e-9));
+    assert!(npm.edges.iter().any(|e| e.target_node_id == "pkg:npm:axios"
+        && (e.weight - 1.0).abs() < 1e-9));
+    assert!(npm.edges.iter().any(|e| e.target_node_id == "pkg:npm:typescript"
+        && (e.weight - 0.3).abs() < 1e-9));
+
+    let composer = parse("manifest-composer", "composer.json");
+    assert!(composer
+        .edges
+        .iter()
+        .any(|e| e.target_node_id == "pkg:composer:laravel/framework"
+            && (e.weight - 0.5).abs() < 1e-9));
+
+    let pubspec = parse("manifest-pubspec", "pubspec.yaml");
+    assert!(pubspec
+        .edges
+        .iter()
+        .any(|e| e.target_node_id == "pkg:pub:http" && (e.weight - 0.5).abs() < 1e-9));
+
+    let pyproject = parse("manifest-pyproject", "pyproject.toml");
+    assert!(pyproject
+        .edges
+        .iter()
+        .any(|e| e.target_node_id == "pkg:pypi:pydantic" && (e.weight - 1.0).abs() < 1e-9));
+    assert!(pyproject
+        .edges
+        .iter()
+        .any(|e| e.target_node_id == "pkg:pypi:fastapi" && (e.weight - 0.5).abs() < 1e-9));
+    assert!(pyproject
+        .edges
+        .iter()
+        .any(|e| e.target_node_id == "pkg:pypi:pytest" && (e.weight - 0.3).abs() < 1e-9));
+}
