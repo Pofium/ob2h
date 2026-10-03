@@ -414,6 +414,116 @@ fn test_node_type_for_prefix_48() {
 }
 
 #[test]
+fn test_spec_jupyter() {
+    let res = parse("jupyter", "notebooks/analysis.ipynb");
+    // Notebook-узел + символы из code-ячеек; markdown-ячейка игнорируется
+    assert_has_node(&res, "analysis.ipynb");
+    assert_has_node(&res, "load");
+    assert_has_node(&res, "Repo");
+    assert_has_node(&res, "get");
+    let nb = res
+        .nodes
+        .iter()
+        .find(|n| n.node_type == "Notebook")
+        .expect("нет Notebook-узла");
+    assert!(nb.description.contains("code-ячеек: 2"));
+    assert_has_edge(&res, "IMPORTS");
+    assert_has_edge(&res, "DEFINES");
+    assert_has_edge(&res, "INHERITS");
+    // 52.1: outputs не читаются — заглушка base64 не породила узлов
+    assert!(
+        !res.nodes.iter().any(|n| n.label.contains("base64")),
+        "outputs не должны парситься"
+    );
+    // номера строк — по склеенному коду ячеек (offset сквозной)
+    let load = res.nodes.iter().find(|n| n.label == "load").unwrap();
+    assert_eq!(load.line_start, 2, "первая строка первой code-ячейки");
+    let get = res.nodes.iter().find(|n| n.label == "get").unwrap();
+    assert!(get.line_start > load.line_start, "offset второй ячейки больше");
+}
+
+/// «ipynb без cells» — только File-узел (52.1), без паники.
+#[test]
+fn test_notebook_without_cells() {
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    ex.parse_file(
+        "broken.ipynb",
+        r#"{"metadata": {}, "nbformat": 4}"#,
+        &mut res,
+    );
+    assert!(res.nodes.iter().all(|n| n.node_type == "File"));
+}
+
+#[test]
+fn test_spec_solidity() {
+    let res = parse("solidity", "contracts/Token.sol");
+    assert_has_node(&res, "Token");
+    assert_has_node(&res, "transfer");
+    assert_has_node(&res, "balances");
+    let mapping = res
+        .nodes
+        .iter()
+        .find(|n| n.node_type == "Mapping")
+        .expect("нет Mapping-узла");
+    assert_eq!(mapping.label, "balances");
+    assert_has_edge(&res, "IMPORTS");
+    assert_has_edge(&res, "DEFINES");
+    // `is IToken, Ownable`: первая база INHERITS, вторая IMPLEMENTS
+    let inherits: Vec<_> = res
+        .edges
+        .iter()
+        .filter(|e| e.label == "INHERITS")
+        .map(|e| e.target_node_id.clone())
+        .collect();
+    assert!(inherits.contains(&"class:IToken".to_string()), "{:?}", inherits);
+    let implements: Vec<_> = res
+        .edges
+        .iter()
+        .filter(|e| e.label == "IMPLEMENTS")
+        .map(|e| e.target_node_id.clone())
+        .collect();
+    assert!(implements.contains(&"interface:Ownable".to_string()), "{:?}", implements);
+    assert_has_edge(&res, "USES_SCHEMA");
+    // event/constructor тоже Function-узлы
+    assert_has_node(&res, "Transfer");
+    assert!(res
+        .nodes
+        .iter()
+        .any(|n| n.label == "constructor" && n.node_type == "Function"));
+}
+
+#[test]
+fn test_spec_zig() {
+    let res = parse("zig", "src/main.zig");
+    assert_has_node(&res, "main");
+    assert_has_node(&res, "compute");
+    assert_has_node(&res, "Point");
+    let point = res.nodes.iter().find(|n| n.label == "Point").unwrap();
+    assert_eq!(point.node_type, "Struct");
+    // pub const (не структура) → Variable
+    let version = res.nodes.iter().find(|n| n.label == "version").unwrap();
+    assert_eq!(version.node_type, "Variable");
+    // @import("std") → pkg:zig:std, @import("mod.zig") → file:
+    let imports: Vec<_> = res
+        .edges
+        .iter()
+        .filter(|e| e.label == "IMPORTS")
+        .map(|e| e.target_node_id.clone())
+        .collect();
+    assert!(imports.contains(&"pkg:zig:std".to_string()), "{:?}", imports);
+    assert!(imports.contains(&"file:mod.zig".to_string()), "{:?}", imports);
+    // тест → Function с label test_* (совместимо с entrypoint_reason)
+    let test = res
+        .nodes
+        .iter()
+        .find(|n| n.label == "test_compute doubles")
+        .expect("zig-тест не найден");
+    assert_eq!(test.node_type, "Function");
+    assert_has_edge(&res, "DEFINES");
+}
+
+#[test]
 fn test_spec_scala() {
     let res = parse("scala", "src/main/scala/UserService.scala");
     assert_has_node(&res, "UserService");

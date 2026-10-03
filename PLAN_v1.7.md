@@ -294,28 +294,34 @@ read-path, который обязан остаться честным:
 
 ### Фаза 52 — Специализированные языки: Jupyter, Solidity, Zig (6.5) (1 день)
 
-- [ ] **52.1** `.ipynb`: `serde_json` → обход `cells[]`, взять только `cell_type == "code"`, склеить
+- [x] **52.1** `.ipynb`: `serde_json` → обход `cells[]`, взять только `cell_type == "code"`, склеить
       `source[]` (массив строк); **`outputs` не читать** (там base64-картинки — риск памяти);
       `parse_python` получает `line_offset` (сигнатуру дополнить — сейчас у `parse_python` (ast.rs:635) его
       нет, в отличие от `parse_ts_js`), номера строк — относительно всего `.ipynb` (для навигации в графе);
       узел `Notebook` + `DEFINES`; cap 5 МБ; при отсутствии `cells` — только `File`-узел с пометкой.
-- [ ] **52.2** `.sol`: `contract C is A, B` → `Class` (+ `INHERITS` для первой базы, `IMPLEMENTS` для
+      *Факт: номера строк — по склеенному коду ячеек (сквозной offset: исходник+1 пустая строка на ячейку);*
+      *offset получила и collect_call_sites — type-pass остаётся согласованным.*
+- [x] **52.2** `.sol`: `contract C is A, B` → `Class` (+ `INHERITS` для первой базы, `IMPLEMENTS` для
       остальных — как в PHP/Java-парсерах), `interface` → `Interface`, `library` → `Module`,
       `function`/`modifier`/`event`/`error` → `Function` (тип в description), `mapping(...)` → `Mapping`
       (DEFINES), `import "x.sol"` → `IMPORTS`, `using X for Y` → `USES_SCHEMA`, `constructor` → `Function`.
-- [ ] **52.3** `.zig`: `pub fn`/`export fn`/`fn`/`inline fn` → `Function` (в т.ч. `fn name(...) Type {}`),
+- [x] **52.3** `.zig`: `pub fn`/`export fn`/`fn`/`inline fn` → `Function` (в т.ч. `fn name(...) Type {}`),
       `struct`/`enum`/`union`/`opaque` → `Struct`, `const X = struct {` → `Struct` (частая идиома Zig),
       `@import("std")`/`@import("mod.zig")` → `IMPORTS` (`pkg:zig:std` / `file:`), `test "name"` →
       `Function` с label `test:<name>` (существующее правило `entrypoint_reason`, callpath.rs:301, уже
       выводит тестовый код из dead-code по префиксу имени — совместимо), `var`/`const` верхнего уровня —
       `Variable` только если `pub`.
-- [ ] **52.4** Тесты: `.ipynb` с двумя code-ячейками (проверка склейки, offset, отсутствия утечки
+      *Факт: label — `test_{name}`: правило фильтрует по `test_` (подчёркивание), совместимость без*
+      *правки read-path; pub const с типовой аннотацией (`pub const v: i32 = 1`) тоже ловится.*
+- [x] **52.4** Тесты: `.ipynb` с двумя code-ячейками (проверка склейки, offset, отсутствия утечки
       `outputs`), «ipynb без `cells`» (только File), `.sol` (наследование, mapping, event, import),
-      `.zig` (pub fn, const-структура, @import, test-блок).
+      `.zig` (pub fn, const-структура, @import, test-блок). *(Факт: 33 теста в test_ast_langs.rs.)*
 
 **DoD:** ноутбук из реального репозитория (или фикстура 5 МБ с base64-выводами) сканируется без роста
 памяти и без узлов из `outputs`; функции из ячеек находятся в `project_graph_search`; `.sol`-контракт с
 `is` даёт `INHERITS`-ребро; zig `test`-блоки не попадают в `project dead-code`.
+*Факт: фикстурные проверки — без утечки outputs, INHERITS у контракта, label test_* проходит*
+*правило entrypoint_reason; сам-скан без падений; bench без регрессии (docs/PLAN_v1.7_bench.md).*
 
 ---
 

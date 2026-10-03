@@ -139,6 +139,12 @@ pub enum Parser {
     Html,
     /// Ф48.2: CSS/SCSS.
     Css,
+    /// Ф52.1: Jupyter-ноутбук.
+    Notebook,
+    /// Ф52.2: Solidity.
+    Solidity,
+    /// Ф52.3: Zig.
+    Zig,
 }
 
 /// Спецификация языка/формата в реестре [`LANGS`].
@@ -333,6 +339,97 @@ CREATE TABLE orders (
 
 @media (max-width: 600px) {
     .card { padding: 4px; }
+}
+"#,
+        sample_rel: "",
+    },
+    LangSpec {
+        name: "jupyter",
+        matcher: Matcher::Ext(&["ipynb"]),
+        node_types: &["File", "Notebook", "Class", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS", "QUERIES_TABLE", "ROUTE"],
+        max_bytes: NOTEBOOK_CAP_BYTES,
+        parser: Parser::Notebook,
+        fixture: r##"{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "source": ["# Заголовок\n"]
+  },
+  {
+   "cell_type": "code",
+   "source": ["import os\n", "def load(path):\n", "    return os.path.exists(path)\n"],
+   "outputs": ["<base64-image-placeholder>"]
+  },
+  {
+   "cell_type": "code",
+   "source": ["class Repo(Base):\n", "    def get(self, id):\n", "        return None\n"],
+   "outputs": []
+  }
+ ],
+ "metadata": {},
+ "nbformat": 4
+}
+"##,
+        sample_rel: "",
+    },
+    LangSpec {
+        name: "solidity",
+        matcher: Matcher::Ext(&["sol"]),
+        node_types: &["File", "Class", "Interface", "Module", "Function", "Mapping"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS", "IMPLEMENTS", "USES_SCHEMA"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Solidity,
+        fixture: r#"// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "./IToken.sol";
+
+using SafeMath for uint256;
+
+contract Token is IToken, Ownable {
+    mapping(address => uint256) public balances;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    constructor() {
+        balances[msg.sender] = 1;
+    }
+
+    function transfer(address to, uint256 amount) public {
+        emit Transfer(msg.sender, to, amount);
+    }
+}
+"#,
+        sample_rel: "",
+    },
+    LangSpec {
+        name: "zig",
+        matcher: Matcher::Ext(&["zig"]),
+        node_types: &["File", "Function", "Struct", "Variable"],
+        edge_labels: &["IMPORTS", "DEFINES"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Zig,
+        fixture: r#"const std = @import("std");
+const mod = @import("mod.zig");
+
+pub const version: i32 = 1;
+
+pub const Point = struct {
+    x: i32,
+    y: i32,
+};
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+}
+
+export fn compute(a: i32) i32 {
+    return a * 2;
+}
+
+test "compute doubles" {
+    try std.testing.expectEqual(@as(i32, 4), compute(2));
 }
 "#,
         sample_rel: "",
@@ -690,6 +787,10 @@ pub fn node_type_for_prefix(node_id: &str) -> Option<(&'static str, String)> {
 /// Cap размера файла по умолчанию — 2 МБ (ADR-AST-4); для `.ipynb` — свой cap (Ф52).
 pub const DEFAULT_CAP_BYTES: usize = 2 * 1024 * 1024;
 
+/// Cap для Jupyter-ноутбуков — 5 МБ (52.1: outputs не читаются, но сами
+/// ноутбуки бывают велики из-за base64-выводов).
+pub const NOTEBOOK_CAP_BYTES: usize = 5 * 1024 * 1024;
+
 /// Laravel blade: `*.blade.php` — HTML-парсер раньше PHP-экстрактора (Ф48.1).
 fn is_blade_path(rel_path: &str) -> bool {
     rel_path.ends_with(".blade.php")
@@ -882,6 +983,23 @@ pub struct AstCodeExtractor {
     css_sel_class_re: Regex,
     css_sel_id_re: Regex,
 
+    /// Ф52.2: Solidity.
+    sol_import_re: Regex,
+    sol_contract_re: Regex,
+    sol_interface_re: Regex,
+    sol_library_re: Regex,
+    sol_fn_re: Regex,
+    sol_special_re: Regex,
+    sol_mapping_re: Regex,
+    sol_using_re: Regex,
+
+    /// Ф52.3: Zig.
+    zig_import_re: Regex,
+    zig_fn_re: Regex,
+    zig_test_re: Regex,
+    zig_type_re: Regex,
+    zig_pub_var_re: Regex,
+
     scala_import_re: Regex,
     scala_type_re: Regex,
     scala_fn_re: Regex,
@@ -1015,6 +1133,23 @@ impl AstCodeExtractor {
             css_var_re: Regex::new(r"(?m)--([a-zA-Z0-9_-]+)\s*:").unwrap(),
             css_sel_class_re: Regex::new(r"\.([a-zA-Z_][a-zA-Z0-9_-]*)").unwrap(),
             css_sel_id_re: Regex::new(r"#([a-zA-Z_][a-zA-Z0-9_-]*)").unwrap(),
+
+            // Ф52.2: Solidity
+            sol_import_re: Regex::new(r#"(?m)^\s*import\s+["']([^"']+)["']"#).unwrap(),
+            sol_contract_re: Regex::new(r"(?m)^\s*(?:abstract\s+)?contract\s+([A-Za-z0-9_]+)(?:\s+is\s+([^{]+))?").unwrap(),
+            sol_interface_re: Regex::new(r"(?m)^\s*interface\s+([A-Za-z0-9_]+)(?:\s+is\s+([^{]+))?").unwrap(),
+            sol_library_re: Regex::new(r"(?m)^\s*library\s+([A-Za-z0-9_]+)").unwrap(),
+            sol_fn_re: Regex::new(r"(?m)^\s*(function)\s+([A-Za-z0-9_]+)\s*\(").unwrap(),
+            sol_special_re: Regex::new(r"(?m)^\s*(constructor|modifier|event|error)\s*([A-Za-z0-9_]*)").unwrap(),
+            sol_mapping_re: Regex::new(r"mapping\s*\([^)]*\)\s*(?:public|private|internal)?\s*([A-Za-z0-9_]+)\s*[;=]").unwrap(),
+            sol_using_re: Regex::new(r"using\s+([A-Za-z0-9_]+)\s+for\s+([A-Za-z0-9_.\[\]]+)").unwrap(),
+
+            // Ф52.3: Zig
+            zig_import_re: Regex::new(r#"@import\("([^"]+)"\)"#).unwrap(),
+            zig_fn_re: Regex::new(r"(?m)^\s*(?:(?:pub|export|inline)\s+)*fn\s+([A-Za-z0-9_]+)").unwrap(),
+            zig_test_re: Regex::new(r#"(?m)^\s*test\s+"([^"]+)""#).unwrap(),
+            zig_type_re: Regex::new(r"(?m)^\s*(?:pub\s+)?(?:const|var)\s+([A-Za-z0-9_]+)\s*=\s*(struct|enum|union|opaque)\b").unwrap(),
+            zig_pub_var_re: Regex::new(r"(?m)^\s*pub\s+(?:const|var)\s+([A-Za-z0-9_]+)\s*(?::[^=]+)?\s*=").unwrap(),
 
             // Scala patterns
             scala_import_re: Regex::new(r"(?m)^\s*import\s+([a-zA-Z0-9_.{}]+)").unwrap(),
@@ -1191,7 +1326,7 @@ impl AstCodeExtractor {
         }
 
         // 1c. Ф39.1: места вызовов для type-pass
-        collect_call_sites(rel_path, &lines, RUST_CALL_SKIP, &self.call_re, out);
+        collect_call_sites(rel_path, &lines, RUST_CALL_SKIP, &self.call_re, 0, out);
 
         // 2. Извлечение struct/enum
         for (i, line) in lines.iter().enumerate() {
@@ -1310,6 +1445,7 @@ impl AstCodeExtractor {
         rel_path: &str,
         file_node_id: &str,
         content: &str,
+        line_offset: usize,
         out: &mut AstScanResult,
     ) {
         let lines: Vec<&str> = content.lines().collect();
@@ -1373,7 +1509,7 @@ impl AstCodeExtractor {
         }
 
         // 1c. Ф39.1: места вызовов для type-pass
-        collect_call_sites(rel_path, &lines, PY_CALL_SKIP, &self.call_re, out);
+        collect_call_sites(rel_path, &lines, PY_CALL_SKIP, &self.call_re, line_offset, out);
 
         // 2. Извлечение classes
         for (i, line) in lines.iter().enumerate() {
@@ -1387,8 +1523,8 @@ impl AstCodeExtractor {
                         node_type: "Class".to_string(),
                         description: format!("Класс `{}` в {}", class_name, rel_path),
                         file_path: rel_path.to_string(),
-                        line_start: i + 1,
-                        line_end: i + 1,
+                        line_start: i + 1 + line_offset,
+                        line_end: i + 1 + line_offset,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -1466,8 +1602,8 @@ impl AstCodeExtractor {
                         node_type: "Function".to_string(),
                         description: format!("Функция/метод `{}` в {}", fn_name, rel_path),
                         file_path: rel_path.to_string(),
-                        line_start: i + 1,
-                        line_end: i + 1,
+                        line_start: i + 1 + line_offset,
+                        line_end: i + 1 + line_offset,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -3285,6 +3421,464 @@ impl AstCodeExtractor {
         }
     }
 
+    /// Ф52.1: Jupyter `.ipynb` — код code-ячеек через parse_python со
+    /// сквозным line_offset (номера строк — по склеенному коду ячеек).
+    /// `outputs` не читаются (base64-картинки — риск памяти), cap 5 МБ.
+    fn parse_notebook(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(content) else {
+            return; // битый JSON — остаётся только File-узел от parse_file
+        };
+        let Some(cells) = v.get("cells").and_then(|c| c.as_array()) else {
+            return; // нет cells — только File-узел (52.1)
+        };
+
+        let mut code_cells = 0usize;
+        let mut offset = 0usize;
+        for cell in cells {
+            if cell.get("cell_type").and_then(|t| t.as_str()) != Some("code") {
+                continue; // markdown/raw — не код
+            }
+            // source: массив строк или одна строка; outputs не трогаем
+            let code = match cell.get("source") {
+                Some(serde_json::Value::Array(lines)) => lines
+                    .iter()
+                    .filter_map(|l| l.as_str())
+                    .collect::<Vec<_>>()
+                    .join(""),
+                Some(serde_json::Value::String(s)) => s.clone(),
+                _ => continue,
+            };
+            if code.trim().is_empty() {
+                continue;
+            }
+            code_cells += 1;
+            self.parse_python(rel_path, file_node_id, &code, offset, out);
+            offset += code.lines().count() + 1; // +1 пустая строка между ячейками
+        }
+
+        if code_cells > 0 {
+            let node_id = format!("notebook:{}", rel_path);
+            let label = Path::new(rel_path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| rel_path.to_string());
+            out.nodes.push(AstNode {
+                node_id: node_id.clone(),
+                label,
+                node_type: "Notebook".to_string(),
+                description: format!(
+                    "Jupyter ноутбук `{}` (code-ячеек: {}) в {}",
+                    rel_path, code_cells, rel_path
+                ),
+                file_path: rel_path.to_string(),
+                line_start: 1,
+                line_end: offset.max(1),
+            });
+            out.edges.push(AstEdge {
+                source_node_id: file_node_id.to_string(),
+                target_node_id: node_id,
+                label: "DEFINES".to_string(),
+                weight: 1.0,
+                context: format!("notebook ({} code cells)", code_cells),
+                provenance: "EXTRACTED".to_string(),
+            });
+        }
+    }
+
+    /// Ф52.2: Solidity — `contract C is A, B` → Class (+INHERITS первой базе,
+    /// IMPLEMENTS остальным, как в PHP/Java), `interface` → Interface,
+    /// `library` → Module, `function`/`modifier`/`event`/`error`/`constructor`
+    /// → Function (тип в description), `mapping(...)` → Mapping (DEFINES),
+    /// `import "x.sol"` → IMPORTS, `using X for Y` → USES_SCHEMA.
+    fn parse_solidity(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. import "x.sol"
+        for cap in self.sol_import_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", m.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("import \"{}\"", m.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. Контракты/интерфейсы/библиотеки; `is A, B` — первая база INHERITS,
+        // остальные IMPLEMENTS (как PHP extends/implements)
+        let push_bases = |out: &mut AstScanResult, node_id: &str, bases: &str| {
+            for (k, base) in bases
+                .split(',')
+                .map(str::trim)
+                .filter(|b| !b.is_empty())
+                .enumerate()
+            {
+                out.edges.push(AstEdge {
+                    source_node_id: node_id.to_string(),
+                    target_node_id: if k == 0 {
+                        format!("class:{}", base)
+                    } else {
+                        format!("interface:{}", base)
+                    },
+                    label: if k == 0 { "INHERITS" } else { "IMPLEMENTS" }.to_string(),
+                    weight: 1.0,
+                    context: format!("is {}", base),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        };
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.sol_contract_re.captures(line) {
+                let Some(name) = cap.get(1) else { continue };
+                let node_id = format!("class:{}:{}", rel_path, name.as_str());
+                out.nodes.push(AstNode {
+                    node_id: node_id.clone(),
+                    label: name.as_str().to_string(),
+                    node_type: "Class".to_string(),
+                    description: format!(
+                        "Solidity контракт `{}` в {}",
+                        name.as_str(),
+                        rel_path
+                    ),
+                    file_path: rel_path.to_string(),
+                    line_start: i + 1,
+                    line_end: i + 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: node_id.clone(),
+                    label: "DEFINES".to_string(),
+                    weight: 1.0,
+                    context: line.trim().to_string(),
+                    provenance: "EXTRACTED".to_string(),
+                });
+                if let Some(bases) = cap.get(2) {
+                    push_bases(out, &node_id, bases.as_str());
+                }
+                continue;
+            }
+            if let Some(cap) = self.sol_interface_re.captures(line) {
+                let Some(name) = cap.get(1) else { continue };
+                let node_id = format!("interface:{}:{}", rel_path, name.as_str());
+                out.nodes.push(AstNode {
+                    node_id: node_id.clone(),
+                    label: name.as_str().to_string(),
+                    node_type: "Interface".to_string(),
+                    description: format!(
+                        "Solidity интерфейс `{}` в {}",
+                        name.as_str(),
+                        rel_path
+                    ),
+                    file_path: rel_path.to_string(),
+                    line_start: i + 1,
+                    line_end: i + 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: node_id.clone(),
+                    label: "DEFINES".to_string(),
+                    weight: 1.0,
+                    context: line.trim().to_string(),
+                    provenance: "EXTRACTED".to_string(),
+                });
+                if let Some(bases) = cap.get(2) {
+                    push_bases(out, &node_id, bases.as_str());
+                }
+                continue;
+            }
+            if let Some(cap) = self.sol_library_re.captures(line) {
+                let Some(name) = cap.get(1) else { continue };
+                let node_id = format!("module:{}:{}", rel_path, name.as_str());
+                out.nodes.push(AstNode {
+                    node_id: node_id.clone(),
+                    label: name.as_str().to_string(),
+                    node_type: "Module".to_string(),
+                    description: format!(
+                        "Solidity библиотека `{}` в {}",
+                        name.as_str(),
+                        rel_path
+                    ),
+                    file_path: rel_path.to_string(),
+                    line_start: i + 1,
+                    line_end: i + 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: node_id,
+                    label: "DEFINES".to_string(),
+                    weight: 1.0,
+                    context: line.trim().to_string(),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 3. function/modifier/event/error/constructor → Function
+        for (i, line) in lines.iter().enumerate() {
+            let (name, kind) = if let Some(cap) = self.sol_fn_re.captures(line) {
+                match (cap.get(1), cap.get(2)) {
+                    (Some(k), Some(n)) => (n.as_str().to_string(), k.as_str().to_string()),
+                    _ => continue,
+                }
+            } else if let Some(cap) = self.sol_special_re.captures(line) {
+                match (cap.get(1), cap.get(2)) {
+                    // constructor без имени: label = kind
+                    (Some(k), Some(n)) if !n.is_empty() => (n.as_str().to_string(), k.as_str().to_string()),
+                    (Some(k), _) => (k.as_str().to_string(), k.as_str().to_string()),
+                    _ => continue,
+                }
+            } else {
+                continue;
+            };
+            let node_id = format!("fn:{}:{}", rel_path, name);
+            out.nodes.push(AstNode {
+                node_id: node_id.clone(),
+                label: name.clone(),
+                node_type: "Function".to_string(),
+                description: format!(
+                    "Solidity {} `{}` в {}",
+                    kind, name, rel_path
+                ),
+                file_path: rel_path.to_string(),
+                line_start: i + 1,
+                line_end: i + 1,
+            });
+            out.edges.push(AstEdge {
+                source_node_id: file_node_id.to_string(),
+                target_node_id: node_id,
+                label: "DEFINES".to_string(),
+                weight: 1.0,
+                context: line.trim().to_string(),
+                provenance: "EXTRACTED".to_string(),
+            });
+        }
+
+        // 4. mapping(... <vis> name;) → Mapping-узел (один на имя на файл)
+        let mut seen_mappings: HashSet<String> = HashSet::new();
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.sol_mapping_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    if seen_mappings.insert(name.as_str().to_string()) {
+                        let node_id = format!("mapping:{}:{}", rel_path, name.as_str());
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: name.as_str().to_string(),
+                            node_type: "Mapping".to_string(),
+                            description: format!(
+                                "Solidity mapping `{}` в {}:{}",
+                                name.as_str(),
+                                rel_path,
+                                i + 1
+                            ),
+                            file_path: rel_path.to_string(),
+                            line_start: i + 1,
+                            line_end: i + 1,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: line.trim().to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // 5. using X for Y → USES_SCHEMA (X — обычно библиотека)
+        for cap in self.sol_using_re.captures_iter(content) {
+            if let (Some(lib), Some(_ty)) = (cap.get(1), cap.get(2)) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", lib.as_str()),
+                    label: "USES_SCHEMA".to_string(),
+                    weight: 1.0,
+                    context: format!(
+                        "using {} for {}",
+                        lib.as_str(),
+                        cap.get(2).map(|m| m.as_str()).unwrap_or("")
+                    ),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+    }
+
+    /// Ф52.3: Zig — `pub fn`/`export fn`/`fn`/`inline fn` → Function,
+    /// `const X = struct/enum/union/opaque` → Struct, `@import("std")` →
+    /// pkg:zig:std / `@import("mod.zig")` → file:, `test "name"` → Function с
+    /// label `test_{name}` (префикс test_ выводит из dead-code, entrypoint_reason),
+    /// top-level `pub const/var` (не структуры) → Variable.
+    fn parse_zig(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut defined_names: HashSet<String> = HashSet::new();
+
+        // 1. @import
+        for cap in self.zig_import_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                let target = if m.as_str() == "std" {
+                    "pkg:zig:std".to_string()
+                } else if m.as_str().ends_with(".zig") {
+                    format!("file:{}", m.as_str())
+                } else {
+                    format!("module:{}", m.as_str())
+                };
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: target,
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("@import(\"{}\")", m.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. top-level определения: fn, const/var-структуры, pub const/var
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.zig_fn_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    let node_id = format!("fn:{}:{}", rel_path, name.as_str());
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.as_str().to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!(
+                            "Zig функция `{}` ({}) в {}",
+                            name.as_str(),
+                            line.trim().trim_end_matches('{').trim(),
+                            rel_path
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    defined_names.insert(name.as_str().to_string());
+                    continue;
+                }
+            }
+            if let Some(cap) = self.zig_test_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    // label test_{name}: существующее правило entrypoint_reason
+                    // (starts_with "test_") выводит тесты из dead-code
+                    let label = format!("test_{}", name.as_str());
+                    let node_id = format!("fn:{}:{}", rel_path, label);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label,
+                        node_type: "Function".to_string(),
+                        description: format!(
+                            "Zig тест \"{}\" в {}",
+                            name.as_str(),
+                            rel_path
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    continue;
+                }
+            }
+            if let Some(cap) = self.zig_type_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    let node_id = format!("struct:{}:{}", rel_path, name.as_str());
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.as_str().to_string(),
+                        node_type: "Struct".to_string(),
+                        description: format!(
+                            "Zig {} `{}` в {}",
+                            cap.get(2).map(|m| m.as_str()).unwrap_or("type"),
+                            name.as_str(),
+                            rel_path
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    defined_names.insert(name.as_str().to_string());
+                    continue;
+                }
+            }
+            // top-level переменные — только pub (52.3)
+            if let Some(cap) = self.zig_pub_var_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    if defined_names.insert(name.as_str().to_string()) {
+                        let node_id = format!("variable:{}:{}", rel_path, name.as_str());
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: name.as_str().to_string(),
+                            node_type: "Variable".to_string(),
+                            description: format!(
+                                "Zig pub const/var `{}` в {}",
+                                name.as_str(),
+                                rel_path
+                            ),
+                            file_path: rel_path.to_string(),
+                            line_start: i + 1,
+                            line_end: i + 1,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: line.trim().to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     fn parse_scala(
         &self,
         rel_path: &str,
@@ -3650,7 +4244,7 @@ impl Parser {
     ) {
         match self {
             Parser::Rust => ex.parse_rust(rel_path, file_node_id, content, out),
-            Parser::Python => ex.parse_python(rel_path, file_node_id, content, out),
+            Parser::Python => ex.parse_python(rel_path, file_node_id, content, 0, out),
             Parser::TsJs => ex.parse_ts_js(rel_path, file_node_id, content, 0, out),
             Parser::Go => ex.parse_go(rel_path, file_node_id, content, out),
             Parser::Sql => ex.parse_sql(rel_path, file_node_id, content, out),
@@ -3669,6 +4263,9 @@ impl Parser {
             Parser::Shell => ex.parse_shell(rel_path, file_node_id, content, out),
             Parser::Html => ex.parse_html(rel_path, file_node_id, content, out),
             Parser::Css => ex.parse_css(rel_path, file_node_id, content, 0, out),
+            Parser::Notebook => ex.parse_notebook(rel_path, file_node_id, content, out),
+            Parser::Solidity => ex.parse_solidity(rel_path, file_node_id, content, out),
+            Parser::Zig => ex.parse_zig(rel_path, file_node_id, content, out),
         }
     }
 }
@@ -3792,6 +4389,7 @@ fn collect_call_sites(
     lines: &[&str],
     skip: &[&str],
     re: &Regex,
+    line_offset: usize,
     out: &mut AstScanResult,
 ) {
     // строки-определения: `fn helper(` / `def load(` — это не вызовы
@@ -3827,7 +4425,7 @@ fn collect_call_sites(
             }
             out.call_sites.push(CallSite {
                 rel_path: rel_path.to_string(),
-                line: i + 1,
+                line: i + 1 + line_offset,
                 name: name.to_string(),
             });
         }
