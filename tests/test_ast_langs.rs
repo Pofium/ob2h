@@ -523,6 +523,185 @@ fn test_spec_zig() {
     assert_has_edge(&res, "DEFINES");
 }
 
+// --- Ф49: API-контракты (proto / graphql / openapi) и мосты ---
+
+#[test]
+fn test_spec_proto() {
+    let res = parse("proto", "proto/demo.proto");
+    assert_has_node(&res, "demo.v1");
+    assert_has_node(&res, "UserService");
+    assert_has_node(&res, "GetUser");
+    assert_has_node(&res, "User");
+    assert_has_node(&res, "Status");
+    let svc = res.nodes.iter().find(|n| n.node_type == "Service").unwrap();
+    assert!(svc.node_id.starts_with("service:"));
+    // rpc внутри сервиса: service →(DEFINES)→ rpc
+    assert!(res.edges.iter().any(|e| e.label == "DEFINES"
+        && e.source_node_id.ends_with("service:proto/demo.proto:UserService")
+        && e.target_node_id.ends_with("fn:proto/demo.proto:GetUser")));
+    assert_has_edge(&res, "IMPORTS");
+    assert_has_edge(&res, "USES_SCHEMA");
+}
+
+#[test]
+fn test_spec_graphql() {
+    let res = parse("graphql", "schema/schema.graphql");
+    assert_has_node(&res, "User");
+    assert_has_node(&res, "Node");
+    assert_has_node(&res, "Role");
+    // поля Query/Mutation → Function-узлы
+    assert_has_node(&res, "users");
+    assert_has_node(&res, "createUser");
+    let users = res.nodes.iter().find(|n| n.label == "users").unwrap();
+    assert_eq!(users.node_type, "Function");
+    assert!(users.description.contains("Query"));
+    let cu = res.nodes.iter().find(|n| n.label == "createUser").unwrap();
+    assert!(cu.description.contains("Mutation"));
+    assert_has_edge(&res, "DEFINES");
+}
+
+/// 49.5: openapi.json и openapi.yaml дают одинаковый семантический результат.
+#[test]
+fn test_openapi_json_yaml_parity() {
+    let ex = AstCodeExtractor::new();
+    let mut jres = AstScanResult::default();
+    ex.parse_file("openapi.json", spec("openapi").fixture, &mut jres);
+
+    let yaml = r##"openapi: 3.0.0
+info:
+  title: Demo API
+  version: 1.0.0
+paths:
+  /api/users:
+    get:
+      summary: Список пользователей
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+    post:
+      requestBody:
+        $ref: "#/components/schemas/NewUser"
+components:
+  schemas:
+    NewUser:
+      type: object
+      properties:
+        profile:
+          $ref: "#/components/schemas/Profile"
+    Profile:
+      type: object
+"##;
+    let mut yres = AstScanResult::default();
+    ex.parse_file("openapi.yaml", yaml, &mut yres);
+
+    // node_id содержит имя файла — нормализуем для сравнения семантики
+    let norm = |s: &str| s.replace("openapi.json", "OPENAPI").replace("openapi.yaml", "OPENAPI");
+    let sig = |r: &AstScanResult| {
+        let mut nodes: Vec<(String, String, String)> = r
+            .nodes
+            .iter()
+            .filter(|n| n.node_type != "File")
+            .map(|n| (norm(&n.node_id), n.node_type.clone(), n.label.clone()))
+            .collect();
+        nodes.sort();
+        let mut edges: Vec<(String, String, String)> = r
+            .edges
+            .iter()
+            .map(|e| {
+                (
+                    norm(&e.source_node_id),
+                    norm(&e.target_node_id),
+                    e.label.clone(),
+                )
+            })
+            .collect();
+        edges.sort();
+        (nodes, edges)
+    };
+    assert_eq!(sig(&jres), sig(&yres), "json и yaml должны быть эквивалентны");
+
+    // ключевые узлы: endpoint + парный route: (тот же id, что у серверных роутов)
+    assert!(jres.nodes.iter().any(|n| n.node_id == "route:GET /api/users"));
+    assert!(jres
+        .nodes
+        .iter()
+        .any(|n| n.node_type == "Endpoint" && n.label == "GET /api/users"));
+    assert!(jres.nodes.iter().any(|n| n.node_type == "Struct" && n.label == "NewUser"));
+    // route: →(SERVES_ENDPOINT)→ endpoint
+    assert!(jres.edges.iter().any(|e| e.label == "SERVES_ENDPOINT"
+        && e.source_node_id == "route:GET /api/users"));
+    // requestBody $ref → USES_SCHEMA к schema-узлу
+    assert!(jres.edges.iter().any(|e| e.label == "USES_SCHEMA"
+        && e.target_node_id == "struct:openapi.json:NewUser"));
+    // parameters → Field
+    assert!(jres.nodes.iter().any(|n| n.node_type == "Field" && n.label == "limit"));
+}
+
+/// 49.4: мосты — fetch('/api/users') → SERVES_ENDPOINT к route:-узлу;
+/// похожий, но другой путь связи не даёт (негативный тест на шум).
+#[test]
+fn test_http_bridges() {
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    // контракт
+    ex.parse_file("openapi.json", spec("openapi").fixture, &mut res);
+    // клиент с точным и неточным путём
+    ex.parse_file(
+        "src/client.ts",
+        r#"import { api } from './api';
+
+export function load() {
+    return fetch("/api/users");
+}
+
+export function loadWrong() {
+    return axios.get("/api/user");
+}
+"#,
+        &mut res,
+    );
+    ob2h::project::ast::resolve_bridges(&mut res);
+
+    let serves: Vec<_> = res
+        .edges
+        .iter()
+        .filter(|e| e.label == "SERVES_ENDPOINT" && e.source_node_id == "file:src/client.ts")
+        .map(|e| e.target_node_id.clone())
+        .collect();
+    assert!(
+        serves.contains(&"route:GET /api/users".to_string()),
+        "точное совпадение даёт мост: {:?}",
+        serves
+    );
+    assert!(
+        !serves.iter().any(|t| t.contains("/api/user ")),
+        "похожий путь /api/user не должен матчиться: {:?}",
+        serves
+    );
+}
+
+/// 49.4г: proto rpc ↔ хендлер по нормализованному имени (camelCase↔snake_case).
+#[test]
+fn test_rpc_bridge() {
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    ex.parse_file("proto/demo.proto", spec("proto").fixture, &mut res);
+    ex.parse_file(
+        "src/handler.rs",
+        r#"pub fn get_user(id: u64) -> Option<User> {
+    None
+}
+"#,
+        &mut res,
+    );
+    ob2h::project::ast::resolve_bridges(&mut res);
+    assert!(res.edges.iter().any(|e| e.label == "PROVIDES_RPC"
+        && e.source_node_id == "fn:src/handler.rs:get_user"
+        && e.target_node_id == "fn:proto/demo.proto:GetUser"));
+}
+
 #[test]
 fn test_spec_scala() {
     let res = parse("scala", "src/main/scala/UserService.scala");

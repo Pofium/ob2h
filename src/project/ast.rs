@@ -68,6 +68,21 @@ pub struct ImportRef {
     pub alias: Option<String>,
 }
 
+/// Ф49.4б: клиентский HTTP-вызов с path-литералом (для мостов к route:-узлам).
+#[derive(Debug, Clone)]
+pub struct HttpCall {
+    pub rel_path: String,
+    pub method: String,
+    pub path: String,
+}
+
+/// Ф49.4в: идентификатор из строки GraphQL-запроса (кандидат QUERIES_FIELD).
+#[derive(Debug, Clone)]
+pub struct GqlFieldRef {
+    pub rel_path: String,
+    pub field: String,
+}
+
 /// Результат AST-сканирования кодовой базы.
 #[derive(Debug, Clone, Default)]
 pub struct AstScanResult {
@@ -81,6 +96,10 @@ pub struct AstScanResult {
     pub call_sites: Vec<CallSite>,
     /// Ф39.1: импорты с алиасами (Rust/Python) для type-pass.
     pub imports: Vec<ImportRef>,
+    /// Ф49.4б: клиентские HTTP-вызовы (ts/js/py) для мостов SERVES_ENDPOINT.
+    pub http_calls: Vec<HttpCall>,
+    /// Ф49.4в: идентификаторы из gql-строк для мостов QUERIES_FIELD.
+    pub gql_fields: Vec<GqlFieldRef>,
 }
 
 // ============================================================================
@@ -145,6 +164,12 @@ pub enum Parser {
     Solidity,
     /// Ф52.3: Zig.
     Zig,
+    /// Ф49.1: Protocol Buffers.
+    Proto,
+    /// Ф49.2: GraphQL.
+    Graphql,
+    /// Ф49.3: OpenAPI/Swagger (json/yaml).
+    OpenApi,
 }
 
 /// Спецификация языка/формата в реестре [`LANGS`].
@@ -432,6 +457,115 @@ test "compute doubles" {
     try std.testing.expectEqual(@as(i32, 4), compute(2));
 }
 "#,
+        sample_rel: "",
+    },
+    LangSpec {
+        name: "proto",
+        matcher: Matcher::Ext(&["proto"]),
+        node_types: &["File", "Module", "Service", "Function", "Struct", "Enum"],
+        edge_labels: &["IMPORTS", "DEFINES", "USES_SCHEMA"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Proto,
+        fixture: r#"syntax = "proto3";
+
+package demo.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option (version) = "1.2.3";
+
+message User {
+    string name = 1;
+    int64 created_at = 2;
+}
+
+enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_ACTIVE = 1;
+}
+
+service UserService {
+    rpc GetUser(GetUserRequest) returns (User);
+}
+"#,
+        sample_rel: "",
+    },
+    LangSpec {
+        name: "graphql",
+        matcher: Matcher::Ext(&["graphql", "gql"]),
+        node_types: &["File", "Schema", "Struct", "Interface", "Enum", "Function"],
+        edge_labels: &["DEFINES"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Graphql,
+        fixture: r#"schema {
+    query: Query
+}
+
+type Query {
+    users(limit: Int): [User]
+    user(id: ID!): User
+}
+
+type Mutation {
+    createUser(name: String!): User
+}
+
+type User {
+    id: ID!
+    name: String!
+}
+
+interface Node {
+    id: ID!
+}
+
+enum Role {
+    ADMIN
+    USER
+}
+"#,
+        sample_rel: "",
+    },
+    LangSpec {
+        name: "openapi",
+        matcher: Matcher::FileName(&[
+            "openapi.json",
+            "openapi.yaml",
+            "openapi.yml",
+            "swagger.json",
+            "swagger.yaml",
+        ]),
+        node_types: &["File", "Endpoint", "Route", "Struct", "Field"],
+        edge_labels: &["DEFINES", "ROUTE", "SERVES_ENDPOINT", "USES_SCHEMA"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::OpenApi,
+        fixture: r##"{
+  "openapi": "3.0.0",
+  "info": { "title": "Demo API", "version": "1.0.0" },
+  "paths": {
+    "/api/users": {
+      "get": {
+        "summary": "Список пользователей",
+        "parameters": [{ "name": "limit", "in": "query", "schema": { "type": "integer" } }]
+      },
+      "post": {
+        "requestBody": { "$ref": "#/components/schemas/NewUser" }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "NewUser": {
+        "type": "object",
+        "properties": {
+          "profile": { "$ref": "#/components/schemas/Profile" }
+        }
+      },
+      "Profile": { "type": "object" }
+    }
+  }
+}
+"##,
         sample_rel: "",
     },
     LangSpec {
@@ -1000,6 +1134,33 @@ pub struct AstCodeExtractor {
     zig_type_re: Regex,
     zig_pub_var_re: Regex,
 
+    /// Ф49.1: Protocol Buffers.
+    proto_package_re: Regex,
+    proto_service_re: Regex,
+    proto_rpc_re: Regex,
+    proto_message_re: Regex,
+    proto_enum_re: Regex,
+    proto_import_re: Regex,
+    proto_field_re: Regex,
+
+    /// Ф49.2: GraphQL.
+    gql_type_re: Regex,
+    gql_interface_re: Regex,
+    gql_enum_re: Regex,
+    gql_schema_re: Regex,
+    gql_query_block_re: Regex,
+    /// Поле внутри Query/Mutation/Subscription-блока: `name(args): Type`.
+    gql_field_re: Regex,
+
+    /// Ф49.4б: клиентские HTTP-вызовы (ts/js: fetch/axios; py: requests).
+    ts_http_re: Regex,
+    py_http_re: Regex,
+    /// Ф49.4в: строки GraphQL-запросов (gql`…` в ts/js, gql("""…""") в py).
+    ts_gql_re: Regex,
+    py_gql_re: Regex,
+    /// Идентификаторы внутри тела GraphQL-запроса (кандидаты QUERIES_FIELD).
+    gql_ident_re: Regex,
+
     scala_import_re: Regex,
     scala_type_re: Regex,
     scala_fn_re: Regex,
@@ -1150,6 +1311,30 @@ impl AstCodeExtractor {
             zig_test_re: Regex::new(r#"(?m)^\s*test\s+"([^"]+)""#).unwrap(),
             zig_type_re: Regex::new(r"(?m)^\s*(?:pub\s+)?(?:const|var)\s+([A-Za-z0-9_]+)\s*=\s*(struct|enum|union|opaque)\b").unwrap(),
             zig_pub_var_re: Regex::new(r"(?m)^\s*pub\s+(?:const|var)\s+([A-Za-z0-9_]+)\s*(?::[^=]+)?\s*=").unwrap(),
+
+            // Ф49.1: Protocol Buffers
+            proto_package_re: Regex::new(r"(?m)^\s*package\s+([a-zA-Z0-9_.]+)\s*;").unwrap(),
+            proto_service_re: Regex::new(r"(?m)^\s*service\s+([A-Za-z0-9_]+)\s*\{").unwrap(),
+            proto_rpc_re: Regex::new(r"(?m)^\s*rpc\s+([A-Za-z0-9_]+)\s*\(").unwrap(),
+            proto_message_re: Regex::new(r"(?m)^\s*message\s+([A-Za-z0-9_]+)\s*\{").unwrap(),
+            proto_enum_re: Regex::new(r"(?m)^\s*enum\s+([A-Za-z0-9_]+)\s*\{").unwrap(),
+            proto_import_re: Regex::new(r#"(?m)^\s*import\s+(?:public\s+)?["']([^"']+)["']\s*;"#).unwrap(),
+            proto_field_re: Regex::new(r"(?m)^\s*(?:repeated|optional|required\s+)?([A-Za-z][A-Za-z0-9_.]*)\s+[a-z][a-z0-9_]*\s*=\s*\d+").unwrap(),
+
+            // Ф49.2: GraphQL
+            gql_type_re: Regex::new(r"(?m)^\s*(?:input|type)\s+([A-Za-z0-9_]+)").unwrap(),
+            gql_interface_re: Regex::new(r"(?m)^\s*interface\s+([A-Za-z0-9_]+)").unwrap(),
+            gql_enum_re: Regex::new(r"(?m)^\s*enum\s+([A-Za-z0-9_]+)").unwrap(),
+            gql_schema_re: Regex::new(r"schema\s*\{").unwrap(),
+            gql_query_block_re: Regex::new(r"(?is)(?:type|extend type)\s+(Query|Mutation|Subscription)\s*\{([^{}]*)\}").unwrap(),
+            gql_field_re: Regex::new(r"^\s*([a-z][a-zA-Z0-9_]*)\s*(?:\([^)]*\))?\s*:").unwrap(),
+
+            // Ф49.4: клиентские вызовы и gql-строки
+            ts_http_re: Regex::new(r#"(?i)(?:fetch|axios(?:\.(get|post|put|delete|patch))?)\s*\(\s*["'`]([^"'`]+)["'`]"#).unwrap(),
+            py_http_re: Regex::new(r#"requests\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#).unwrap(),
+            ts_gql_re: Regex::new(r#"(?:gql|graphql)\s*`([^`]*)`"#).unwrap(),
+            py_gql_re: Regex::new(r#"(?s)(?:gql|graphql)\s*\(\s*(?:"""(.*?)"""|'''(.*?)''')"#).unwrap(),
+            gql_ident_re: Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:\(|\{)").unwrap(),
 
             // Scala patterns
             scala_import_re: Regex::new(r"(?m)^\s*import\s+([a-zA-Z0-9_.{}]+)").unwrap(),
@@ -1450,6 +1635,24 @@ impl AstCodeExtractor {
     ) {
         let lines: Vec<&str> = content.lines().collect();
 
+        // Ф49.4б/в: клиентские HTTP-вызовы и gql-строки (кандидаты мостов)
+        collect_http_calls(rel_path, content, &self.py_http_re, out);
+        for cap in self.py_gql_re.captures_iter(content) {
+            let body = cap
+                .get(1)
+                .or_else(|| cap.get(2))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            for icap in self.gql_ident_re.captures_iter(body) {
+                if let Some(ident) = icap.get(1) {
+                    out.gql_fields.push(GqlFieldRef {
+                        rel_path: rel_path.to_string(),
+                        field: ident.as_str().to_string(),
+                    });
+                }
+            }
+        }
+
         // 1. Извлечение imports
         for cap in self.py_import_re.captures_iter(content) {
             let mod_name = cap
@@ -1641,6 +1844,21 @@ impl AstCodeExtractor {
         out: &mut AstScanResult,
     ) {
         let lines: Vec<&str> = content.lines().collect();
+
+        // Ф49.4б/в: клиентские HTTP-вызовы и gql-строки (кандидаты мостов)
+        collect_http_calls(rel_path, content, &self.ts_http_re, out);
+        for cap in self.ts_gql_re.captures_iter(content) {
+            if let Some(body) = cap.get(1) {
+                for icap in self.gql_ident_re.captures_iter(body.as_str()) {
+                    if let Some(ident) = icap.get(1) {
+                        out.gql_fields.push(GqlFieldRef {
+                            rel_path: rel_path.to_string(),
+                            field: ident.as_str().to_string(),
+                        });
+                    }
+                }
+            }
+        }
 
         // 1. Imports
         for cap in self.ts_import_re.captures_iter(content) {
@@ -3879,6 +4097,643 @@ impl AstCodeExtractor {
         }
     }
 
+    /// Ф49.1: Protocol Buffers — package → Module, service → Service,
+    /// rpc → Function (DEFINES service→rpc), message → Struct, enum → Enum,
+    /// import → IMPORTS, типы полей → USES_SCHEMA (объявленные в файле — к
+    /// struct/enum-узлу, прочие — ExternalModule); option-строки — в
+    /// description package-узла.
+    fn parse_proto(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // package + option-строки (в description package-узла)
+        let mut options: Vec<String> = Vec::new();
+        for line in lines.iter() {
+            let t = line.trim();
+            if t.starts_with("option ") && t.ends_with(';') {
+                options.push(t.to_string());
+            }
+        }
+        let mut package_node: Option<String> = None;
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.proto_package_re.captures(line) {
+                if let Some(pkg) = cap.get(1) {
+                    let node_id = format!("module:{}:{}", rel_path, pkg.as_str());
+                    let mut description = format!("Protobuf пакет `{}` в {}", pkg.as_str(), rel_path);
+                    if !options.is_empty() {
+                        description.push_str("; ");
+                        description.push_str(&options.join("; "));
+                    }
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: pkg.as_str().to_string(),
+                        node_type: "Module".to_string(),
+                        description,
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    package_node = Some(node_id);
+                }
+            }
+        }
+
+        // import
+        for cap in self.proto_import_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", m.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("import \"{}\"", m.as_str()),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // service/rpc/message/enum — одним проходом по строкам
+        let mut last_service: Option<String> = None;
+        let mut declared: HashMap<String, String> = HashMap::new(); // имя → node_id
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.proto_service_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    let node_id = format!("service:{}:{}", rel_path, name.as_str());
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.as_str().to_string(),
+                        node_type: "Service".to_string(),
+                        description: format!(
+                            "Protobuf сервис `{}` в {}",
+                            name.as_str(),
+                            rel_path
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    last_service = Some(node_id.clone());
+                    declared.insert(name.as_str().to_string(), node_id);
+                    continue;
+                }
+            }
+            if let Some(cap) = self.proto_rpc_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    let node_id = format!("fn:{}:{}", rel_path, name.as_str());
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.as_str().to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!(
+                            "Protobuf rpc `{}` в {}",
+                            name.as_str(),
+                            rel_path
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    if let Some(svc) = &last_service {
+                        out.edges.push(AstEdge {
+                            source_node_id: svc.clone(),
+                            target_node_id: node_id.clone(),
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: format!("rpc {}", name.as_str()),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                    continue;
+                }
+            }
+            if let Some(cap) = self.proto_message_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    let node_id = format!("struct:{}:{}", rel_path, name.as_str());
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.as_str().to_string(),
+                        node_type: "Struct".to_string(),
+                        description: format!(
+                            "Protobuf message `{}` в {}",
+                            name.as_str(),
+                            rel_path
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    declared.insert(name.as_str().to_string(), node_id);
+                    continue;
+                }
+            }
+            if let Some(cap) = self.proto_enum_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    let node_id = format!("enum:{}:{}", rel_path, name.as_str());
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.as_str().to_string(),
+                        node_type: "Enum".to_string(),
+                        description: format!(
+                            "Protobuf enum `{}` в {}",
+                            name.as_str(),
+                            rel_path
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    declared.insert(name.as_str().to_string(), node_id);
+                }
+            }
+        }
+
+        // Типы полей сообщений → USES_SCHEMA (объявленные здесь — к узлу,
+        // прочие — ExternalModule). Второй проход: объявленные уже собраны.
+        let mut seen: HashSet<String> = HashSet::new();
+        for cap in self.proto_field_re.captures_iter(content) {
+            if let Some(ty) = cap.get(1) {
+                let ty = ty.as_str();
+                if ty.starts_with('.') || !seen.insert(ty.to_string()) {
+                    continue;
+                }
+                let target = declared.get(ty).cloned().unwrap_or(format!("module:{}", ty));
+                // источник — последний message, объявленный до использования
+                let src = declared
+                    .values()
+                    .next()
+                    .cloned()
+                    .unwrap_or(file_node_id.to_string());
+                out.edges.push(AstEdge {
+                    source_node_id: src,
+                    target_node_id: target,
+                    label: "USES_SCHEMA".to_string(),
+                    weight: 1.0,
+                    context: format!("field type {}", ty),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+    }
+
+    /// Ф49.2: GraphQL — type/input → Struct (input помечен), interface →
+    /// Interface, enum → Enum, schema{} → Schema; поля Query/Mutation/
+    /// Subscription → Function (метка в description); `extend type` — узел не
+    /// создаём (мерж в базовый type).
+    fn parse_graphql(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let lines: Vec<&str> = content.lines().collect();
+
+        // 1. schema { query: Q ... }
+        for (i, line) in lines.iter().enumerate() {
+            if self.gql_schema_re.is_match(line) {
+                let node_id = format!("schema:{}", rel_path);
+                out.nodes.push(AstNode {
+                    node_id: node_id.clone(),
+                    label: rel_path.to_string(),
+                    node_type: "Schema".to_string(),
+                    description: format!("GraphQL schema-определение в {}", rel_path),
+                    file_path: rel_path.to_string(),
+                    line_start: i + 1,
+                    line_end: i + 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: node_id,
+                    label: "DEFINES".to_string(),
+                    weight: 1.0,
+                    context: "schema {".to_string(),
+                    provenance: "EXTRACTED".to_string(),
+                });
+                break;
+            }
+        }
+
+        // 2. Поля Query/Mutation/Subscription → Function
+        for cap in self.gql_query_block_re.captures_iter(content) {
+            let Some(kind) = cap.get(1).map(|m| m.as_str().to_string()) else { continue };
+            let Some(body) = cap.get(2) else { continue };
+            let offset = content[..body.start()].matches('\n').count();
+            for (k, line) in body.as_str().lines().enumerate() {
+                if let Some(cap2) = self.gql_field_re.captures(line) {
+                    if let Some(field) = cap2.get(1) {
+                        let node_id = format!("fn:{}:{}", rel_path, field.as_str());
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: field.as_str().to_string(),
+                            node_type: "Function".to_string(),
+                            description: format!(
+                                "GraphQL {}-поле `{}` в {}",
+                                kind,
+                                field.as_str(),
+                                rel_path
+                            ),
+                            file_path: rel_path.to_string(),
+                            line_start: offset + k + 1,
+                            line_end: offset + k + 1,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: format!("{}: {}", kind.to_lowercase(), field.as_str()),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // 3. type/input/interface/enum — типы (кроме Query/Mutation/Subscription)
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.gql_type_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    let name = name.as_str();
+                    if matches!(name, "Query" | "Mutation" | "Subscription") {
+                        continue; // поля уже Function-узлы (шаг 2)
+                    }
+                    let is_input = line.trim_start().starts_with("input");
+                    let node_id = format!("struct:{}:{}", rel_path, name);
+                    let mut description = format!("GraphQL type `{}` в {}", name, rel_path);
+                    if is_input {
+                        description.push_str(" (input)");
+                    }
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.to_string(),
+                        node_type: "Struct".to_string(),
+                        description,
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    continue;
+                }
+            }
+            if let Some(cap) = self.gql_interface_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    let node_id = format!("interface:{}:{}", rel_path, name.as_str());
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.as_str().to_string(),
+                        node_type: "Interface".to_string(),
+                        description: format!(
+                            "GraphQL interface `{}` в {}",
+                            name.as_str(),
+                            rel_path
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    continue;
+                }
+            }
+            if let Some(cap) = self.gql_enum_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    let node_id = format!("enum:{}:{}", rel_path, name.as_str());
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.as_str().to_string(),
+                        node_type: "Enum".to_string(),
+                        description: format!(
+                            "GraphQL enum `{}` в {}",
+                            name.as_str(),
+                            rel_path
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Ф49.3: OpenAPI/Swagger (json через serde_json, yaml — serde_yaml_ng, оба
+    /// в serde_json::Value) — пути×методы → Endpoint + парный `route:`-узел
+    /// (тот же node_id, что у серверных роутов Ф40.2 — мост (а) получается
+    /// автоматически), components/schemas → Struct, $ref → USES_SCHEMA,
+    /// parameters/requestBody → Field. info.title/version — в description
+    /// File-узла. Возвращает true, если это был OpenAPI-документ.
+    fn parse_openapi(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) -> bool {
+        let value: serde_json::Value = if let Ok(v) = serde_json::from_str::<serde_json::Value>(content)
+        {
+            v
+        } else if let Ok(v) = serde_yaml_ng::from_str::<serde_json::Value>(content) {
+            v
+        } else {
+            return false;
+        };
+
+        // Классификатор (50.5): характерный корневой ключ
+        let is_swagger = value.get("openapi").is_some() || value.get("swagger").is_some();
+        if !is_swagger {
+            return false;
+        }
+
+        // info.title/version → description File-узла (узел создан parse_file)
+        let mut info_note = String::new();
+        if let Some(info) = value.get("info") {
+            let title = info.get("title").and_then(|t| t.as_str()).unwrap_or("");
+            let version = info.get("version").and_then(|v| v.as_str()).unwrap_or("");
+            if !title.is_empty() || !version.is_empty() {
+                info_note = format!("OpenAPI: {} {}", title, version);
+                for node in out.nodes.iter_mut() {
+                    if node.node_id == file_node_id {
+                        node.description.push_str("; ");
+                        node.description.push_str(&info_note);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // paths → Endpoint + route:
+        const HTTP_METHODS: &[&str] = &["get", "post", "put", "delete", "patch", "head", "options"];
+        let mut schema_nodes: HashMap<String, String> = HashMap::new();
+        if let Some(paths) = value.get("paths").and_then(|p| p.as_object()) {
+            for (path, item) in paths {
+                for method in HTTP_METHODS {
+                    let Some(op) = item.get(*method) else { continue };
+                    let method_up = method.to_uppercase();
+                    let endpoint_id = format!("endpoint:{}:{} {}", rel_path, method_up, path);
+                    let route_id = format!("route:{} {}", method_up, path);
+                    let op_desc = op
+                        .get("summary")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or_default();
+                    out.nodes.push(AstNode {
+                        node_id: endpoint_id.clone(),
+                        label: format!("{} {}", method_up, path),
+                        node_type: "Endpoint".to_string(),
+                        description: format!(
+                            "OpenAPI эндпоинт `{} {}`{} в {}",
+                            method_up,
+                            path,
+                            if op_desc.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" — {}", op_desc)
+                            },
+                            rel_path
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: 1,
+                        line_end: 1,
+                    });
+                    out.nodes.push(AstNode {
+                        node_id: route_id.clone(),
+                        label: format!("{} {}", method_up, path),
+                        node_type: "Route".to_string(),
+                        description: format!(
+                            "HTTP маршрут `{} {}` (контракт {}){}",
+                            method_up,
+                            path,
+                            rel_path,
+                            if info_note.is_empty() {
+                                String::new()
+                            } else {
+                                format!("; {}", info_note)
+                            }
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: 1,
+                        line_end: 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: endpoint_id.clone(),
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: format!("{} {}", method_up, path),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: route_id.clone(),
+                        label: "ROUTE".to_string(),
+                        weight: 1.0,
+                        context: format!("openapi {} {}", method_up, path),
+                        provenance: "INFERRED".to_string(),
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: route_id,
+                        target_node_id: endpoint_id.clone(),
+                        label: "SERVES_ENDPOINT".to_string(),
+                        weight: 1.0,
+                        context: format!("openapi {} {}", method_up, path),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+
+                    // parameters/requestBody → Field
+                    if let Some(params) = op.get("parameters").and_then(|p| p.as_array()) {
+                        for p in params {
+                            let Some(name) = p.get("name").and_then(|n| n.as_str()) else {
+                                continue;
+                            };
+                            let field_id = format!("field:{}:{}:{}", rel_path, path, name);
+                            out.nodes.push(AstNode {
+                                node_id: field_id.clone(),
+                                label: name.to_string(),
+                                node_type: "Field".to_string(),
+                                description: format!(
+                                    "Параметр `{}` ({} {}){} в {}",
+                                    name,
+                                    method_up,
+                                    path,
+                                    p.get("in")
+                                        .and_then(|i| i.as_str())
+                                        .map(|i| format!(" in {}", i))
+                                        .unwrap_or_default(),
+                                    rel_path
+                                ),
+                                file_path: rel_path.to_string(),
+                                line_start: 1,
+                                line_end: 1,
+                            });
+                            out.edges.push(AstEdge {
+                                source_node_id: endpoint_id.clone(),
+                                target_node_id: field_id,
+                                label: "DEFINES".to_string(),
+                                weight: 1.0,
+                                context: format!("parameter {}", name),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                    if let Some(body) = op.get("requestBody") {
+                        let field_id = format!("field:{}:{}:body", rel_path, path);
+                        out.nodes.push(AstNode {
+                            node_id: field_id.clone(),
+                            label: "body".to_string(),
+                            node_type: "Field".to_string(),
+                            description: format!(
+                                "Request body `{}` в {}",
+                                path, rel_path
+                            ),
+                            file_path: rel_path.to_string(),
+                            line_start: 1,
+                            line_end: 1,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: endpoint_id.clone(),
+                            target_node_id: field_id.clone(),
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: format!("requestBody {}", path),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                        // $ref тела → USES_SCHEMA
+                        if let Some(schema_name) = find_ref_name(body) {
+                            let target = schema_nodes.get(&schema_name).cloned().unwrap_or(
+                                format!("struct:{}:{}", rel_path, schema_name),
+                            );
+                            out.edges.push(AstEdge {
+                                source_node_id: field_id,
+                                target_node_id: target,
+                                label: "USES_SCHEMA".to_string(),
+                                weight: 1.0,
+                                context: format!("$ref {}", schema_name),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // components/schemas → Struct
+        if let Some(schemas) = value
+            .get("components")
+            .and_then(|c| c.get("schemas"))
+            .and_then(|s| s.as_object())
+        {
+            for (name, schema) in schemas {
+                let node_id = format!("struct:{}:{}", rel_path, name);
+                out.nodes.push(AstNode {
+                    node_id: node_id.clone(),
+                    label: name.clone(),
+                    node_type: "Struct".to_string(),
+                    description: format!("OpenAPI schema `{}` в {}", name, rel_path),
+                    file_path: rel_path.to_string(),
+                    line_start: 1,
+                    line_end: 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: node_id.clone(),
+                    label: "DEFINES".to_string(),
+                    weight: 1.0,
+                    context: format!("schema {}", name),
+                    provenance: "EXTRACTED".to_string(),
+                });
+                schema_nodes.insert(name.clone(), node_id.clone());
+                // свойства схемы с $ref → USES_SCHEMA
+                if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+                    for (prop_name, prop) in props {
+                        if let Some(ref_name) = find_ref_name(prop) {
+                            let target = schema_nodes
+                                .get(&ref_name)
+                                .cloned()
+                                .unwrap_or(format!("struct:{}:{}", rel_path, ref_name));
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id.clone(),
+                                target_node_id: target,
+                                label: "USES_SCHEMA".to_string(),
+                                weight: 1.0,
+                                context: format!("property {} $ref {}", prop_name, ref_name),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
     fn parse_scala(
         &self,
         rel_path: &str,
@@ -4266,8 +5121,193 @@ impl Parser {
             Parser::Notebook => ex.parse_notebook(rel_path, file_node_id, content, out),
             Parser::Solidity => ex.parse_solidity(rel_path, file_node_id, content, out),
             Parser::Zig => ex.parse_zig(rel_path, file_node_id, content, out),
+            Parser::Proto => ex.parse_proto(rel_path, file_node_id, content, out),
+            Parser::Graphql => ex.parse_graphql(rel_path, file_node_id, content, out),
+            Parser::OpenApi => {
+                ex.parse_openapi(rel_path, file_node_id, content, out);
+            }
         }
     }
+}
+
+/// Ф49.4б: собрать клиентские HTTP-вызовы с path-литералом (fetch/axios в
+/// ts/js, requests в py); только in-app пути (`/...`).
+fn collect_http_calls(rel_path: &str, content: &str, re: &Regex, out: &mut AstScanResult) {
+    for cap in re.captures_iter(content) {
+        let method = cap
+            .get(1)
+            .map(|m| m.as_str().to_uppercase())
+            .unwrap_or_else(|| "GET".to_string());
+        let Some(path) = cap.get(2) else { continue };
+        let p = path.as_str().trim();
+        if !p.starts_with('/') || p.starts_with("//") {
+            continue;
+        }
+        out.http_calls.push(HttpCall {
+            rel_path: rel_path.to_string(),
+            method,
+            path: p.to_string(),
+        });
+    }
+}
+
+/// Ф49.3: имя схемы из `$ref` (`#/components/schemas/User` → `User`).
+fn find_ref_name(v: &serde_json::Value) -> Option<String> {
+    let rf = v.get("$ref").and_then(|r| r.as_str())?;
+    rf.rsplit('/').next().map(|s| s.to_string())
+}
+
+/// Нормализация пути для сопоставления контракта и кода (49.4а):
+/// `{id}` / `<id>` / `:id` → `:param`.
+fn normalize_api_path(p: &str) -> String {
+    let mut out = String::new();
+    let mut chars = p.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' | '<' => {
+                while let Some(&n) = chars.peek() {
+                    chars.next();
+                    if n == '}' || n == '>' {
+                        break;
+                    }
+                }
+                out.push(':');
+                out.push_str("param");
+            }
+            ':' if !out.ends_with('/') && !out.ends_with(':') => {
+                // `:id` — параметр до следующего `/`
+                out.push_str(":param");
+                while let Some(&n) = chars.peek() {
+                    if n == '/' {
+                        break;
+                    }
+                    chars.next();
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out.trim_end_matches('/')
+        .to_lowercase()
+}
+
+/// Ф49.4 (PLAN_v1.7): INFERRED-мосты контракт↔код по точным совпадениям:
+/// (б) fetch/axios/requests с path-литералом → `SERVES_ENDPOINT` к route:-узлу
+/// контракта; (в) идентификаторы gql-строк → `QUERIES_FIELD` к Function-полю;
+/// (г) proto rpc ↔ хендлер по нормализованному имени → `PROVIDES_RPC`
+/// (первый детерминированный матч). Возвращает число добавленных рёбер.
+pub fn resolve_bridges(scan: &mut AstScanResult) -> usize {
+    let mut added = 0usize;
+    let mut seen: HashSet<(String, String, String)> = HashSet::new();
+
+    // (б) клиентские вызовы → route:-узлы контракта
+    let route_nodes: Vec<(String, String)> = scan
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == "Route")
+        .filter_map(|n| {
+            // node_id = "route:GET /api/users" -> путь после метода
+            let rest = n.node_id.strip_prefix("route:")?;
+            let path = rest.split_once(' ')?.1;
+            Some((n.node_id.clone(), normalize_api_path(path)))
+        })
+        .collect();
+    for call in &scan.http_calls {
+        let norm = normalize_api_path(&call.path);
+        let target = route_nodes.iter().find(|(nid, npath)| {
+            npath == &norm && {
+                let method = nid
+                    .strip_prefix("route:")
+                    .and_then(|rest| rest.split(' ').next())
+                    .unwrap_or("");
+                method.eq_ignore_ascii_case(&call.method)
+            }
+        });
+        if let Some((nid, _)) = target {
+            let src = format!("file:{}", call.rel_path);
+            if seen.insert((src.clone(), nid.clone(), "SERVES_ENDPOINT".to_string())) {
+                scan.edges.push(AstEdge {
+                    source_node_id: src,
+                    target_node_id: nid.clone(),
+                    label: "SERVES_ENDPOINT".to_string(),
+                    weight: 1.0,
+                    context: format!("{} {}", call.method, call.path),
+                    provenance: "INFERRED".to_string(),
+                });
+                added += 1;
+            }
+        }
+    }
+
+    // (в) gql-поля → Function-узлы GraphQL
+    let gql_fns: Vec<(String, String)> = scan
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == "Function" && n.description.contains("GraphQL"))
+        .map(|n| (n.node_id.clone(), n.label.clone()))
+        .collect();
+    for g in &scan.gql_fields {
+        if let Some((nid, _)) = gql_fns.iter().find(|(_, label)| label == &g.field) {
+            let src = format!("file:{}", g.rel_path);
+            if seen.insert((src.clone(), nid.clone(), "QUERIES_FIELD".to_string())) {
+                scan.edges.push(AstEdge {
+                    source_node_id: src,
+                    target_node_id: nid.clone(),
+                    label: "QUERIES_FIELD".to_string(),
+                    weight: 1.0,
+                    context: format!("gql {}", g.field),
+                    provenance: "INFERRED".to_string(),
+                });
+                added += 1;
+            }
+        }
+    }
+
+    // (г) proto rpc ↔ хендлер: snake_case == camelCase, хендлер не сам rpc
+    let to_snake = |s: &str| -> String {
+        let mut out = String::new();
+        for (i, c) in s.chars().enumerate() {
+            if c.is_uppercase() {
+                if i > 0 {
+                    out.push('_');
+                }
+                out.extend(c.to_lowercase());
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    };
+    let rpcs: Vec<(String, String)> = scan
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == "Function" && n.description.contains("Protobuf rpc"))
+        .map(|n| (n.node_id.clone(), n.label.clone()))
+        .collect();
+    for (rpc_id, rpc_label) in &rpcs {
+        let want = to_snake(rpc_label);
+        if let Some(handler) = scan.nodes.iter().find(|n| {
+            n.node_type == "Function"
+                && !n.description.contains("Protobuf rpc")
+                && n.node_id != rpc_id.as_str()
+                && to_snake(&n.label) == want
+        }) {
+            let src = handler.node_id.clone();
+            if seen.insert((src.clone(), rpc_id.clone(), "PROVIDES_RPC".to_string())) {
+                scan.edges.push(AstEdge {
+                    source_node_id: src,
+                    target_node_id: rpc_id.clone(),
+                    label: "PROVIDES_RPC".to_string(),
+                    weight: 1.0,
+                    context: format!("rpc {}", rpc_label),
+                    provenance: "INFERRED".to_string(),
+                });
+                added += 1;
+            }
+        }
+    }
+
+    added
 }
 
 /// Убирает содержимое круглых скобок (`Base(x, y), IBar` → `Base, IBar`) —

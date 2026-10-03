@@ -455,6 +455,12 @@ impl ProjectService {
             info!("Type-pass: резолвлено {resolved_calls} вызовов (CALLS, provenance=RESOLVED)");
         }
 
+        // Ф49.4: INFERRED-мосты контракт↔код (HTTP-вызовы/gql/proto rpc)
+        let bridges = crate::project::ast::resolve_bridges(&mut scan_res);
+        if bridges > 0 {
+            info!("Bridges: добавлено {bridges} INFERRED-мостов (SERVES_ENDPOINT/QUERIES_FIELD/PROVIDES_RPC)");
+        }
+
         // Если ничего не изменилось и нет удалённых файлов
         if incremental && scan_res.files_scanned == 0 && deleted_files.is_empty() {
             info!(
