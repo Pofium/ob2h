@@ -49,6 +49,12 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   «still running», результат досматривается `project_scan_status` (там же сводка из БД).
   CLI для этого агенту не нужен. `project_report` и `project_context`
   выделяют центральные хабы архитектуры (God Nodes).
+  CLI для этого агенту не нужен. `project_report` и `project_context`
+  выделяют центральные хабы архитектуры (God Nodes).
+- Регрессионный bench кодового графа (v1.7.1): `ob2h bench --mode code --project <id>`
+  против `data/bench/golden_code.jsonl` — recall/MRR PPR-поиска; используется для
+  обоснования изменений PPR-весов (вердикт 2026-10-03: дефолт не менять — выдача
+  не зависит от весов кодовых рёбер, цели находятся на этапе сидов).
 - Форматы сканера (v1.7): 31 расширение кода (rs/py/ts/tsx/js/jsx/go/sql/c/cpp/cc/cxx/
   h/hpp/hxx/php/dart/java/cs/kt/kts/swift/rb/vue/svelte/scala/lua/ex/exs/sh/bash) +
   веб-разметка и стили (html/htm, css/scss, blade), контракты (proto, graphql/gql,

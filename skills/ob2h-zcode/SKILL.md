@@ -86,6 +86,9 @@ requirements/pubspec/composer; lock-файлы исключены) + .ipynb/.sol
 Полезные запросы: `project_graph_search("pkg:rust:serde_json")`, `project_graph_search("cssclass:<имя>")`,
 `project_impact("openapi.yaml")`, `project_impact("Cargo.toml")`; `project_call_path` проходит
 фронт → `route:` → хендлер (INFERRED-мосты). После апгрейда бинаря — полный `project_scan` проекта.
+Регрессионный bench кодового графа (v1.7.1): `ob2h bench --mode code --project <id>`
+против `data/bench/golden_code.jsonl`; вердикт калибровки PPR-весов (2026-10-03): дефолт
+не менять — выдача не зависит от весов кодовых рёбер (цели находятся на этапе сидов).
 AutoDreamWorker: гейты ≥4ч и ≥10 событий, lock, git-история правок, ночной bench-гейт
 (откат дрима при деградации recall/MRR).
 
