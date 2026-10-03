@@ -137,33 +137,40 @@ read-path, который обязан остаться честным:
 
 ### Фаза 48 — Веб: HTML, CSS/SCSS, связи компонентов и стилей (6.1) (1.5–2 дня)
 
-- [ ] **48.1** `parse_html` (в стиле `parse_php`): теги верхнего уровня с `id` → узлы `Element`
+- [x] **48.1** `parse_html` (в стиле `parse_php`): теги верхнего уровня с `id` → узлы `Element`
       (`el:`-префикс, label = тег#id), `<script src="x">` → `IMPORTS` (в `file:...` если локальный путь,
       иначе `ExternalModule`), `<link rel="stylesheet" href="x">` → `STYLES` (→ `css:`-узел),
       `class="a b"` → `BINDS_CLASS` (→ `cssclass:a`, `cssclass:b`, INFERRED: связь по имени класса),
       `<form action>`/`hx-post`/`href` → `ROUTE` (INFERRED, тем же способом, что Ф40.2 ast.rs:614) —
       это даёт Laravel blade/Bitrix-шаблонам связь с эндпоинтами.
-- [ ] **48.2** `parse_css`: `selectors` — `.foo` → `CssClass`, `#bar` → `CssId`; `@import "x"` → `IMPORTS`;
+      *Факт: blade (`.blade.php`) идёт через `Matcher::Predicate` → `parse_html` (раньше php-спеки);*
+      *комментарии вырезаются; `:class`-биндинги Vue не матчатся.*
+- [x] **48.2** `parse_css`: `selectors` — `.foo` → `CssClass`, `#bar` → `CssId`; `@import "x"` → `IMPORTS`;
       `--custom-prop: value` → `CssVar` (DEFINES); `@media/@supports` — не создаём узлов (шум);
       вложенность и `@include`/миксины SCSS **не резолвим** (бэклог §8). Файлы-цели `@import` без расширения —
       нормализация `x` → `x`/`x.css`/`x.scss` (первое существующее).
-- [ ] **48.3** SFC Vue/Svelte: `parse_sfc` (ast.rs:2272) дополнить разбором `<template>` и `<style>`:
+      *Факт: у парсера нет fs — цель с расширением стиля → `file:`, без — `css:`-узел Stylesheet.*
+- [x] **48.3** SFC Vue/Svelte: `parse_sfc` (ast.rs:2272) дополнить разбором `<template>` и `<style>`:
       `<style>` → `parse_css` с `line_offset` (механика уже есть у `parse_ts_js`), `<template>` — упрощённый
       HTML-разбор (классы → `BINDS_CLASS`, компоненты по тег-имени с заглавной буквы → `IMPORTS`).
-- [ ] **48.4** Узлы/рёбра новой фазы: `File`(css/html), `Element`, `CssClass`, `CssId`, `CssVar`;
+- [x] **48.4** Узлы/рёбра новой фазы: `File`(css/html), `Element`, `CssClass`, `CssId`, `CssVar`;
       рёбра `STYLES`(EXTRACTED), `IMPORTS`(EXTRACTED), `BINDS_CLASS`(INFERRED), `ROUTE`(INFERRED, переиспользуем),
       `DEFINES`(file → cssvar/class). Новые метки **не** добавляются в `USAGE_EDGE_LABELS` (ADR-AST-5);
-      веса PPR — решение Ф53.3.
-- [ ] **48.5** Cap и производительность: css/html парсятся до 2 МБ; для файлов с > 5000 строк css —
+      веса PPR — решение Ф53.3. *Факт: в `NODE_TYPE_BY_PREFIX` добавлены `file:`→File, `css:`→Stylesheet.*
+- [x] **48.5** Cap и производительность: css/html парсятся до 2 МБ; для файлов с > 5000 строк css —
       агрегировать классы по файлу (один узел на класс, дедуп по имени) и не создавать узел на каждый селектор.
-      Тест на дедуп: 200 правил с `.card` → один узел `cssclass:card`.
-- [ ] **48.6** Тесты (в `tests/test_ast_langs.rs`): HTML с id/class/script/link; CSS с классом/id/@import/var;
+      Тест на дедуп: 200 правил с `.card` → один узел `cssclass:card`. *(Факт: дедуп всегда, не только >5000 строк.)*
+- [x] **48.6** Тесты (в `tests/test_ast_langs.rs`): HTML с id/class/script/link; CSS с классом/id/@import/var;
       SFC с template+style (номера строк — относительно всего файла, как в Ф10 для `parse_ts_js`);
-      «обычный `.yml` не парсится» не относится сюда — здесь: «обычный текст с `<` не ломает парсер».
+      «обычный текст с `<` не ломает парсер». *(Факт: 29 тестов в файле, включая blade и дедуп;*
+      *плюс тест поиска по `node_id` в test_code_semantic_search.rs.)*
 
 **DoD:** на реальном проекте владельца (`C:\Projects\self-site-tbot-ai\self-site\frontend` и Laravel `views`)
 `project_graph_search("cssclass:card")` находит узел с описанием файла/строки, `project_impact("App.css")`
 перечисляет компоненты/шаблоны с `BINDS_CLASS`; регрессия существующих тестов — ноль.
+*Факт: проверено на `self-site-front` (React-проект, blade-вьюх нет): поиск по `cssclass:*` → top-1*
+*с файлом/строкой; impact по классу → определяющий файл; в React-проекте классы в TSX `className` —*
+*вне скоупа Ф48 (бэклог). Регрессия bench — ноль (docs/PLAN_v1.7_bench.md).*
 
 ---
 

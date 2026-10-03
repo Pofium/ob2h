@@ -135,6 +135,10 @@ pub enum Parser {
     Lua,
     Elixir,
     Shell,
+    /// Ф48.1: HTML (и Laravel blade — `.blade.php` через предикат).
+    Html,
+    /// Ф48.2: CSS/SCSS.
+    Css,
 }
 
 /// Спецификация языка/формата в реестре [`LANGS`].
@@ -153,6 +157,9 @@ pub struct LangSpec {
     /// Минимальная фикстура для теста консистентности реестра (47.5,
     /// tests/test_ast_langs.rs). Заполняется при добавлении формата.
     pub fixture: &'static str,
+    /// Путь-образец для теста; пусто — выводится из matcher (Predicate-спеки
+    /// вроде blade указывают его явно).
+    pub sample_rel: &'static str,
 }
 
 /// Реестр языков и форматов — **единственный** whitelist сканера (Ф47.1).
@@ -179,6 +186,7 @@ pub async fn health() -> &'static str {
     "ok"
 }
 "#,
+        sample_rel: "",
     },
     LangSpec {
         name: "python",
@@ -200,6 +208,7 @@ class User(Base):
 def list_users():
     return []
 "#,
+        sample_rel: "",
     },
     LangSpec {
         name: "ts-js",
@@ -220,6 +229,7 @@ export function load(id) {
     return null;
 }
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "go",
@@ -238,6 +248,7 @@ func Get(id uint64) *Row {
     return nil
 }
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "sql",
@@ -254,6 +265,77 @@ CREATE TABLE orders (
     user_id INTEGER REFERENCES users(id)
 );
 ",
+        sample_rel: "",
+    },
+    LangSpec {
+        name: "html",
+        matcher: Matcher::Ext(&["html", "htm"]),
+        node_types: &["File", "Element"],
+        edge_labels: &["IMPORTS", "STYLES", "BINDS_CLASS", "ROUTE", "DEFINES"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Html,
+        fixture: r#"<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" href="assets/app.css">
+    <script src="https://cdn.example.com/app.js"></script>
+</head>
+<body>
+    <div id="header" class="card wide">Hello</div>
+    <a href="/users">Users</a>
+    <form action="/api/login" method="post">
+        <input id="login" class="form-input">
+    </form>
+    <button hx-post="/api/save">Save</button>
+</body>
+</html>
+"#,
+        sample_rel: "",
+    },
+    LangSpec {
+        name: "blade",
+        matcher: Matcher::Predicate(is_blade_path),
+        node_types: &["File", "Element"],
+        edge_labels: &["IMPORTS", "STYLES", "BINDS_CLASS", "ROUTE", "DEFINES"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Html,
+        fixture: r#"@extends('layouts.app')
+
+@section('content')
+<div id="page" class="container">
+    <h1 class="card">{{ $title }}</h1>
+    <a href="/dashboard">Dashboard</a>
+</div>
+@endsection
+"#,
+        sample_rel: "resources/views/home.blade.php",
+    },
+    LangSpec {
+        name: "css",
+        matcher: Matcher::Ext(&["css", "scss"]),
+        node_types: &["File", "CssClass", "CssId", "CssVar"],
+        edge_labels: &["IMPORTS", "DEFINES"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Css,
+        fixture: r#"@import "variables.css";
+
+:root {
+    --main-color: #333;
+}
+
+.card {
+    color: var(--main-color);
+}
+
+#sidebar {
+    border: 1px solid;
+}
+
+@media (max-width: 600px) {
+    .card { padding: 4px; }
+}
+"#,
+        sample_rel: "",
     },
     LangSpec {
         name: "php",
@@ -279,6 +361,7 @@ trait Timestamps {
 function helper() {
 }
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "dart",
@@ -298,6 +381,7 @@ mixin Mix {
 Future<void> load() async {
 }
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "java",
@@ -317,6 +401,7 @@ public interface Repo {
     public void load();
 }
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "csharp",
@@ -338,6 +423,7 @@ namespace App {
     }
 }
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "c-cpp",
@@ -356,6 +442,7 @@ int get(int id) {
     return id;
 }
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "kotlin",
@@ -376,6 +463,7 @@ fun load(): String {
     return x
 }
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "swift",
@@ -396,6 +484,7 @@ func load() -> String {
     return x
 }
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "ruby",
@@ -414,24 +503,28 @@ module Store
   end
 end
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "sfc",
         matcher: Matcher::Ext(&["vue", "svelte"]),
-        node_types: &["File", "Class", "Interface", "Function"],
-        edge_labels: &["IMPORTS", "DEFINES"],
+        node_types: &["File", "Class", "Interface", "Function", "CssClass", "CssId", "CssVar"],
+        edge_labels: &["IMPORTS", "DEFINES", "STYLES", "BINDS_CLASS"],
         max_bytes: NO_CAP,
         parser: Parser::Sfc,
-        fixture: r"<template>
-  <div class=card>{{ title }}</div>
+        fixture: r#"<template>
+  <div class="card">
+    <CardTitle />
+  </div>
 </template>
 
 <script>
-import Card from './Card.vue';
+import CardTitle from './CardTitle.vue';
 
 export default {
     data() {
-        return { title: x };
+        return { title: "x" };
+        sample_rel: "",
     },
 };
 </script>
@@ -439,7 +532,8 @@ export default {
 <style>
 .card { color: red; }
 </style>
-",
+"#,
+        sample_rel: "",
     },
     LangSpec {
         name: "scala",
@@ -459,6 +553,7 @@ trait Repo {
 def load(): Unit = {
 }
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "lua",
@@ -477,6 +572,7 @@ function M.put(id, row)
   return true
 end
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "elixir",
@@ -496,6 +592,7 @@ end
 defprotocol Repo do
 end
 ",
+        sample_rel: "",
     },
     LangSpec {
         name: "shell",
@@ -515,6 +612,7 @@ function put {
   echo "$2"
 }
 "#,
+        sample_rel: "",
     },
 ];
 
@@ -537,9 +635,12 @@ impl LangSpec {
         })
     }
 
-    /// Путь-образец для теста фикстуры (по matcher); None — если по matcher
-    /// нельзя однозначно построить пример (Predicate).
+    /// Путь-образец для теста фикстуры: явный `sample_rel`, иначе выводится
+    /// из matcher.
     pub fn sample_rel_path(&self) -> Option<String> {
+        if !self.sample_rel.is_empty() {
+            return Some(self.sample_rel.to_string());
+        }
         match self.matcher {
             Matcher::Ext(exts) => Some(format!("sample.{}", exts[0])),
             Matcher::FileName(names) => Some(names[0].to_string()),
@@ -557,10 +658,13 @@ fn rel_has_skip_dir(rel: &str) -> bool {
 
 /// Ф47.3 (ADR-AST-6): тип узла для авто-создания цели ребра в scan_project по
 /// префиксу node_id. Единая таблица вместо if/else; расширяется фазами Ф48–Ф52
-/// (сейчас реально встречаются только `route:` и `table:`).
+/// (сейчас реально встречаются `route:`, `table:`, `file:`, `css:` и заглушки
+/// Ф50/Ф51).
 pub const NODE_TYPE_BY_PREFIX: &[(&str, &str)] = &[
     ("route:", "Route"),
     ("table:", "Table"),
+    ("file:", "File"),
+    ("css:", "Stylesheet"),
     ("service:", "Service"),
     ("svc:", "Service"),
     ("endpoint:", "Endpoint"),
@@ -581,6 +685,79 @@ pub fn node_type_for_prefix(node_id: &str) -> Option<(&'static str, String)> {
     NODE_TYPE_BY_PREFIX
         .iter()
         .find_map(|(p, t)| node_id.strip_prefix(p).map(|rest| (*t, rest.to_string())))
+}
+
+/// Cap размера файла по умолчанию — 2 МБ (ADR-AST-4); для `.ipynb` — свой cap (Ф52).
+pub const DEFAULT_CAP_BYTES: usize = 2 * 1024 * 1024;
+
+/// Laravel blade: `*.blade.php` — HTML-парсер раньше PHP-экстрактора (Ф48.1).
+fn is_blade_path(rel_path: &str) -> bool {
+    rel_path.ends_with(".blade.php")
+}
+
+/// Ф48.1: `<script src>` — внешняя ссылка (http/https/протокол-относительная) →
+/// `module:` (ExternalModule), локальный путь со скриптовым расширением →
+/// `file:`-узел (реальный файл, узел уточнится при его скане), прочее →
+/// `module:`.
+fn external_or_local_ref(src: &str, local_exts: &[&str]) -> String {
+    let s = src.trim();
+    if s.starts_with("http://") || s.starts_with("https://") || s.starts_with("//") {
+        return format!("module:{}", s);
+    }
+    let ext = Path::new(s)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+    if ext.is_some_and(|e| local_exts.contains(&e.as_str())) {
+        format!("file:{}", s.trim_start_matches("./"))
+    } else {
+        format!("module:{}", s)
+    }
+}
+
+/// Ф48.1/48.2: цель ребра STYLES/IMPORTS на стилевой файл. Расширение
+/// стиля (.css/.scss/.sass/.less) → `file:` (реальный файл), иначе → `css:`
+/// (Stylesheet-заглушка: «первое существующее» из `x`/`x.css`/`x.scss`
+/// требует fs, которого у парсера нет — 48.2).
+fn stylesheet_target(href: &str) -> String {
+    let s = href.trim();
+    if Path::new(s)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| matches!(e.to_lowercase().as_str(), "css" | "scss" | "sass" | "less"))
+        .unwrap_or(false)
+    {
+        format!("file:{}", s.trim_start_matches("./"))
+    } else {
+        format!("css:{}", s)
+    }
+}
+
+/// Ф48.1: `ROUTE`-ребро (INFERRED) из action/href/hx-*; только in-app пути
+/// (`/...`), внешний URL и якоря — шум.
+fn push_html_route(
+    out: &mut AstScanResult,
+    file_node_id: &str,
+    method: &str,
+    path: &str,
+    seen: &mut HashSet<String>,
+) {
+    let p = path.trim();
+    if !p.starts_with('/') || p.starts_with("//") {
+        return;
+    }
+    let node_target = format!("route:{} {}", method.to_uppercase(), p);
+    if !seen.insert(node_target.clone()) {
+        return;
+    }
+    out.edges.push(AstEdge {
+        source_node_id: file_node_id.to_string(),
+        target_node_id: node_target,
+        label: "ROUTE".to_string(),
+        weight: 1.0,
+        context: format!("{} {}", method.to_uppercase(), p),
+        provenance: "INFERRED".to_string(),
+    });
 }
 
 /// Ключевые слова, которые не считаются вызовами (Rust).
@@ -677,6 +854,33 @@ pub struct AstCodeExtractor {
 
     /// Vue/Svelte SFC: `<script>`-блок (тело переиспользует parse_ts_js).
     sfc_script_re: Regex,
+    /// Ф48.3: `<style>`-блок SFC (тело переиспользует parse_css).
+    sfc_style_re: Regex,
+    /// Ф48.3: `<template>`-блок SFC (упрощённый HTML-разбор).
+    sfc_template_re: Regex,
+
+    /// Ф48.1: HTML — теги с атрибутами (кавычки внутри attrs не рвут матч).
+    html_tag_re: Regex,
+    /// Ф48.1: HTML — отдельный атрибут `name="value"`.
+    html_attr_re: Regex,
+    /// Ф48.1: HTML — комментарии (вырезаются до разбора).
+    html_comment_re: Regex,
+    /// Ф48.1/48.3: `class="a b"` в HTML/SFC-шаблонах (не `:class` — перед
+    /// `class` требуется пробел).
+    html_class_re: Regex,
+    /// Ф48.3: PascalCase-компоненты в SFC-шаблоне (`<CardTitle`).
+    sfc_component_re: Regex,
+
+    /// Ф48.2: CSS — селекторные группы (`^|{` или `}` перед селектором;
+    /// вложенность/@media покрываются `{`).
+    css_selector_re: Regex,
+    /// Ф48.2: @import "x" / @import url(x).
+    css_import_re: Regex,
+    /// Ф48.2: `--custom-prop:` (объявление, не `var(--x)` — использования без `:`).
+    css_var_re: Regex,
+    /// Токены классов/идентификаторов внутри текста селектора.
+    css_sel_class_re: Regex,
+    css_sel_id_re: Regex,
 
     scala_import_re: Regex,
     scala_type_re: Regex,
@@ -792,6 +996,25 @@ impl AstCodeExtractor {
 
             // Vue/Svelte SFC (script-блоки прогоняются через parse_ts_js)
             sfc_script_re: Regex::new(r"(?is)<script[^>]*>(.*?)</script>").unwrap(),
+            // Ф48.3: style/template блоки SFC (template — лениво до первого
+            // `</template>`: вложенные <template #slot> обрезают хвост, осознанное
+            // упрощение — классы всё равно собираются отдельным проходом)
+            sfc_style_re: Regex::new(r"(?is)<style[^>]*>(.*?)</style>").unwrap(),
+            sfc_template_re: Regex::new(r"(?is)<template[^>]*>(.*?)</template>").unwrap(),
+            sfc_component_re: Regex::new(r"<([A-Z][A-Za-z0-9_]*)").unwrap(),
+
+            // Ф48.1: HTML (attrs: кавыченные значения не содержат `>` внутри)
+            html_tag_re: Regex::new(r#"(?is)<([a-zA-Z][a-zA-Z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>"#).unwrap(),
+            html_attr_re: Regex::new(r#"(?is)\s([a-zA-Z-]+)\s*=\s*("([^"]*)"|'([^']*)')"#).unwrap(),
+            html_comment_re: Regex::new(r"(?s)<!--.*?-->").unwrap(),
+            html_class_re: Regex::new(r#"(?is)\sclass\s*=\s*(?:"([^"]+)"|'([^']+)')"#).unwrap(),
+
+            // Ф48.2: CSS
+            css_selector_re: Regex::new(r"(?m)(?:^|[{}])\s*([^{}@;]+)\{").unwrap(),
+            css_import_re: Regex::new(r#"(?is)@import\s+(?:url\s*\(\s*["']?([^"')]+?)["']?\s*\)|["']([^"']+)["'])"#).unwrap(),
+            css_var_re: Regex::new(r"(?m)--([a-zA-Z0-9_-]+)\s*:").unwrap(),
+            css_sel_class_re: Regex::new(r"\.([a-zA-Z_][a-zA-Z0-9_-]*)").unwrap(),
+            css_sel_id_re: Regex::new(r"#([a-zA-Z_][a-zA-Z0-9_-]*)").unwrap(),
 
             // Scala patterns
             scala_import_re: Regex::new(r"(?m)^\s*import\s+([a-zA-Z0-9_.{}]+)").unwrap(),
@@ -2733,6 +2956,333 @@ impl AstCodeExtractor {
             let offset = content[..m.start()].matches('\n').count();
             self.parse_ts_js(rel_path, file_node_id, m.as_str(), offset, out);
         }
+
+        // Ф48.3: `<style>` → parse_css со смещением строк (номера — относительно
+        // всего SFC-файла, как у script-блоков с Ф10)
+        for cap in self.sfc_style_re.captures_iter(content) {
+            let Some(m) = cap.get(1) else { continue };
+            let offset = content[..m.start()].matches('\n').count();
+            self.parse_css(rel_path, file_node_id, m.as_str(), offset, out);
+        }
+
+        // Ф48.3: `<template>` — упрощённый HTML-разбор: class → BINDS_CLASS,
+        // PascalCase-компоненты → IMPORTS (DOM-дерево не строим, ADR-AST-1)
+        for cap in self.sfc_template_re.captures_iter(content) {
+            let Some(m) = cap.get(1) else { continue };
+            let body = m.as_str();
+            self.collect_class_bindings(file_node_id, body, out);
+            for ccap in self.sfc_component_re.captures_iter(body) {
+                if let Some(name) = ccap.get(1) {
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: format!("module:{}", name.as_str()),
+                        label: "IMPORTS".to_string(),
+                        weight: 1.0,
+                        context: format!("<{} />", name.as_str()),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Ф48.1: HTML (и blade-шаблоны) — теги с `id` → `Element`, `<script src>` →
+    /// `IMPORTS` (локальный путь → `file:`, иначе `module:`), `<link
+    /// rel=stylesheet>` → `STYLES` (расширение стиля → `file:`, иначе `css:`),
+    /// `class="a b"` → `BINDS_CLASS` (INFERRED), `action`/`href`/`hx-*` →
+    /// `ROUTE` (INFERRED) — связь шаблонов с эндпоинтами, как в Ф40.2.
+    fn parse_html(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let clean = self.html_comment_re.replace_all(content, "");
+        let mut seen_ids: HashSet<String> = HashSet::new();
+        let mut seen_routes: HashSet<String> = HashSet::new();
+        let mut seen_imports: HashSet<String> = HashSet::new();
+        let mut seen_styles: HashSet<String> = HashSet::new();
+
+        for cap in self.html_tag_re.captures_iter(&clean) {
+            let Some(tag_m) = cap.get(1) else { continue };
+            let attrs_str = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+            let tag = tag_m.as_str().to_lowercase();
+            let line = content[..cap.get(0).map(|m| m.start()).unwrap_or(0)]
+                .matches('\n')
+                .count()
+                + 1;
+            let attrs = self.parse_html_attrs(attrs_str);
+
+            // Тег с id → Element (el:{file}#{id}, дедуп по id)
+            if let Some(id) = attrs.get("id") {
+                if seen_ids.insert(id.clone()) {
+                    let node_id = format!("el:{}#{}", rel_path, id);
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: format!("{}#{}", tag, id),
+                        node_type: "Element".to_string(),
+                        description: format!(
+                            "Элемент `<{} id=\"{}\">` в {}:{}",
+                            tag, id, rel_path, line
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: line,
+                        line_end: line,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: format!("<{} id=\"{}\">", tag, id),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+
+            match tag.as_str() {
+                "script" => {
+                    if let Some(src) = attrs.get("src") {
+                        if seen_imports.insert(src.clone()) {
+                            let target =
+                                external_or_local_ref(src, &["js", "mjs", "cjs", "ts", "tsx", "jsx"]);
+                            out.edges.push(AstEdge {
+                                source_node_id: file_node_id.to_string(),
+                                target_node_id: target,
+                                label: "IMPORTS".to_string(),
+                                weight: 1.0,
+                                context: format!("<script src=\"{}\">", src),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+                "link" => {
+                    let is_stylesheet = attrs
+                        .get("rel")
+                        .map(|r| r.to_lowercase().contains("stylesheet"))
+                        .unwrap_or(false);
+                    if is_stylesheet {
+                        if let Some(href) = attrs.get("href") {
+                            if seen_styles.insert(href.clone()) {
+                                out.edges.push(AstEdge {
+                                    source_node_id: file_node_id.to_string(),
+                                    target_node_id: stylesheet_target(href),
+                                    label: "STYLES".to_string(),
+                                    weight: 1.0,
+                                    context: format!(
+                                        "<link rel=\"stylesheet\" href=\"{}\">",
+                                        href
+                                    ),
+                                    provenance: "EXTRACTED".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+                "a" => {
+                    if let Some(href) = attrs.get("href") {
+                        push_html_route(out, file_node_id, "GET", href, &mut seen_routes);
+                    }
+                }
+                "form" => {
+                    if let Some(action) = attrs.get("action") {
+                        let method = attrs
+                            .get("method")
+                            .map(|m| m.to_uppercase())
+                            .unwrap_or_else(|| "GET".to_string());
+                        push_html_route(out, file_node_id, &method, action, &mut seen_routes);
+                    }
+                }
+                _ => {}
+            }
+
+            // htmx: hx-post/hx-get/... — маршрут независимо от имени тега
+            for (attr, method) in [
+                ("hx-post", "POST"),
+                ("hx-get", "GET"),
+                ("hx-put", "PUT"),
+                ("hx-delete", "DELETE"),
+                ("hx-patch", "PATCH"),
+            ] {
+                if let Some(path) = attrs.get(attr) {
+                    push_html_route(out, file_node_id, method, path, &mut seen_routes);
+                }
+            }
+        }
+
+        // class="a b" — отдельный проход по всему файлу (включая шаблоны
+        // со смешанным содержимым); `:class="expr"` не матчится (перед class
+        // нет пробела-имени атрибута)
+        self.collect_class_bindings(file_node_id, &clean, out);
+    }
+
+    /// Атрибуты тега → карта имя (нижний регистр) → значение.
+    fn parse_html_attrs(&self, attrs: &str) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for cap in self.html_attr_re.captures_iter(attrs) {
+            let Some(name) = cap.get(1) else { continue };
+            let value = cap
+                .get(3)
+                .or_else(|| cap.get(4))
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
+            map.insert(name.as_str().to_lowercase(), value);
+        }
+        map
+    }
+
+    /// Ф48.1/48.3: `class="a b"` → `BINDS_CLASS` (INFERRED) к `cssclass:{name}`,
+    /// дедуп по имени класса в пределах файла.
+    fn collect_class_bindings(&self, file_node_id: &str, text: &str, out: &mut AstScanResult) {
+        let mut seen: HashSet<String> = HashSet::new();
+        for cap in self.html_class_re.captures_iter(text) {
+            let value = cap
+                .get(1)
+                .or_else(|| cap.get(2))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            for name in value.split_whitespace() {
+                if name.is_empty() || !seen.insert(name.to_string()) {
+                    continue;
+                }
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("cssclass:{}", name),
+                    label: "BINDS_CLASS".to_string(),
+                    weight: 1.0,
+                    context: format!("class=\"{}\"", value),
+                    provenance: "INFERRED".to_string(),
+                });
+            }
+        }
+    }
+
+    /// Ф48.2: CSS/SCSS — селекторы `.foo` → `CssClass`, `#bar` → `CssId` (по
+    /// одному узлу на имя на файл, дедуп), `@import` → `IMPORTS`,
+    /// `--custom-prop:` → `CssVar`; `@media/@supports` без узлов (шум),
+    /// вложенность/миксины SCSS не резолвим (бэклог). line_offset — для
+    /// `<style>`-блоков SFC (Ф48.3).
+    fn parse_css(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        line_offset: usize,
+        out: &mut AstScanResult,
+    ) {
+        // 1. @import (цель: расширение стиля → file:, иначе css:)
+        for cap in self.css_import_re.captures_iter(content) {
+            let target_raw = cap
+                .get(1)
+                .or_else(|| cap.get(2))
+                .map(|m| m.as_str().trim().to_string());
+            if let Some(target) = target_raw {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: stylesheet_target(&target),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: format!("@import \"{}\"", target),
+                    provenance: "EXTRACTED".to_string(),
+                });
+            }
+        }
+
+        // 2. Селекторы: .class / #id — один узел на имя на файл (48.5)
+        let mut seen_classes: HashMap<String, usize> = HashMap::new();
+        let mut seen_ids: HashMap<String, usize> = HashMap::new();
+        for cap in self.css_selector_re.captures_iter(content) {
+            let Some(sel) = cap.get(1) else { continue };
+            let line = content[..sel.start()].matches('\n').count() + 1 + line_offset;
+            for ccap in self.css_sel_class_re.captures_iter(sel.as_str()) {
+                if let Some(name) = ccap.get(1) {
+                    let name = name.as_str().to_string();
+                    seen_classes.entry(name).or_insert(line);
+                }
+            }
+            for icap in self.css_sel_id_re.captures_iter(sel.as_str()) {
+                if let Some(name) = icap.get(1) {
+                    let name = name.as_str().to_string();
+                    seen_ids.entry(name).or_insert(line);
+                }
+            }
+        }
+        for (name, line) in seen_classes {
+            let node_id = format!("cssclass:{}", name);
+            out.nodes.push(AstNode {
+                node_id: node_id.clone(),
+                label: name.clone(),
+                node_type: "CssClass".to_string(),
+                description: format!("CSS-класс `.{}` в {}:{}", name, rel_path, line),
+                file_path: rel_path.to_string(),
+                line_start: line,
+                line_end: line,
+            });
+            out.edges.push(AstEdge {
+                source_node_id: file_node_id.to_string(),
+                target_node_id: node_id,
+                label: "DEFINES".to_string(),
+                weight: 1.0,
+                context: format!(".{}", name),
+                provenance: "EXTRACTED".to_string(),
+            });
+        }
+        for (name, line) in seen_ids {
+            let node_id = format!("cssid:{}", name);
+            out.nodes.push(AstNode {
+                node_id: node_id.clone(),
+                label: name.clone(),
+                node_type: "CssId".to_string(),
+                description: format!("CSS-идентификатор `#{}` в {}:{}", name, rel_path, line),
+                file_path: rel_path.to_string(),
+                line_start: line,
+                line_end: line,
+            });
+            out.edges.push(AstEdge {
+                source_node_id: file_node_id.to_string(),
+                target_node_id: node_id,
+                label: "DEFINES".to_string(),
+                weight: 1.0,
+                context: format!("#{}", name),
+                provenance: "EXTRACTED".to_string(),
+            });
+        }
+
+        // 3. --custom-prop: value → CssVar (DEFINES); использования var(--x)
+        // без двоеточия не матчатся
+        let mut seen_vars: HashMap<String, usize> = HashMap::new();
+        for cap in self.css_var_re.captures_iter(content) {
+            if let Some(name) = cap.get(1) {
+                let line = content[..cap.get(0).map(|m| m.start()).unwrap_or(0)]
+                    .matches('\n')
+                    .count()
+                    + 1
+                    + line_offset;
+                seen_vars.entry(name.as_str().to_string()).or_insert(line);
+            }
+        }
+        for (name, line) in seen_vars {
+            let node_id = format!("cssvar:{}", name);
+            out.nodes.push(AstNode {
+                node_id: node_id.clone(),
+                label: name.clone(),
+                node_type: "CssVar".to_string(),
+                description: format!("CSS-переменная `--{}` в {}:{}", name, rel_path, line),
+                file_path: rel_path.to_string(),
+                line_start: line,
+                line_end: line,
+            });
+            out.edges.push(AstEdge {
+                source_node_id: file_node_id.to_string(),
+                target_node_id: node_id,
+                label: "DEFINES".to_string(),
+                weight: 1.0,
+                context: format!("--{}", name),
+                provenance: "EXTRACTED".to_string(),
+            });
+        }
     }
 
     fn parse_scala(
@@ -3117,6 +3667,8 @@ impl Parser {
             Parser::Lua => ex.parse_lua(rel_path, file_node_id, content, out),
             Parser::Elixir => ex.parse_elixir(rel_path, file_node_id, content, out),
             Parser::Shell => ex.parse_shell(rel_path, file_node_id, content, out),
+            Parser::Html => ex.parse_html(rel_path, file_node_id, content, out),
+            Parser::Css => ex.parse_css(rel_path, file_node_id, content, 0, out),
         }
     }
 }

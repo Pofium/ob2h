@@ -273,10 +273,144 @@ fn test_spec_ruby() {
 #[test]
 fn test_spec_sfc() {
     let res = parse("sfc", "src/components/Card.vue");
-    // Ф47: SFC разбирает только <script>; <template>/<style> — Ф48
+    // script → импорты; template → BINDS_CLASS и компоненты; style → CssClass
     assert_has_edge(&res, "IMPORTS");
-    let node_types: Vec<&str> = res.nodes.iter().map(|n| n.node_type.as_str()).collect();
-    assert!(node_types.contains(&"File"));
+    assert_has_edge(&res, "BINDS_CLASS");
+    assert_has_edge(&res, "DEFINES");
+    // класс .card определён и в <style>, и связан в <template> — узел один
+    let class_nodes: Vec<_> = res
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == "CssClass" && n.label == "card")
+        .collect();
+    assert_eq!(class_nodes.len(), 1, "класс .card должен быть одним узлом");
+}
+
+#[test]
+fn test_spec_html() {
+    let res = parse("html", "public/index.html");
+    // Element по id
+    assert_has_node(&res, "div#header");
+    assert_has_node(&res, "input#login");
+    let el = res.nodes.iter().find(|n| n.label == "div#header").unwrap();
+    assert_eq!(el.node_type, "Element");
+    assert_eq!(el.file_path, "public/index.html");
+    // стили/скрипты/классы/маршруты
+    assert_has_edge(&res, "STYLES");
+    assert_has_edge(&res, "IMPORTS");
+    assert_has_edge(&res, "BINDS_CLASS");
+    assert_has_edge(&res, "ROUTE");
+}
+
+#[test]
+fn test_spec_html_routes() {
+    let res = parse("html", "public/index.html");
+    let route_targets: Vec<&str> = res
+        .edges
+        .iter()
+        .filter(|e| e.label == "ROUTE")
+        .map(|e| e.target_node_id.as_str())
+        .collect();
+    assert!(
+        route_targets.contains(&"route:GET /users"),
+        "href → GET: {:?}",
+        route_targets
+    );
+    assert!(
+        route_targets.contains(&"route:POST /api/login"),
+        "form method=post"
+    );
+    assert!(route_targets.contains(&"route:POST /api/save"), "hx-post");
+    // внешний URL и якоря не дают маршрутов (в фикстуре их нет — проверяем
+    // отсутствие мусорных route:-целей без ведущего "/")
+    for t in &route_targets {
+        let Some(path) = t.split_once(' ').map(|(_, p)| p) else {
+            panic!("маршрут без метода: {t}");
+        };
+        assert!(path.starts_with('/'), "маршрут без in-app пути: {t}");
+    }
+}
+
+#[test]
+fn test_spec_blade() {
+    let res = parse("blade", "resources/views/home.blade.php");
+    // blade идёт HTML-парсером (Ф48.1), а не PHP-экстрактором
+    assert_has_node(&res, "div#page");
+    assert_has_edge(&res, "BINDS_CLASS");
+    assert_has_edge(&res, "ROUTE");
+    assert_eq!(
+        LangSpec::for_path("resources/views/home.blade.php")
+            .unwrap()
+            .name,
+        "blade"
+    );
+    // при этом обычный .php — по-прежнему PHP
+    assert_eq!(
+        LangSpec::for_path("app/Models/User.php").unwrap().name,
+        "php"
+    );
+}
+
+#[test]
+fn test_spec_css() {
+    let res = parse("css", "assets/app.css");
+    assert_has_node(&res, "card");
+    assert_has_node(&res, "sidebar");
+    assert_has_node(&res, "main-color");
+    let cls = res.nodes.iter().find(|n| n.label == "card").unwrap();
+    assert_eq!(cls.node_type, "CssClass");
+    let var = res.nodes.iter().find(|n| n.label == "main-color").unwrap();
+    assert_eq!(var.node_type, "CssVar");
+    assert_has_edge(&res, "IMPORTS");
+    assert_has_edge(&res, "DEFINES");
+    // 48.5: дедуп — .card встречается в фикстуре дважды (корень и @media) →
+    // один узел; номер строки — первого вхождения
+    let card_count = res
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == "CssClass" && n.label == "card")
+        .count();
+    assert_eq!(card_count, 1);
+}
+
+/// 48.5: 200 правил с `.card` → один узел `cssclass:card`.
+#[test]
+fn test_css_class_dedup_many_rules() {
+    let mut css = String::new();
+    for i in 0..200 {
+        css.push_str(&format!(".rule{} {{ color: red; }}\n", i));
+        css.push_str(".card { margin: 0; }\n");
+    }
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    ex.parse_file("assets/big.css", &css, &mut res);
+    let card_count = res
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == "CssClass" && n.label == "card")
+        .count();
+    assert_eq!(card_count, 1, "200 повторов .card должны дать один узел");
+    assert_eq!(
+        res.nodes
+            .iter()
+            .filter(|n| n.node_type == "CssClass")
+            .count(),
+        201
+    );
+}
+
+/// Цели рёбер Ф48: file:/css: узлы типизируются таблицей префиксов (ADR-AST-6).
+#[test]
+fn test_node_type_for_prefix_48() {
+    let (t, label) = ob2h::project::ast::node_type_for_prefix("file:assets/app.css").unwrap();
+    assert_eq!(t, "File");
+    assert_eq!(label, "assets/app.css");
+    let (t, label) = ob2h::project::ast::node_type_for_prefix("css:assets/tailwind").unwrap();
+    assert_eq!(t, "Stylesheet");
+    assert_eq!(label, "assets/tailwind");
+    let (t, label) = ob2h::project::ast::node_type_for_prefix("cssclass:card").unwrap();
+    assert_eq!(t, "CssClass");
+    assert_eq!(label, "card");
 }
 
 #[test]

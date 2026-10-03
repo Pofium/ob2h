@@ -98,3 +98,41 @@ async fn test_code_nodes_embedding_and_hybrid_search() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Ф48 (PLAN_v1.7): узлы-цели рёбер (cssclass:/cssvar:/route:/pkg:/file:…) не
+/// имеют собственного «живого» label — находятся по полному node_id.
+#[tokio::test]
+async fn test_search_by_node_id_prefix() -> anyhow::Result<()> {
+    let db = Database::in_memory()?;
+    let embedder = Arc::new(FakeEmbedding::new(384));
+
+    let project_service =
+        ProjectService::new_with_embedder(db.conn_arc(), Some(embedder.clone()));
+    let graph_service = GraphService::new(db.clone(), embedder.clone());
+
+    let proj = project_service.register_project("p48", "P48", "/app", None, None)?;
+    db.with_conn(|conn| {
+        conn.execute(
+            r#"
+            INSERT INTO graph_nodes (
+                node_id, label, node_type, file_path, line_start, line_end, description,
+                project_id, provenance, created_at, updated_at
+            ) VALUES
+            ('cssclass:landing-page', 'landing-page', 'CssClass', 'src/styles/landing.css', 12, 12,
+             'CSS-класс `.landing-page` в src/styles/landing.css:12', 'p48', 'ast', '2026-01-01', '2026-01-01'),
+            ('fn_other', 'totally_different', 'Function', 'src/x.ts', 1, 1,
+             'Совсем другой символ без пересечений', 'p48', 'ast', '2026-01-01', '2026-01-01')
+            "#,
+            [],
+        )?;
+        Ok(())
+    })?;
+
+    let results = graph_service
+        .search_project_nodes_hybrid(&proj.id, "cssclass:landing-page", "hybrid", "all", 5)
+        .await?;
+    assert!(!results.is_empty(), "поиск по node_id не должен быть пуст");
+    assert_eq!(results[0].node_id, "cssclass:landing-page");
+
+    Ok(())
+}

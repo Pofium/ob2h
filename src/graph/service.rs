@@ -640,7 +640,7 @@ impl GraphService {
             let candidates = self.db.with_conn(|conn| {
                 let mut stmt = conn.prepare(
                     r#"
-                    SELECT id, label, description, file_path
+                    SELECT id, node_id, label, description, file_path
                     FROM graph_nodes
                     WHERE project_id = ?1
                       AND (?2 = 'all' OR provenance = ?2)
@@ -651,8 +651,9 @@ impl GraphService {
                     Ok((
                         r.get::<_, i64>(0)?,
                         r.get::<_, String>(1)?,
-                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, String>(2)?,
                         r.get::<_, Option<String>>(3)?,
+                        r.get::<_, Option<String>>(4)?,
                     ))
                 })?;
                 let mut list = Vec::new();
@@ -664,16 +665,21 @@ impl GraphService {
 
             let mut scored_text: Vec<(i64, f64)> = Vec::new();
             let query_lower = query.to_lowercase();
-            for (id, label, desc_opt, fpath_opt) in candidates {
+            for (id, node_id, label, desc_opt, fpath_opt) in candidates {
                 let lbl = label.to_lowercase();
+                // Ф48: node_id участвует в скоринге — узлы без «живого» label
+                // (cssclass:/cssvar:/route:/pkg:/file:…) находятся по полному id
+                let nid = node_id.to_lowercase();
                 let desc = desc_opt.unwrap_or_default().to_lowercase();
                 let fpath = fpath_opt.unwrap_or_default().to_lowercase();
 
                 let mut score = 0.0;
-                if lbl == query_lower {
+                if lbl == query_lower || nid == query_lower {
                     score += 50.0;
                 } else if lbl.contains(&query_lower) {
                     score += 25.0;
+                } else if nid.contains(&query_lower) {
+                    score += 20.0;
                 } else if desc.contains(&query_lower) || fpath.contains(&query_lower) {
                     score += 15.0;
                 }
@@ -687,6 +693,9 @@ impl GraphService {
                     }
                     if fpath.contains(w) {
                         score += 2.0;
+                    }
+                    if nid.contains(w) {
+                        score += 5.0;
                     }
                 }
 
