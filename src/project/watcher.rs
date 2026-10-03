@@ -8,68 +8,19 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
-use crate::project::ProjectService;
+use crate::project::{ast, ast::LangSpec, ProjectService};
 
-/// Проверяет, является ли путь исходным кодом поддерживаемого языка
+/// Ф47.2 (ADR-AST-2): «исходник» определяется единым реестром LANGS
+/// (src/project/ast.rs) — раньше тут был свой whitelist расширений,
+/// расходившийся с обходчиком. SKIP_DIRS — тот же реестр.
 pub fn is_code_file(path: &Path) -> bool {
     for comp in path.components() {
         let name = comp.as_os_str().to_string_lossy();
-        if matches!(
-            name.as_ref(),
-            ".git"
-                | "target"
-                | "node_modules"
-                | "dist"
-                | "build"
-                | "venv"
-                | ".venv"
-                | "data"
-                | "logs"
-                | "backups"
-                | "__pycache__"
-        ) {
+        if ast::SKIP_DIRS.contains(&name.as_ref()) {
             return false;
         }
     }
-
-    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-        let ext_lower = ext.to_lowercase();
-        matches!(
-            ext_lower.as_str(),
-            "rs" | "py"
-                | "ts"
-                | "tsx"
-                | "js"
-                | "jsx"
-                | "go"
-                | "sql"
-                | "c"
-                | "cpp"
-                | "cc"
-                | "cxx"
-                | "h"
-                | "hpp"
-                | "hxx"
-                | "php"
-                | "dart"
-                | "java"
-                | "cs"
-                | "kt"
-                | "kts"
-                | "swift"
-                | "rb"
-                | "vue"
-                | "svelte"
-                | "scala"
-                | "lua"
-                | "ex"
-                | "exs"
-                | "sh"
-                | "bash"
-        )
-    } else {
-        false
-    }
+    LangSpec::for_path(&path.to_string_lossy()).is_some()
 }
 
 type WatchTarget = (String, PathBuf, tokio::sync::oneshot::Sender<()>);

@@ -1,6 +1,10 @@
 //! Высокопроизводительный статический AST/код-парсер репозиториев (Rust, Python, TS/JS, Go, SQL,
 //! PHP, Dart, Java, C#, C/C++, Kotlin, Swift, Ruby).
 //! Работает полностью детерминированно и локально, без вызовов LLM и без расхода токенов.
+//!
+//! Ф47 (PLAN_v1.7): список языков/форматов — единый реестр [`LANGS`] (ADR-AST-2):
+//! `collect_files`, `watcher::is_code_file` и [`AstCodeExtractor::parse_file`] читают его,
+//! дублирующих whitelist'ов нет. Новый формат = запись в `LANGS` + `parse_*` + фикстура в тесте.
 
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -13,7 +17,14 @@ use std::path::{Path, PathBuf};
 pub struct AstNode {
     pub node_id: String,
     pub label: String,
-    pub node_type: String, // 'Module' | 'Struct' | 'Class' | 'Interface' | 'Function' | 'Table' | 'File'
+    /// Словарь node_type (Ф47.3, полный перечень v1.7 — см. docs/ARCHITECTURE.md):
+    /// код — `Module|Struct|Class|Interface|Trait|Function|Table|File`;
+    /// авто-создаваемые цели рёбер — `Route|Table|ExternalModule` (+ по префиксам
+    /// [`NODE_TYPE_BY_PREFIX`]: `Service|Endpoint|Contract|Schema|ExternalPackage|
+    /// CssClass|CssId|CssVar|Element|Resource|K8sResource|BaseImage`);
+    /// из манифестов/спец-форматов (Ф51–Ф52) — `Script|Mapping|Notebook|DataSource|
+    /// Variable|Output|EnvVar|Port|Volume|Network`.
+    pub node_type: String,
     pub description: String,
     pub file_path: String,
     pub line_start: usize,
@@ -25,7 +36,13 @@ pub struct AstNode {
 pub struct AstEdge {
     pub source_node_id: String,
     pub target_node_id: String,
-    pub label: String, // 'IMPORTS' | 'CALLS' | 'IMPLEMENTS' | 'DEFINES' | 'DEPENDS_ON' | 'FOREIGN_KEY_TO'
+    /// Словарь label (Ф47.3, полный перечень v1.7 — см. docs/ARCHITECTURE.md):
+    /// кодовые — `IMPORTS|CALLS|DEFINES|IMPLEMENTS|INHERITS|DEPENDS_ON|FOREIGN_KEY_TO`;
+    /// framework-эвристики Ф40.2 — `ROUTE|QUERIES_TABLE`;
+    /// новые v1.7 (Ф48–Ф50, ADR-AST-5) — `STYLES|BINDS_CLASS|PROVIDES_RPC|
+    /// SERVES_ENDPOINT|QUERIES_FIELD|USES_SCHEMA|MOUNTS|BINDS_SELECTOR`.
+    /// Новые метки в `USAGE_EDGE_LABELS` (callpath.rs) не попадают — см. ADR-AST-5.
+    pub label: String,
     pub weight: f64,
     pub context: String,
     /// Ф39.2 (M8): происхождение ребра — EXTRACTED (обычный скан), RESOLVED
@@ -64,6 +81,506 @@ pub struct AstScanResult {
     pub call_sites: Vec<CallSite>,
     /// Ф39.1: импорты с алиасами (Rust/Python) для type-pass.
     pub imports: Vec<ImportRef>,
+}
+
+// ============================================================================
+// Ф47.1 (PLAN_v1.7, ADR-AST-2): единый реестр языков и форматов.
+// `collect_files` (обходчик), `watcher::is_code_file` (вотчер) и
+// `parse_file` (диспетчер) читают одну таблицу LANGS — раньше было три
+// расходящихся списка, и расширение, добавленное в обходчик, но забытое
+// в вотчере, молча выпадало из инкрементального обновления.
+// ============================================================================
+
+/// Единый список исключаемых каталогов (Ф47.2). Один источник для обходчика и
+/// вотчера; раньше списки расходились (вотчер не знал `vendor`, обходчик —
+/// `logs`/`backups`).
+pub const SKIP_DIRS: &[&str] = &[
+    ".git", "target", "node_modules", "dist", "build", "venv", ".venv", "vendor", "data", "logs",
+    "backups", "__pycache__",
+];
+
+/// Отсутствие ограничения на размер файла. Для существующих исходников cap не
+/// вводим (поведение v1.6 сохраняется 1:1); cap 2 МБ / 5 МБ появится у форматов
+/// Ф48–Ф52 (ADR-AST-4).
+pub const NO_CAP: usize = usize::MAX;
+
+/// Способ сопоставления файла с языком. Расширение — для исходников; точное
+/// имя файла — для манифестов/контрактов (`Cargo.toml`, `openapi.yaml`,
+/// `Dockerfile`, ADR-AST-4); предикат — спец-случаи (`*.Dockerfile`).
+#[derive(Clone, Copy)]
+pub enum Matcher {
+    Ext(&'static [&'static str]),
+    FileName(&'static [&'static str]),
+    Predicate(fn(&str) -> bool),
+}
+
+/// Тег парсера для диспетчера parse_file (не fn-указатель: parse_* берут &self).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Parser {
+    Rust,
+    Python,
+    TsJs,
+    Go,
+    Sql,
+    Php,
+    Dart,
+    Java,
+    CSharp,
+    CCpp,
+    Kotlin,
+    Swift,
+    Ruby,
+    Sfc,
+    Scala,
+    Lua,
+    Elixir,
+    Shell,
+}
+
+/// Спецификация языка/формата в реестре [`LANGS`].
+pub struct LangSpec {
+    /// Человекочитаемое имя (логи, доки, тесты).
+    pub name: &'static str,
+    matcher: Matcher,
+    /// Типы узлов, которые создаёт парсер (словарь node_type v1.7).
+    pub node_types: &'static [&'static str],
+    /// Метки рёбер, которые может создавать парсер (словарь edge_label v1.7).
+    pub edge_labels: &'static [&'static str],
+    /// Верхняя граница размера файла (байт); больше — файл трекается по хэшу,
+    /// но не парсится (ADR-AST-4).
+    pub max_bytes: usize,
+    pub parser: Parser,
+    /// Минимальная фикстура для теста консистентности реестра (47.5,
+    /// tests/test_ast_langs.rs). Заполняется при добавлении формата.
+    pub fixture: &'static str,
+}
+
+/// Реестр языков и форматов — **единственный** whitelist сканера (Ф47.1).
+pub const LANGS: &[LangSpec] = &[
+    LangSpec {
+        name: "rust",
+        matcher: Matcher::Ext(&["rs"]),
+        node_types: &["File", "Struct", "Trait", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "ROUTE"],
+        max_bytes: NO_CAP,
+        parser: Parser::Rust,
+        fixture: r#"use crate::db::Store;
+
+pub struct Row {
+    pub id: u64,
+}
+
+pub trait Repo {
+    fn get(&self, id: u64) -> Option<Row>;
+}
+
+#[get("/health")]
+pub async fn health() -> &'static str {
+    "ok"
+}
+"#,
+    },
+    LangSpec {
+        name: "python",
+        matcher: Matcher::Ext(&["py"]),
+        node_types: &["File", "Class", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS", "QUERIES_TABLE", "ROUTE"],
+        max_bytes: NO_CAP,
+        parser: Parser::Python,
+        fixture: r#"import os
+from typing import List
+
+class User(Base):
+    __tablename__ = "users"
+
+    def save(self) -> None:
+        pass
+
+@app.get("/users")
+def list_users():
+    return []
+"#,
+    },
+    LangSpec {
+        name: "ts-js",
+        matcher: Matcher::Ext(&["ts", "tsx", "js", "jsx"]),
+        node_types: &["File", "Class", "Interface", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES"],
+        max_bytes: NO_CAP,
+        parser: Parser::TsJs,
+        fixture: r"import { Store } from './store';
+
+export class UserService extends Base implements Repo {
+}
+
+export interface Repo {
+}
+
+export function load(id) {
+    return null;
+}
+",
+    },
+    LangSpec {
+        name: "go",
+        matcher: Matcher::Ext(&["go"]),
+        node_types: &["File", "Struct", "Function"],
+        edge_labels: &["DEFINES"],
+        max_bytes: NO_CAP,
+        parser: Parser::Go,
+        fixture: r"package store
+
+type Row struct {
+    ID uint64
+}
+
+func Get(id uint64) *Row {
+    return nil
+}
+",
+    },
+    LangSpec {
+        name: "sql",
+        matcher: Matcher::Ext(&["sql"]),
+        node_types: &["File", "Table"],
+        edge_labels: &["DEFINES", "FOREIGN_KEY_TO"],
+        max_bytes: NO_CAP,
+        parser: Parser::Sql,
+        fixture: r"CREATE TABLE users (
+    id INTEGER PRIMARY KEY
+);
+
+CREATE TABLE orders (
+    user_id INTEGER REFERENCES users(id)
+);
+",
+    },
+    LangSpec {
+        name: "php",
+        matcher: Matcher::Ext(&["php"]),
+        node_types: &["File", "Class", "Interface", "Trait", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS", "IMPLEMENTS"],
+        max_bytes: NO_CAP,
+        parser: Parser::Php,
+        fixture: r"<?php
+namespace App\Models;
+
+use App\Support\Repo;
+
+class UserRepository extends Base implements Repo {
+}
+
+interface Repo {
+}
+
+trait Timestamps {
+}
+
+function helper() {
+}
+",
+    },
+    LangSpec {
+        name: "dart",
+        matcher: Matcher::Ext(&["dart"]),
+        node_types: &["File", "Class", "Trait", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS", "IMPLEMENTS"],
+        max_bytes: NO_CAP,
+        parser: Parser::Dart,
+        fixture: r"import 'dart:async';
+
+class UserService extends Base with Mix implements Repo {
+}
+
+mixin Mix {
+}
+
+Future<void> load() async {
+}
+",
+    },
+    LangSpec {
+        name: "java",
+        matcher: Matcher::Ext(&["java"]),
+        node_types: &["File", "Class", "Interface", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS", "IMPLEMENTS"],
+        max_bytes: NO_CAP,
+        parser: Parser::Java,
+        fixture: r"package com.example;
+
+import java.util.List;
+
+public class UserService extends Base implements Repo {
+}
+
+public interface Repo {
+    public void load();
+}
+",
+    },
+    LangSpec {
+        name: "csharp",
+        matcher: Matcher::Ext(&["cs"]),
+        node_types: &["File", "Class", "Interface", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS"],
+        max_bytes: NO_CAP,
+        parser: Parser::CSharp,
+        fixture: r"using System;
+
+namespace App {
+    public class UserService : Base {
+    }
+
+    public interface Repo {
+    }
+
+    public void Load() {
+    }
+}
+",
+    },
+    LangSpec {
+        name: "c-cpp",
+        matcher: Matcher::Ext(&["c", "cpp", "cc", "cxx", "h", "hpp", "hxx"]),
+        node_types: &["File", "Class", "Struct", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS"],
+        max_bytes: NO_CAP,
+        parser: Parser::CCpp,
+        fixture: r"#include <stdio.h>
+
+struct Row {
+    int id;
+};
+
+int get(int id) {
+    return id;
+}
+",
+    },
+    LangSpec {
+        name: "kotlin",
+        matcher: Matcher::Ext(&["kt", "kts"]),
+        node_types: &["File", "Class", "Interface", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS"],
+        max_bytes: NO_CAP,
+        parser: Parser::Kotlin,
+        fixture: r"import com.example.Repo
+
+class UserService : Base() {
+}
+
+interface Repo {
+}
+
+fun load(): String {
+    return x
+}
+",
+    },
+    LangSpec {
+        name: "swift",
+        matcher: Matcher::Ext(&["swift"]),
+        node_types: &["File", "Class", "Interface", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS"],
+        max_bytes: NO_CAP,
+        parser: Parser::Swift,
+        fixture: r"import Foundation
+
+class UserService: Base {
+}
+
+protocol Repo {
+}
+
+func load() -> String {
+    return x
+}
+",
+    },
+    LangSpec {
+        name: "ruby",
+        matcher: Matcher::Ext(&["rb"]),
+        node_types: &["File", "Class", "Module", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS"],
+        max_bytes: NO_CAP,
+        parser: Parser::Ruby,
+        fixture: r"require 'json'
+
+module Store
+  class Row < Base
+    def get(id)
+      nil
+    end
+  end
+end
+",
+    },
+    LangSpec {
+        name: "sfc",
+        matcher: Matcher::Ext(&["vue", "svelte"]),
+        node_types: &["File", "Class", "Interface", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES"],
+        max_bytes: NO_CAP,
+        parser: Parser::Sfc,
+        fixture: r"<template>
+  <div class=card>{{ title }}</div>
+</template>
+
+<script>
+import Card from './Card.vue';
+
+export default {
+    data() {
+        return { title: x };
+    },
+};
+</script>
+
+<style>
+.card { color: red; }
+</style>
+",
+    },
+    LangSpec {
+        name: "scala",
+        matcher: Matcher::Ext(&["scala"]),
+        node_types: &["File", "Class", "Trait", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES", "INHERITS", "IMPLEMENTS"],
+        max_bytes: NO_CAP,
+        parser: Parser::Scala,
+        fixture: r"import scala.collection.mutable
+
+class UserService extends Base with Repo {
+}
+
+trait Repo {
+}
+
+def load(): Unit = {
+}
+",
+    },
+    LangSpec {
+        name: "lua",
+        matcher: Matcher::Ext(&["lua"]),
+        node_types: &["File", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES"],
+        max_bytes: NO_CAP,
+        parser: Parser::Lua,
+        fixture: r"local store = require('store')
+
+local function get(id)
+  return nil
+end
+
+function M.put(id, row)
+  return true
+end
+",
+    },
+    LangSpec {
+        name: "elixir",
+        matcher: Matcher::Ext(&["ex", "exs"]),
+        node_types: &["File", "Module", "Interface", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES"],
+        max_bytes: NO_CAP,
+        parser: Parser::Elixir,
+        fixture: r"defmodule Store do
+  alias Store.Row
+
+  def get(id) do
+    nil
+  end
+end
+
+defprotocol Repo do
+end
+",
+    },
+    LangSpec {
+        name: "shell",
+        matcher: Matcher::Ext(&["sh", "bash"]),
+        node_types: &["File", "Function"],
+        edge_labels: &["IMPORTS", "DEFINES"],
+        max_bytes: NO_CAP,
+        parser: Parser::Shell,
+        fixture: r#"#!/usr/bin/env bash
+source ./lib.sh
+
+get() {
+  echo "$1"
+}
+
+function put {
+  echo "$2"
+}
+"#,
+    },
+];
+
+impl LangSpec {
+    /// Единая точка «какой язык/формат у пути» (Ф47.1). Вход — путь проекта
+    /// (относительный или абсолютный, разделители любые). Расширение — в нижнем
+    /// регистре, имя файла — без учёта регистра (`Dockerfile`/`dockerfile`).
+    pub fn for_path(rel_path: &str) -> Option<&'static LangSpec> {
+        let norm = rel_path.replace('\\', "/");
+        let file_name = norm.rsplit('/').next().unwrap_or(&norm);
+        // Как у Path::extension: ведущая точка ("Dockerfile", ".gitignore") — не расширение
+        let ext = match file_name.rsplit_once('.') {
+            Some((stem, e)) if !stem.is_empty() => Some(e.to_lowercase()),
+            _ => None,
+        };
+        LANGS.iter().find(|spec| match spec.matcher {
+            Matcher::Ext(exts) => ext.as_deref().is_some_and(|e| exts.contains(&e)),
+            Matcher::FileName(names) => names.iter().any(|n| file_name.eq_ignore_ascii_case(n)),
+            Matcher::Predicate(f) => f(&norm),
+        })
+    }
+
+    /// Путь-образец для теста фикстуры (по matcher); None — если по matcher
+    /// нельзя однозначно построить пример (Predicate).
+    pub fn sample_rel_path(&self) -> Option<String> {
+        match self.matcher {
+            Matcher::Ext(exts) => Some(format!("sample.{}", exts[0])),
+            Matcher::FileName(names) => Some(names[0].to_string()),
+            Matcher::Predicate(_) => None,
+        }
+    }
+}
+
+/// Путь содержит исключаемый каталог на любом уровне (`target/x.rs` → true).
+/// Обходчик `ignore` не обрезает поддерево по имени каталога — проверяется
+/// относительный путь целиком (раньше это делал второй list-чек в collect_files).
+fn rel_has_skip_dir(rel: &str) -> bool {
+    rel.split('/').any(|c| SKIP_DIRS.contains(&c))
+}
+
+/// Ф47.3 (ADR-AST-6): тип узла для авто-создания цели ребра в scan_project по
+/// префиксу node_id. Единая таблица вместо if/else; расширяется фазами Ф48–Ф52
+/// (сейчас реально встречаются только `route:` и `table:`).
+pub const NODE_TYPE_BY_PREFIX: &[(&str, &str)] = &[
+    ("route:", "Route"),
+    ("table:", "Table"),
+    ("service:", "Service"),
+    ("svc:", "Service"),
+    ("endpoint:", "Endpoint"),
+    ("contract:", "Contract"),
+    ("schema:", "Schema"),
+    ("pkg:", "ExternalPackage"),
+    ("cssclass:", "CssClass"),
+    ("cssid:", "CssId"),
+    ("cssvar:", "CssVar"),
+    ("resource:", "Resource"),
+    ("k8s:", "K8sResource"),
+    ("image:", "BaseImage"),
+    ("el:", "Element"),
+];
+
+/// Тип и метка авто-создаваемого узла-цели по node_id (None → ExternalModule).
+pub fn node_type_for_prefix(node_id: &str) -> Option<(&'static str, String)> {
+    NODE_TYPE_BY_PREFIX
+        .iter()
+        .find_map(|(p, t)| node_id.strip_prefix(p).map(|rest| (*t, rest.to_string())))
 }
 
 /// Ключевые слова, которые не считаются вызовами (Rust).
@@ -330,6 +847,18 @@ impl AstCodeExtractor {
                     }
                 }
 
+                // Ф47.1 (ADR-AST-4): cap размера — файл трекается (хэш/мета),
+                // но не парсится (защита от гигантских openapi.json/манифестов)
+                if let Some(spec) = LangSpec::for_path(&rel_path) {
+                    if bytes.len() > spec.max_bytes {
+                        tracing::warn!(
+                            "AST: файл {} ({} байт) превышает cap {} байт для '{}' — пропущен без парсинга",
+                            rel_path, bytes.len(), spec.max_bytes, spec.name
+                        );
+                        continue;
+                    }
+                }
+
                 if let Ok(content) = String::from_utf8(bytes) {
                     let lines_count = content.lines().count();
                     result.files_scanned += 1;
@@ -358,72 +887,19 @@ impl AstCodeExtractor {
 
         for entry in builder.build().flatten() {
             let path = entry.path();
-            let name = entry.file_name().to_string_lossy();
-
-            // Пропускаем служебные и тяжёлые каталоги сборки/зависимостей
-            if name == "target"
-                || name == "node_modules"
-                || name == "dist"
-                || name == "build"
-                || name == "venv"
-                || name == ".venv"
-                || name == "__pycache__"
-                || name == "vendor"
-                || name == "data"
-            {
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                 continue;
             }
-
-            if entry.file_type().is_some_and(|ft| ft.is_file()) {
-                if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-                    let ext_lower = ext.to_lowercase();
-                    if matches!(
-                        ext_lower.as_str(),
-                        "rs" | "py"
-                            | "ts"
-                            | "tsx"
-                            | "js"
-                            | "jsx"
-                            | "go"
-                            | "sql"
-                            | "c"
-                            | "cpp"
-                            | "cc"
-                            | "cxx"
-                            | "h"
-                            | "hpp"
-                            | "hxx"
-                            | "php"
-                            | "dart"
-                            | "java"
-                            | "cs"
-                            | "kt"
-                            | "kts"
-                            | "swift"
-                            | "rb"
-                            | "vue"
-                            | "svelte"
-                            | "scala"
-                            | "lua"
-                            | "ex"
-                            | "exs"
-                            | "sh"
-                            | "bash"
-                    ) {
-                        if let Ok(rel) = path.strip_prefix(root) {
-                            let rel_str = rel.to_string_lossy().replace('\\', "/");
-                            // Дополнительная проверка, чтобы не попасть в поддиректории исключений
-                            if !rel_str.contains("/target/")
-                                && !rel_str.contains("/node_modules/")
-                                && !rel_str.contains("/venv/")
-                                && !rel_str.contains("/.venv/")
-                                && !rel_str.contains("/vendor/")
-                                && !rel_str.contains("/data/")
-                            {
-                                out.push((rel_str, path.to_path_buf()));
-                            }
-                        }
-                    }
+            if let Ok(rel) = path.strip_prefix(root) {
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                // Ф47.2: единый SKIP_DIRS на любом уровне вложенности
+                // (сам обходчик не обрезает поддерево по имени каталога)
+                if rel_has_skip_dir(&rel_str) {
+                    continue;
+                }
+                // Ф47.1: реестр LANGS — единственный whitelist форматов
+                if LangSpec::for_path(&rel_str).is_some() {
+                    out.push((rel_str, path.to_path_buf()));
                 }
             }
         }
@@ -444,36 +920,10 @@ impl AstCodeExtractor {
             line_end: content.lines().count().max(1),
         });
 
-        let ext = Path::new(rel_path)
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-
-        match ext.as_str() {
-            "rs" => self.parse_rust(rel_path, &file_node_id, content, out),
-            "py" => self.parse_python(rel_path, &file_node_id, content, out),
-            "ts" | "tsx" | "js" | "jsx" => {
-                self.parse_ts_js(rel_path, &file_node_id, content, 0, out)
-            }
-            "go" => self.parse_go(rel_path, &file_node_id, content, out),
-            "sql" => self.parse_sql(rel_path, &file_node_id, content, out),
-            "php" => self.parse_php(rel_path, &file_node_id, content, out),
-            "dart" => self.parse_dart(rel_path, &file_node_id, content, out),
-            "java" => self.parse_java(rel_path, &file_node_id, content, out),
-            "cs" => self.parse_csharp(rel_path, &file_node_id, content, out),
-            "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "hxx" => {
-                self.parse_c_cpp(rel_path, &file_node_id, content, out)
-            }
-            "kt" | "kts" => self.parse_kotlin(rel_path, &file_node_id, content, out),
-            "swift" => self.parse_swift(rel_path, &file_node_id, content, out),
-            "rb" => self.parse_ruby(rel_path, &file_node_id, content, out),
-            "vue" | "svelte" => self.parse_sfc(rel_path, &file_node_id, content, out),
-            "scala" => self.parse_scala(rel_path, &file_node_id, content, out),
-            "lua" => self.parse_lua(rel_path, &file_node_id, content, out),
-            "ex" | "exs" => self.parse_elixir(rel_path, &file_node_id, content, out),
-            "sh" | "bash" => self.parse_shell(rel_path, &file_node_id, content, out),
-            _ => {}
+        // Ф47.1: диспетчер через реестр (бывший match ext.as_str())
+        if let Some(spec) = LangSpec::for_path(rel_path) {
+            spec.parser
+                .execute(self, rel_path, &file_node_id, content, out);
         }
     }
 
@@ -2638,6 +3088,39 @@ impl AstCodeExtractor {
         }
     }
 }
+impl Parser {
+    /// Диспетчер: выбрать парсер по тегу реестра (Ф47.1).
+    fn execute(
+        &self,
+        ex: &AstCodeExtractor,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        match self {
+            Parser::Rust => ex.parse_rust(rel_path, file_node_id, content, out),
+            Parser::Python => ex.parse_python(rel_path, file_node_id, content, out),
+            Parser::TsJs => ex.parse_ts_js(rel_path, file_node_id, content, 0, out),
+            Parser::Go => ex.parse_go(rel_path, file_node_id, content, out),
+            Parser::Sql => ex.parse_sql(rel_path, file_node_id, content, out),
+            Parser::Php => ex.parse_php(rel_path, file_node_id, content, out),
+            Parser::Dart => ex.parse_dart(rel_path, file_node_id, content, out),
+            Parser::Java => ex.parse_java(rel_path, file_node_id, content, out),
+            Parser::CSharp => ex.parse_csharp(rel_path, file_node_id, content, out),
+            Parser::CCpp => ex.parse_c_cpp(rel_path, file_node_id, content, out),
+            Parser::Kotlin => ex.parse_kotlin(rel_path, file_node_id, content, out),
+            Parser::Swift => ex.parse_swift(rel_path, file_node_id, content, out),
+            Parser::Ruby => ex.parse_ruby(rel_path, file_node_id, content, out),
+            Parser::Sfc => ex.parse_sfc(rel_path, file_node_id, content, out),
+            Parser::Scala => ex.parse_scala(rel_path, file_node_id, content, out),
+            Parser::Lua => ex.parse_lua(rel_path, file_node_id, content, out),
+            Parser::Elixir => ex.parse_elixir(rel_path, file_node_id, content, out),
+            Parser::Shell => ex.parse_shell(rel_path, file_node_id, content, out),
+        }
+    }
+}
+
 /// Убирает содержимое круглых скобок (`Base(x, y), IBar` → `Base, IBar`) —
 /// чтобы запятые в аргументах конструктора не ломали разбор списка баз.
 fn strip_paren_groups(s: &str) -> String {
@@ -2646,11 +3129,7 @@ fn strip_paren_groups(s: &str) -> String {
     for ch in s.chars() {
         match ch {
             '(' => depth += 1,
-            ')' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
-            }
+            ')' => depth = depth.saturating_sub(1),
             _ if depth == 0 => out.push(ch),
             _ => {}
         }
@@ -2808,14 +3287,8 @@ fn collect_call_sites(
 /// Нерезолвленное остаётся без ребра (AMBIGUOUS — не выдумываем).
 /// Возвращает число добавленных CALLS-рёбер (provenance = RESOLVED).
 pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
-    const SYMBOL_TYPES: &[&str] = &[
-        "Function",
-        "Method",
-        "Struct",
-        "Class",
-        "Trait",
-        "Interface",
-    ];
+    // Ф47.4: единый словарь символов с dead-code/callpath (crate::graph::callpath)
+    use crate::graph::callpath::SYMBOL_TYPES;
 
     // 1. Таблица символов: label → индексы узлов
     let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();

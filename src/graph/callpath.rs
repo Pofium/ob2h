@@ -10,10 +10,23 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 
 /// Метки рёбер, означающие реальное использование символа.
+///
+/// **Ф47.4 (ADR-AST-5): список меняется только осознанно.** Он управляет
+/// callers/callees, dead-code и blast-radius (см. `graph/blast.rs`). Служебные
+/// `DEFINES` (файл → символ) не входят — иначе «мёртвым» не был бы никто.
+/// Рёбра новых форматов v1.7 (`ROUTE`, `QUERIES_TABLE`, `STYLES`, `BINDS_CLASS`,
+/// `SERVES_ENDPOINT`, `QUERIES_FIELD`, `USES_SCHEMA`, `MOUNTS`, `BINDS_SELECTOR`)
+/// сюда сознательно **не** добавляются: это связи контрактов/данных, а не
+/// вызовы — попадание в usage сдвинуло бы dead-code и blast-radius.
 pub const USAGE_EDGE_LABELS: &[&str] = &["CALLS", "IMPORTS", "IMPLEMENTS", "DEPENDS_ON"];
 
 /// Типы узлов, которые вообще могут быть «символами» для dead-code.
-const SYMBOL_TYPES: &[&str] = &[
+///
+/// **Ф47.4 (ADR-AST-5): расширяется только осознанно.** Инфраструктурные типы
+/// v1.7 (`Route`, `Endpoint`, `Service`, `K8sResource`, `CssClass`,
+/// `ExternalPackage`…) не включены: их использование — не вызовы. Общий
+/// словарь символов с type-pass'ом (`project::ast::resolve_calls`).
+pub(crate) const SYMBOL_TYPES: &[&str] = &[
     "Function",
     "Struct",
     "Class",

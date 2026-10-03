@@ -95,34 +95,40 @@ read-path, который обязан остаться честным:
 Инфраструктурная фаза. Никаких новых форматов — только устранение трипликации и подготовка словарей, чтобы
 Ф48–Ф52 были «добавь LangSpec + parse_* + тест».
 
-- [ ] **47.1** `LangSpec` + таблица `LANGS` в `src/project/ast.rs`:
+- [x] **47.1** `LangSpec` + таблица `LANGS` в `src/project/ast.rs`:
       `pub struct LangSpec { name: &'static str, matcher: Matcher, node_types: &'static [&'static str],
       edge_labels: &'static [&'static str], max_bytes: usize, parser: Parser }`,
       где `Matcher = Ext(&'static [&'static str]) | FileName(&'static [&'static str]) | Predicate(fn(&str)->bool)`,
       `Parser` — тег для диспетчера (не fn-указатель: `parse_*` берут `&self`). Равноценная замена существующего
       `match ext.as_str()` в `parse_file` (ast.rs:453) на `LANGS.iter().find(...)`; поведение 18 расширений — 1:1.
-- [ ] **47.2** Замена дублирующих списков: `collect_files` (ast.rs:378–427) и `watcher::is_code_file`
+      *Факт: добавлено поле `fixture` (фикстура реестра для теста 47.5) — см. PLAN.md §6.*
+- [x] **47.2** Замена дублирующих списков: `collect_files` (ast.rs:378–427) и `watcher::is_code_file`
       (watcher.rs:14–73) → `LangSpec::for_path(rel_path).is_some()`; список исключённых каталогов (`target`,
       `node_modules`, `dist`, `build`, `venv`, `.venv`, `vendor`, `data`, `logs`, `backups`, `__pycache__`) — тоже
       один `const SKIP_DIRS` (сейчас два расходящихся списка: ast.rs:364 и watcher.rs:17).
-- [ ] **47.3** Словарь типов: обновить doc-контракт `AstNode.node_type` (ast.rs:16) и `AstEdge.label` (ast.rs:28)
+      *Факт: список расширен `".git"` (нужен вотчеру — notify видит скрытые каталоги).*
+- [x] **47.3** Словарь типов: обновить doc-контракт `AstNode.node_type` (ast.rs:16) и `AstEdge.label` (ast.rs:28)
       до полного перечисления v1.7 (текущее — «`Module|Struct|Class|Interface|Function|Table|File`» и
       «`IMPORTS|CALLS|IMPLEMENTS|DEFINES|DEPENDS_ON|FOREIGN_KEY_TO`» — устарело уже сейчас: нет `INHERITS`,
       `ROUTE`, `QUERIES_TABLE`). Завести таблицу `NODE_TYPE_BY_PREFIX` (см. ADR-AST-6) и использовать её
       в `scan_project` (mod.rs:568) вместо `if/else`.
-- [ ] **47.4** Явные решения по трём спискам (`USAGE_EDGE_LABELS` callpath.rs:13, `SYMBOL_TYPES` callpath.rs:16,
+- [x] **47.4** Явные решения по трём спискам (`USAGE_EDGE_LABELS` callpath.rs:13, `SYMBOL_TYPES` callpath.rs:16,
       `DEFAULT_PPR_WEIGHTS` pagerank.rs:30): задокументировать в комментариях, что входит и почему; для
       существующих кодовых рёбер (`IMPORTS`/`CALLS`/`DEFINES`/`IMPLEMENTS`/`INHERITS`) задать веса PPR
       явно (сейчас они падают в `PPR_UNKNOWN_WEIGHT = 0.5`) — **значения — только после замера Ф53.3**, до этого
       за флагом, чтобы не сдвинуть pending-поиск вслепую.
-- [ ] **47.5** Скелет тестов: новый `tests/test_ast_langs.rs` — по одной минимальной фикстуре на формат
+      *Факт: локальная копия `SYMBOL_TYPES` в `resolve_calls` заменена ссылкой на `callpath::SYMBOL_TYPES`.*
+- [x] **47.5** Скелет тестов: новый `tests/test_ast_langs.rs` — по одной минимальной фикстуре на формат
       (конкатенация строк в коде, как в `test_ast_extractor.rs`) + хелпер `assert_has_node(res, label)`,
       `assert_has_edge(res, label)`; отдельный тест-инвариант **консистентности реестра**:
       для каждого `LangSpec` `parse_file` на минимальном содержимом не паникует, даёт ≥1 узел типа `File`
-      и только метки из `edge_labels[i]`.
-- [ ] **47.6** Защита от регрессии: прогон существующих 16 тестов `test_ast_extractor.rs` +
+      и только метки из `edge_labels[i]`. *(Факт: 23 теста — инвариант + for_path/SKIP_DIRS/вотчер +
+      по одному семантическому на каждый из 18 языков + NODE_TYPE_BY_PREFIX.)*
+- [x] **47.6** Защита от регрессии: прогон существующих 16 тестов `test_ast_extractor.rs` +
       `test_incremental_scan.rs` + `test_watcher.rs`; сверка «до/после» по узлам и рёбрам на фиксированном
       репозитории (`ob2h` self-scan: число узлов/рёбер до и после рефактора — должно совпасть 1:1).
+      *Факт: сампль HEAD (`git archive`) сканился старым и новым бинарями в чистые БД — дампы идентичны
+      байт-в-байт (1193 узла / 1881 ребро), методика и числа — `docs/PLAN_v1.7_bench.md`.*
 
 **DoD:** `grep -rn` не находит дублирующих whitelist'ов расширений; `cargo test` + `cargo clippy --all-targets`
 зелёные; self-scan `ob2h` до/после рефактора даёт идентичные nodes/edges; тест консистентности реестра зелёный.

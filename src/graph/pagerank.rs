@@ -27,6 +27,13 @@ pub const DEFAULT_TOL: f64 = 1e-6;
 
 /// Дефолтные веса рёбер по типу (Ф33.1). Формат конфига `OB2H_PPR_WEIGHTS` —
 /// JSON-объект `{"kind": weight}`; зафиксировано тестом `default_weights_are_fixed`.
+///
+/// **Ф47.4 (ADR-AST-5):** рёбра AST-графа кода (`CALLS`, `IMPORTS`, `DEFINES`,
+/// `INHERITS`, `IMPLEMENTS`, `DEPENDS_ON` и метки v1.7: `STYLES`, `BINDS_CLASS`,
+/// `SERVES_ENDPOINT`…) здесь **не** перечислены и получают
+/// [`PPR_UNKNOWN_WEIGHT`] (0.5). Явные веса задаются только по замерам Ф53.3
+/// (гейт ADR-13: без регрессии recall); до этого — opt-in через `OB2H_PPR_WEIGHTS`,
+/// дефолт не двигаем, чтобы не сдвинуть pending-поиск вслепую.
 pub const DEFAULT_PPR_WEIGHTS: &str =
     r#"{"manual":1.0,"contradicts":0.8,"causes":0.8,"category":0.5,"same_project":0.3}"#;
 

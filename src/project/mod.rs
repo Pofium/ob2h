@@ -565,20 +565,11 @@ impl ProjectService {
                 *pk
             } else {
                 // Если узел-цель еще не существует (например, внешний модуль), создаем его;
-                // Ф40.2: тип узла по префиксу — route: → Route, table: → Table
-                let (auto_type, auto_label) = if edge.target_node_id.starts_with("route:") {
-                    (
-                        "Route",
-                        edge.target_node_id.trim_start_matches("route:").to_string(),
-                    )
-                } else if edge.target_node_id.starts_with("table:") {
-                    (
-                        "Table",
-                        edge.target_node_id.trim_start_matches("table:").to_string(),
-                    )
-                } else {
-                    ("ExternalModule", edge.target_node_id.clone())
-                };
+                // Ф47.3 (ADR-AST-6): тип узла по префиксу node_id — единая таблица
+                // реестра (ast::NODE_TYPE_BY_PREFIX), бывший if/else route:/table:
+                let (auto_type, auto_label) =
+                    crate::project::ast::node_type_for_prefix(&edge.target_node_id)
+                        .unwrap_or(("ExternalModule", edge.target_node_id.clone()));
                 tx.execute(
                     r#"
                     INSERT INTO graph_nodes (
