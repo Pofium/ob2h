@@ -450,6 +450,14 @@ impl ProjectService {
 
         // Ф39.1: type-pass — резолв простых вызовов (Rust/Python) по импортам
         // и same-file; CALLS-рёбра получают provenance=RESOLVED
+        // Ф41: резолв IMPORTS-рёбер во внутренние файлы (относительные Python,
+        // Vite-алиасы `@/…`, импорты с `as`/через запятую) — иначе внешние
+        // модули и «файлы-сироты» искажают fan-in/циклы.
+        let resolved_imports = crate::project::ast::resolve_imports(&mut scan_res);
+        if resolved_imports > 0 {
+            info!("Резолв импортов: {resolved_imports} внутренних IMPORTS-рёбер");
+        }
+
         let resolved_calls = crate::project::ast::resolve_calls(&mut scan_res);
         if resolved_calls > 0 {
             info!("Type-pass: резолвлено {resolved_calls} вызовов (CALLS, provenance=RESOLVED)");

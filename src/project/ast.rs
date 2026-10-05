@@ -2730,8 +2730,8 @@ fn module_to_paths(module: &str, from_file: &str) -> Vec<String> {
         }
         return out;
     }
-    if m.starts_with('.') || m.contains('.') {
-        // Python
+    if m.starts_with('.') {
+        // Python относительный импорт
         let dots = m.chars().take_while(|&c| c == '.').count();
         let rest = &m[dots..];
         let mut base = parent(from_file);
@@ -2750,8 +2750,190 @@ fn module_to_paths(module: &str, from_file: &str) -> Vec<String> {
             out.push(format!("{prefix}{rel}.py"));
             out.push(format!("{prefix}{rel}/__init__.py"));
         }
+    } else if !m.contains('/') && !m.contains(' ') {
+        // Абсолютный Python-модуль (`app.services.x`) или top-level пакет
+        // (`kag`, `knext`, `omnesbot`), доступный через sys.path на services/.
+        let rel = m.replace('.', "/");
+        for pre in [
+            "backend/app/services/",
+            "backend/app/",
+            "backend/",
+            "app/",
+            "",
+        ] {
+            out.push(format!("{pre}{rel}.py"));
+            out.push(format!("{pre}{rel}/__init__.py"));
+        }
     }
     out
+}
+
+/// Ф41: резолв IMPORTS-рёбер во внутренние файлы проекта.
+///
+/// Экстрактор эмитит `module:<сырое имя>`: относительные импорты Python
+/// (`from .auth import …`), Vite-алиасы `@/…`, голые модули с `as`-алиасами
+/// и импорты через запятую. Здесь имя нормализуется (первый компонент,
+/// отрезан алиас) и, если ему соответствует файл проекта, цель ребра
+/// переписывается на `file:<rel_path>`; иначе остаётся внешним модулем.
+/// Возвращает число резолвнутых рёбер.
+pub fn resolve_imports(scan: &mut AstScanResult) -> usize {
+    let files: HashSet<String> = scan
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == "File")
+        .map(|n| n.file_path.clone())
+        .collect();
+
+    let edges = std::mem::take(&mut scan.edges);
+    let mut resolved = 0usize;
+    let mut out_edges = Vec::with_capacity(edges.len() + 16);
+
+    for edge in edges {
+        if edge.label != "IMPORTS" || !edge.target_node_id.starts_with("module:") {
+            out_edges.push(edge);
+            continue;
+        }
+        let raw = edge.target_node_id.trim_start_matches("module:").to_string();
+        let from_file = edge.source_node_id.trim_start_matches("file:").to_string();
+        // Только Python допускает `import a, b` и `import x as y` в одном стейтменте.
+        let parts: Vec<String> = if from_file.ends_with(".py") {
+            raw.split(',')
+                .map(|p| p.split(" as ").next().unwrap_or("").trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect()
+        } else {
+            vec![raw.clone()]
+        };
+
+        for part in parts {
+            let mut e = edge.clone();
+            e.context = format!("import {}", part);
+            match resolve_module_file(&part, &from_file, &files) {
+                Some(f) => {
+                    e.target_node_id = format!("file:{}", f);
+                    resolved += 1;
+                }
+                None => {
+                    e.target_node_id = format!("module:{}", part);
+                }
+            }
+            out_edges.push(e);
+        }
+    }
+
+    scan.edges = out_edges;
+    resolved
+}
+
+/// Найти файл проекта, соответствующий импортируемому модулю.
+fn resolve_module_file(
+    module: &str,
+    from_file: &str,
+    files: &HashSet<String>,
+) -> Option<String> {
+    const TS_EXT: &[&str] = &["ts", "tsx", "js", "jsx"];
+    const PY_EXT: &[&str] = &["py"];
+
+    fn dir_of(p: &str) -> String {
+        p.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default()
+    }
+
+    fn join(base: &str, rel: &str) -> String {
+        let joined = format!("{base}/{rel}");
+        let mut parts: Vec<&str> = Vec::new();
+        for seg in joined.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                s => parts.push(s),
+            }
+        }
+        parts.join("/")
+    }
+
+    let m = module.trim();
+    if m.is_empty() {
+        return None;
+    }
+
+    // Vite/tsconfig-алиас `@/…` → frontend/src/renderer (или frontend/src).
+    if let Some(rest) = m.strip_prefix("@/") {
+        for pre in ["frontend/src/renderer/", "frontend/src/"] {
+            if let Some(f) = first_existing(&format!("{pre}{rest}"), TS_EXT, files) {
+                return Some(f);
+            }
+        }
+        return None;
+    }
+
+    // TS/JS относительные `./x`, `../x`.
+    if m.starts_with("./") || m.starts_with("../") {
+        let p = join(&dir_of(from_file), m);
+        return first_existing(&p, TS_EXT, files);
+    }
+
+    // Python относительные `.x`, `..x.y`.
+    if m.starts_with('.') {
+        let dots = m.chars().take_while(|&c| c == '.').count();
+        let rest = &m[dots..];
+        let mut base = dir_of(from_file);
+        for _ in 1..dots {
+            base = dir_of(&base);
+        }
+        if rest.is_empty() {
+            let init = format!("{base}/__init__.py");
+            return files.contains(&init).then_some(init);
+        }
+        let rel = rest.replace('.', "/");
+        return first_existing(&format!("{base}/{rel}"), PY_EXT, files);
+    }
+
+    // Абсолютные: Python `app.services.x`, top-level `kag`/`knext`/`omnesbot`
+    // (sys.path на services/), плюс голые TS-модули без слэша.
+    if !m.contains('/') {
+        let rel = m.replace('.', "/");
+        for pre in [
+            "backend/app/services/",
+            "backend/app/",
+            "backend/",
+            "app/",
+        ] {
+            if let Some(f) = first_existing(&format!("{pre}{rel}"), PY_EXT, files) {
+                return Some(f);
+            }
+        }
+        for pre in ["frontend/src/renderer/", "frontend/src/"] {
+            if let Some(f) = first_existing(&format!("{pre}{rel}"), TS_EXT, files) {
+                return Some(f);
+            }
+        }
+        // Python: модуль-сосед (`import helpers`).
+        let sib = format!("{}/{}", dir_of(from_file), rel);
+        if let Some(f) = first_existing(&sib, PY_EXT, files) {
+            return Some(f);
+        }
+    }
+
+    None
+}
+
+/// `.ext`-вариант или index/__init__ внутри каталога.
+fn first_existing(base: &str, exts: &[&str], files: &HashSet<String>) -> Option<String> {
+    for ext in exts {
+        let p = format!("{base}.{ext}");
+        if files.contains(&p) {
+            return Some(p);
+        }
+    }
+    for idx in ["index.ts", "index.tsx", "index.js", "__init__.py"] {
+        let p = format!("{base}/{idx}");
+        if files.contains(&p) {
+            return Some(p);
+        }
+    }
+    None
 }
 
 /// Ф39.1: собрать места вызовов `name(` — без `.`-методов (receiver-типы

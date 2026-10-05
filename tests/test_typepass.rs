@@ -183,3 +183,60 @@ fn rename_rescan_does_not_break_resolve() {
     })
     .unwrap();
 }
+
+/// Ф41: IMPORTS-рёбра резолвятся во внутренние файлы — относительные Python,
+/// Vite-алиасы `@/…`, `as`/запятые нормализуются, внешнее остаётся модулем.
+#[test]
+fn imports_resolved_to_internal_files() {
+    let mut scan = parse_all(&[
+        (
+            "backend/app/api/v1/router.py",
+            "from .auth import router as auth_router\nimport os, sys\nimport numpy as np\n",
+        ),
+        ("backend/app/api/v1/auth.py", "def get_current_user():\n    return None\n"),
+        (
+            "frontend/src/renderer/pages/Chat.tsx",
+            "import { cn } from '@/lib/utils';\nimport { x } from './local';\nimport React from 'react';\n",
+        ),
+        ("frontend/src/renderer/lib/utils.ts", "export const cn = () => '';\n"),
+        ("frontend/src/renderer/pages/local.ts", "export const x = 1;\n"),
+    ]);
+    let n = ob2h::project::ast::resolve_imports(&mut scan);
+    assert!(n >= 3, "как минимум 3 внутренних импорта резолвнуто, получено {n}");
+
+    let targets = |src: &str| -> Vec<String> {
+        scan.edges
+            .iter()
+            .filter(|e| e.label == "IMPORTS" && e.source_node_id == src)
+            .map(|e| e.target_node_id.clone())
+            .collect()
+    };
+
+    let router = targets("file:backend/app/api/v1/router.py");
+    assert!(
+        router.contains(&"file:backend/app/api/v1/auth.py".to_string()),
+        "относительный Python: {router:?}"
+    );
+    assert!(
+        router.contains(&"module:os".to_string()) && router.contains(&"module:sys".to_string()),
+        "`import os, sys` разворачивается и нормализуется: {router:?}"
+    );
+    assert!(
+        router.contains(&"module:numpy".to_string()),
+        "`import numpy as np` теряет алиас: {router:?}"
+    );
+
+    let chat = targets("file:frontend/src/renderer/pages/Chat.tsx");
+    assert!(
+        chat.contains(&"file:frontend/src/renderer/lib/utils.ts".to_string()),
+        "Vite-алиас `@/…`: {chat:?}"
+    );
+    assert!(
+        chat.contains(&"file:frontend/src/renderer/pages/local.ts".to_string()),
+        "относительный `./local`: {chat:?}"
+    );
+    assert!(
+        chat.contains(&"module:react".to_string()),
+        "внешний пакет остаётся модулем: {chat:?}"
+    );
+}
