@@ -207,3 +207,46 @@ fn memory_save_links_code_symbols() {
     })
     .unwrap();
 }
+
+/// Ф42 (issue 3.5): dead-code не шумит на Pydantic-моделях, framework-декораторах
+/// и alembic-миграциях; реально неиспользуемый код остаётся в отчёте.
+#[test]
+fn dead_code_excludes_pydantic_decorated_and_migrations() {
+    let db = Database::in_memory().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("app/api")).unwrap();
+    std::fs::create_dir_all(dir.path().join("alembic/versions")).unwrap();
+    std::fs::write(
+        dir.path().join("app/api/chat.py"),
+        "from pydantic import BaseModel\n\nclass ChatRequest(BaseModel):\n    text: str\n\n\ndef helper_unused():\n    return 1\n\n\n@shared_task\ndef background_job():\n    return 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("alembic/versions/001.py"),
+        "def upgrade():\n    pass\n\n\ndef downgrade():\n    pass\n",
+    )
+    .unwrap();
+
+    let svc = ob2h::project::ProjectService::new(db.conn_arc());
+    svc.register_project(PROJ, PROJ, dir.path().to_str().unwrap(), None, None)
+        .unwrap();
+    svc.scan_project(PROJ, None, false).unwrap();
+
+    db.with_conn(|conn| {
+        let dead = callpath::dead_code(conn, PROJ).unwrap();
+        let labels: Vec<&str> = dead.iter().map(|d| d.symbol.label.as_str()).collect();
+        assert!(
+            labels.contains(&"helper_unused"),
+            "обычная неиспользуемая функция — мёртвая: {labels:?}"
+        );
+        assert!(!labels.contains(&"ChatRequest"), "Pydantic-модель: {labels:?}");
+        assert!(
+            !labels.contains(&"background_job"),
+            "framework-декоратор: {labels:?}"
+        );
+        assert!(!labels.contains(&"upgrade"), "alembic upgrade: {labels:?}");
+        assert!(!labels.contains(&"downgrade"), "alembic downgrade: {labels:?}");
+        Ok::<(), rusqlite::Error>(())
+    })
+    .unwrap();
+}

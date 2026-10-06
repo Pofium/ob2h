@@ -308,6 +308,30 @@ pub fn entrypoint_reason(sym: &SymbolRef, description: Option<&str>) -> Option<S
     if label == "main" || label == "Main" || label.ends_with("::main") {
         return Some("entrypoint: main".to_string());
     }
+    // Ф42 (issue 3.5): миграции/тестовое окружение по пути
+    if file_l.contains("alembic/")
+        || file_l.contains("migrations/")
+        || file_l.contains("/migration")
+        || file_l.contains("conftest")
+    {
+        return Some("entrypoint: миграции/окружение (путь)".to_string());
+    }
+    // Ф42: хуки жизненного цикла и dunder-методы
+    if matches!(
+        label,
+        "upgrade"
+            | "downgrade"
+            | "setup"
+            | "teardown"
+            | "setup_module"
+            | "teardown_module"
+            | "setup_class"
+            | "teardown_class"
+            | "__init__"
+            | "__main__"
+    ) {
+        return Some("entrypoint: lifecycle/dunder (имя)".to_string());
+    }
     // тестовый код: каталог/файл по маскам или имя функции по префиксу
     if file_l.contains("tests/") || file_l.contains("/test") || file_l.contains("_test.") {
         return Some("test code (путь)".to_string());
@@ -327,6 +351,31 @@ pub fn entrypoint_reason(sym: &SymbolRef, description: Option<&str>) -> Option<S
         || desc.contains("export ")
     {
         return Some("public API".to_string());
+    }
+    // Ф42 (issue 3.5): Pydantic/dataclass инстанцирует фреймворк (сериализация),
+    // а не вызов → это не мёртвый код.
+    if desc.contains("pydantic") || desc.contains("dataclass") {
+        return Some("entrypoint: модель (Pydantic/dataclass)".to_string());
+    }
+    // Ф42: framework-декораторы регистрируют символ в рантайме. Служебные
+    // (`@property`, `@staticmethod`, …) — не entrypoints.
+    if desc.contains("декоратор") {
+        const NON_ENTRY: &[&str] = &[
+            "@property",
+            "@staticmethod",
+            "@classmethod",
+            "@abstractmethod",
+            "@lru_cache",
+            "@cache",
+            "@overload",
+            "@contextmanager",
+            "@setter",
+            "@getter",
+            "@cached_property",
+        ];
+        if !NON_ENTRY.iter().any(|d| desc.contains(d)) {
+            return Some("entrypoint: framework-декоратор".to_string());
+        }
     }
     None
 }
@@ -350,7 +399,7 @@ pub fn dead_code(conn: &Connection, project_id: &str) -> rusqlite::Result<Vec<De
            AND (n.deleted_at IS NULL OR n.deleted_at = '')
            AND NOT EXISTS (
                SELECT 1 FROM graph_edges fe
-               WHERE fe.target_id = n.id
+               WHERE fe.source_id = n.id
                  AND fe.label IN ('ROUTE', 'HANDLES')
                  AND fe.deleted_at IS NULL
            )

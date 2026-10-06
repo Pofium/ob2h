@@ -67,14 +67,21 @@
 
 ### 3.3 ✅ Импорты с `as`-алиасами и через запятую — исправлено в Ф41.
 
-### 3.4 У TS/TSX-функций `line_end == line_start` (span = 0) — ОТКРЫТО
-Для всех frontend-функций диапазон = строка объявления. `project_impact`/dead-code по фронтенду неточны.
-**Фикс:** считать закрывающую скобку/отступ тела для JS/TS.
+### 3.4 ✅ ИСПРАВЛЕНО (Ф42, 2026-10-06): диапазон строк TS/TSX-функций/классов
+Добавлена `ts_body_end()` (`src/project/ast.rs`): `line_end` считается по балансу
+фигурных скобок вне строк/комментариев; expression-body стрелки (`=> v + 1`)
+заканчиваются на `;`. `line_end` теперь учитывает `line_offset` (Vue/Svelte SFC).
+Проверено `tests/test_ast_extractor.rs::test_ts_function_and_class_body_spans`.
 
-### 3.5 Dead-code: 5606 из 6220 функций — шум (ОТКРЫТО)
-In-degree 0 по `CALLS/IMPORTS/IMPLEMENTS/DEPENDS_ON` не учитывает:
-FastAPI-роуты (декоратор), Pydantic-модели, alembic `upgrade/downgrade`, тесты, `__main__`, плагины/точки входа.
-**Фикс:** whitelist entrypoints + учёт декораторов (`@router.get/post/…`, `@app.…`, `@pytest.…`, `pytest.fixture`) и «модель/Pydantic».
+### 3.5 ✅ ИСПРАВЛЕНО (Ф42, 2026-10-06): шум dead-code
+- Исправлено направление исключения ROUTE/HANDLES в `dead_code` (`fe.source_id`,
+  а не `target_id` — FastAPI-роуты раньше попадали в отчёт).
+- `entrypoint_reason` расширен: пути (`alembic/`, `migrations/`, `conftest`),
+  имена lifecycle/dunder (`upgrade`/`downgrade`/`setup`/`teardown`/`__init__`),
+  Pydantic/dataclass-модели (по базе/декоратору в описании) и framework-декораторы
+  (служебные `@property`/`@staticmethod`/… — не entrypoints).
+Проверено `tests/test_callpath.rs::entrypoint_reason_covers_issue_35` и
+`tests/test_track_c5.rs::dead_code_excludes_pydantic_decorated_and_migrations`.
 
 ---
 

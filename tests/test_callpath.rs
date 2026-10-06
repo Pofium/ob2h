@@ -157,3 +157,46 @@ fn formatting_is_total() {
     assert!(callpath::format_links("Callers `x` (f:1)", &[]).contains("ничего не найдено"));
     assert!(callpath::format_dead_code(&[], 10).contains("не найдено"));
 }
+
+/// Ф42 (issue 3.5): миграции, lifecycle-хуки, Pydantic, framework-декораторы —
+/// entrypoints; служебные декораторы и обычные функции — нет.
+#[test]
+fn entrypoint_reason_covers_issue_35() {
+    let sym = |label: &str, file: &str| callpath::SymbolRef {
+        id: 0,
+        node_id: format!("fn:{file}:{label}"),
+        label: label.to_string(),
+        node_type: "Function".to_string(),
+        file_path: Some(file.to_string()),
+        line_start: Some(1),
+    };
+
+    let cases: [(&str, &str, Option<&str>, bool); 6] = [
+        ("upgrade", "backend/alembic/versions/001.py", None, true),
+        ("do_run_migrations", "backend/alembic/env.py", None, true),
+        (
+            "ChatRequest",
+            "app/api/chat.py",
+            Some("Класс `ChatRequest` в app/api/chat.py (Pydantic-модель)"),
+            true,
+        ),
+        (
+            "background_job",
+            "app/tasks.py",
+            Some("Функция/метод `x` в app/tasks.py. Декораторы: @shared_task"),
+            true,
+        ),
+        (
+            "prop",
+            "app/util.py",
+            Some("Функция/метод `x` в app/util.py. Декораторы: @property"),
+            false,
+        ),
+        ("helper_unused", "app/util.py", None, false),
+    ];
+
+    for (label, file, desc, expected) in cases {
+        let got = callpath::entrypoint_reason(&sym(label, file), desc).is_some();
+        assert_eq!(got, expected, "{label} в {file}: desc={desc:?}");
+    }
+}

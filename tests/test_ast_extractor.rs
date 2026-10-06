@@ -630,3 +630,44 @@ usage() {
     assert!(edge_labels.contains(&"IMPORTS".to_string()));
     assert!(edge_labels.contains(&"DEFINES".to_string()));
 }
+
+#[test]
+fn test_ts_function_and_class_body_spans() {
+    let extractor = AstCodeExtractor::new();
+    let code = r#"import { ref } from 'vue';
+
+export function loadUser(id: string) {
+    const payload = {
+        id,
+        ok: true,
+    };
+    return payload;
+}
+
+export const pick = (v: number) => v + 1;
+
+export class Store {
+    items: string[] = [];
+}
+
+export const noop = () => console.log('}{ not a brace');
+"#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("src/User.ts", code, &mut res);
+
+    let span = |label: &str| {
+        let n = res
+            .nodes
+            .iter()
+            .find(|n| n.label == label)
+            .unwrap_or_else(|| panic!("нет узла {label}"));
+        (n.line_start, n.line_end)
+    };
+
+    // Ф42 (issue 3.4): у функций/классов есть диапазон тела, а не одна строка
+    assert_eq!(span("loadUser"), (3, 9), "функция с вложенным объектом");
+    assert_eq!(span("pick"), (11, 11), "expression-body стрелка — одна строка");
+    assert_eq!(span("Store"), (13, 15), "класс до закрывающей скобки");
+    assert_eq!(span("noop"), (17, 17), "скобки внутри строки не считаются");
+}

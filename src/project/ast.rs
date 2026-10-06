@@ -708,11 +708,22 @@ impl AstCodeExtractor {
                 if let Some(name_match) = cap.get(1) {
                     let class_name = name_match.as_str();
                     let node_id = format!("class:{}:{}", rel_path, class_name);
+                    let bases = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+                    let decos = preceding_decorators(&lines, i);
+                    // Ф42 (issue 3.5): Pydantic/dataclass инстанцирует фреймворк,
+                    // а не вызов → это entrypoint, а не мёртвый код.
+                    let kind = if bases.contains("BaseModel") || bases.contains("BaseSettings") {
+                        " (Pydantic-модель)"
+                    } else if decos.iter().any(|d| d.contains("dataclass")) {
+                        " (dataclass)"
+                    } else {
+                        ""
+                    };
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: class_name.to_string(),
                         node_type: "Class".to_string(),
-                        description: format!("Класс `{}` в {}", class_name, rel_path),
+                        description: format!("Класс `{}` в {}{}", class_name, rel_path, kind),
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
                         line_end: i + 1,
@@ -787,11 +798,22 @@ impl AstCodeExtractor {
                 if let Some(fn_match) = cap.get(1) {
                     let fn_name = fn_match.as_str();
                     let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    let decos = preceding_decorators(&lines, i);
+                    let description = if decos.is_empty() {
+                        format!("Функция/метод `{}` в {}", fn_name, rel_path)
+                    } else {
+                        format!(
+                            "Функция/метод `{}` в {}. Декораторы: {}",
+                            fn_name,
+                            rel_path,
+                            decos.join(" ")
+                        )
+                    };
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: fn_name.to_string(),
                         node_type: "Function".to_string(),
-                        description: format!("Функция/метод `{}` в {}", fn_name, rel_path),
+                        description,
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
                         line_end: i + 1,
@@ -854,6 +876,7 @@ impl AstCodeExtractor {
                 if let Some(name_match) = cap.get(1) {
                     let class_name = name_match.as_str();
                     let node_id = format!("class:{}:{}", rel_path, class_name);
+                    let line_end = ts_body_end(&lines, i) + 1 + line_offset;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: class_name.to_string(),
@@ -861,7 +884,7 @@ impl AstCodeExtractor {
                         description: format!("TypeScript/JS класс `{}` в {}", class_name, rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1 + line_offset,
-                        line_end: i + 1,
+                        line_end,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -876,6 +899,7 @@ impl AstCodeExtractor {
                 if let Some(name_match) = cap.get(1) {
                     let iface_name = name_match.as_str();
                     let node_id = format!("interface:{}:{}", rel_path, iface_name);
+                    let line_end = ts_body_end(&lines, i) + 1 + line_offset;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: iface_name.to_string(),
@@ -883,7 +907,7 @@ impl AstCodeExtractor {
                         description: format!("Интерфейс/тип `{}` в {}", iface_name, rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1 + line_offset,
-                        line_end: i + 1,
+                        line_end,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -907,6 +931,7 @@ impl AstCodeExtractor {
                     .unwrap_or("");
                 if !fn_name.is_empty() {
                     let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    let line_end = ts_body_end(&lines, i) + 1 + line_offset;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: fn_name.to_string(),
@@ -914,7 +939,7 @@ impl AstCodeExtractor {
                         description: format!("Функция `{}` в {}", fn_name, rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1 + line_offset,
-                        line_end: i + 1,
+                        line_end,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -2638,6 +2663,128 @@ impl AstCodeExtractor {
         }
     }
 }
+/// Ф42 (issue 3.4): конец тела TS/JS-блока по балансу фигурных скобок.
+/// Возвращает 0-based индекс строки закрывающей `}` (или `;` для expression-body
+/// стрелок). `start` — 0-based строка объявления.
+///
+/// ponytail: не полноценный парсер — template-литералы `${}` и inline-типы
+/// возврата (`: { ok: boolean }`) могут дать пару строк погрешности; для графа и
+/// impact этого достаточно, точность — только через tree-sitter.
+fn ts_body_end(lines: &[&str], start: usize) -> usize {
+    let joined = lines.get(start..).map(|s| s.join("\n")).unwrap_or_default();
+    let ch: Vec<char> = joined.chars().collect();
+    let mut line = start;
+    let mut paren = 0i32;
+    let mut depth = 0i32;
+    let mut opened = false;
+    let mut i = 0usize;
+    let mut in_str: Option<char> = None;
+    let mut esc = false;
+    let mut line_comment = false;
+    let mut block_comment = false;
+    while i < ch.len() {
+        let c = ch[i];
+        if c == '\n' {
+            line += 1;
+            line_comment = false;
+            i += 1;
+            continue;
+        }
+        if line_comment {
+            i += 1;
+            continue;
+        }
+        if block_comment {
+            if c == '*' && i + 1 < ch.len() && ch[i + 1] == '/' {
+                block_comment = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if let Some(q) = in_str {
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == q {
+                in_str = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '/' if i + 1 < ch.len() && ch[i + 1] == '/' => {
+                line_comment = true;
+                i += 2;
+            }
+            '/' if i + 1 < ch.len() && ch[i + 1] == '*' => {
+                block_comment = true;
+                i += 2;
+            }
+            '"' | '\'' | '`' => {
+                in_str = Some(c);
+                i += 1;
+            }
+            '(' | '[' => {
+                paren += 1;
+                i += 1;
+            }
+            ')' | ']' => {
+                paren -= 1;
+                i += 1;
+            }
+            '{' if !opened => {
+                if paren <= 0 {
+                    opened = true;
+                    depth = 1;
+                }
+                i += 1;
+            }
+            '{' => {
+                depth += 1;
+                i += 1;
+            }
+            '}' if opened => {
+                depth -= 1;
+                if depth == 0 {
+                    return line;
+                }
+                i += 1;
+            }
+            // expression-body стрелки закончилось на закрытии внешнего блока
+            '}' if !opened && paren <= 0 => {
+                return line.saturating_sub(1).max(start);
+            }
+            ';' if !opened && paren <= 0 => {
+                return line;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    line
+}
+
+/// Ф42 (issue 3.5): строки-декораторы прямо перед объявлением (0-based `i`).
+fn preceding_decorators(lines: &[&str], i: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut k = i;
+    while k > 0 {
+        let prev = lines[k - 1].trim();
+        if prev.starts_with('@') {
+            out.push(prev.to_string());
+            k -= 1;
+        } else {
+            break;
+        }
+    }
+    out.reverse();
+    out
+}
+
 /// Убирает содержимое круглых скобок (`Base(x, y), IBar` → `Base, IBar`) —
 /// чтобы запятые в аргументах конструктора не ломали разбор списка баз.
 fn strip_paren_groups(s: &str) -> String {
