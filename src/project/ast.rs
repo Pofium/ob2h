@@ -204,7 +204,7 @@ impl AstCodeExtractor {
 
             // Python patterns
             py_class_re: Regex::new(r"(?m)^\s*class\s+([a-zA-Z0-9_]+)(?:\(([^)]*)\))?:").unwrap(),
-            py_fn_re: Regex::new(r"(?m)^\s*(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)(?:\s*->\s*([^:]+))?:").unwrap(),
+            py_fn_re: Regex::new(r"(?m)^\s*(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\(").unwrap(),
             py_import_re: Regex::new(r"(?m)^\s*(?:from\s+([a-zA-Z0-9_.]+)\s+import\s+([^#\n]+)|import\s+([^#\n]+))").unwrap(),
 
             // TS/JS patterns
@@ -371,6 +371,12 @@ impl AstCodeExtractor {
                 || name == "vendor"
                 || name == "data"
             {
+                continue;
+            }
+
+            // Сгенерированный protobuf-код (*_pb2.py, *_pb2_grpc.py) — не рукописный
+            // исходник; искажает god-nodes/dead-code и метрики (напр. arks_pb2.py).
+            if name.ends_with("_pb2.py") || name.ends_with("_pb2_grpc.py") {
                 continue;
             }
 
@@ -783,14 +789,25 @@ impl AstCodeExtractor {
         }
 
         // 3. Извлечение functions
-        // Ф40.2: маршруты FastAPI/Flask — `@app.get("/path")` перед def
+        // Ф40.2/Ф42: маршруты FastAPI/Flask — `@app.get("/path")` перед def.
+        // Декоратор может занимать несколько строк (`@router.post(\n "/x",\n)`),
+        // поэтому склеиваем блок декоратора и ищем путь в нём; ключ — последняя
+        // строка блока (строка непосредственно перед `def`).
         let mut route_by_line: std::collections::HashMap<usize, (String, String)> =
             std::collections::HashMap::new();
-        for (i, line) in lines.iter().enumerate() {
-            if let Some(cap) = self.py_route_re.captures(line) {
-                if let (Some(m), Some(p)) = (cap.get(1), cap.get(2)) {
-                    route_by_line.insert(i, (m.as_str().to_uppercase(), p.as_str().to_string()));
+        let mut li = 0usize;
+        while li < lines.len() {
+            if lines[li].trim_start().starts_with('@') {
+                let end = decorator_block_end(&lines, li);
+                let block = lines[li..=end].join(" ");
+                if let Some(cap) = self.py_route_re.captures(&block) {
+                    if let (Some(m), Some(p)) = (cap.get(1), cap.get(2)) {
+                        route_by_line.insert(end, (m.as_str().to_uppercase(), p.as_str().to_string()));
+                    }
                 }
+                li = end + 1;
+            } else {
+                li += 1;
             }
         }
         for (i, line) in lines.iter().enumerate() {
@@ -816,7 +833,7 @@ impl AstCodeExtractor {
                         description,
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
-                        line_end: i + 1,
+                        line_end: py_body_end(&lines, i) + 1,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -2663,6 +2680,77 @@ impl AstCodeExtractor {
         }
     }
 }
+/// Ф42 (issue 14): конец блока Python-декоратора: балансируем круглые/квадратные
+/// скобки от строки `start` до их закрытия. Однострочные `@property` дают `start`.
+/// ponytail: скобки внутри строк/комментариев не различаются — для типовых
+/// декораторов FastAPI достаточно.
+fn decorator_block_end(lines: &[&str], start: usize) -> usize {
+    let mut depth: i32 = 0;
+    let mut opened = false;
+    for i in start..lines.len() {
+        for ch in lines[i].chars() {
+            match ch {
+                '(' | '[' => {
+                    depth += 1;
+                    opened = true;
+                }
+                ')' | ']' => depth -= 1,
+                _ => {}
+            }
+        }
+        if opened && depth <= 0 {
+            return i;
+        }
+        if !opened {
+            return i;
+        }
+    }
+    start
+}
+
+/// Ф42 (issue 14): конец тела Python-функции по отступам. Сначала находим конец
+/// сигнатуры (закрывающая `:` вне скобок), затем — последнюю строку с отступом
+/// больше `def`. Пустое/однострочное тело → строка `def`.
+fn py_body_end(lines: &[&str], def_line: usize) -> usize {
+    let sig_end = py_signature_end(lines, def_line);
+    let def = lines.get(def_line).copied().unwrap_or("");
+    let indent = def.len() - def.trim_start().len();
+    let mut last = sig_end;
+    for (i, line) in lines.iter().enumerate().skip(sig_end + 1) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let ind = line.len() - line.trim_start().len();
+        if ind <= indent {
+            break;
+        }
+        last = i;
+    }
+    last
+}
+
+/// Строка с закрывающей `:` сигнатуры Python-функции (учитывает многострочные
+/// сигнатуры и двоеточия в аннотациях внутри скобок).
+fn py_signature_end(lines: &[&str], def_line: usize) -> usize {
+    let mut depth: i32 = 0;
+    let mut opened = false;
+    for (i, line) in lines.iter().enumerate().skip(def_line) {
+        for ch in line.chars() {
+            match ch {
+                '(' | '[' | '{' => {
+                    depth += 1;
+                    opened = true;
+                }
+                ')' | ']' | '}' => depth -= 1,
+                ':' if opened && depth == 0 => return i,
+                _ => {}
+            }
+        }
+    }
+    def_line
+}
+
 /// Ф42 (issue 3.4): конец тела TS/JS-блока по балансу фигурных скобок.
 /// Возвращает 0-based индекс строки закрывающей `}` (или `;` для expression-body
 /// стрелок). `start` — 0-based строка объявления.
@@ -3120,8 +3208,23 @@ fn collect_call_sites(
             }
             let start = m.start();
             let bytes = line.as_bytes();
-            if start > 0 && (bytes[start - 1] == b'.' || bytes[start - 1] == b'!') {
-                continue; // AMBIGUOUS: метод с неизвестным receiver / макрос
+            if start > 0 && bytes[start - 1] == b'!' {
+                continue; // AMBIGUOUS: макрос
+            }
+            if start > 0 && bytes[start - 1] == b'.' {
+                // Ф42 (issue 14): `self.method()` / `cls.method()` резолвим в
+                // метод того же файла; произвольный receiver — по-прежнему
+                // AMBIGUOUS. Граница слова: `myself.` не считается `self.`.
+                let recv = line[..start - 1].trim_end();
+                let is_self = recv == "self"
+                    || recv == "cls"
+                    || recv.ends_with(" self")
+                    || recv.ends_with(" cls")
+                    || recv.ends_with("(self")
+                    || recv.ends_with("(cls");
+                if !is_self {
+                    continue;
+                }
             }
             out.call_sites.push(CallSite {
                 rel_path: rel_path.to_string(),

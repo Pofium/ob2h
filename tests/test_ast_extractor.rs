@@ -671,3 +671,52 @@ export const noop = () => console.log('}{ not a brace');
     assert_eq!(span("Store"), (13, 15), "класс до закрывающей скобки");
     assert_eq!(span("noop"), (17, 17), "скобки внутри строки не считаются");
 }
+
+#[test]
+fn test_python_multiline_signature_and_route() {
+    // Ф42 (issue 14): многострочные `def` и многострочные route-декораторы.
+    let extractor = AstCodeExtractor::new();
+    let code = r#"from fastapi import APIRouter
+router = APIRouter()
+
+@router.post(
+    "/ask",
+    status_code=200,
+)
+async def ask_kag(
+    self,
+    query: str,
+    limit: int = 5,
+) -> dict:
+    result = self._run(query)
+    return result
+
+def helper(
+    a: int,
+) -> int:
+    return a
+"#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("app/api/chat.py", code, &mut res);
+
+    let find = |label: &str| {
+        res.nodes
+            .iter()
+            .find(|n| n.label == label)
+            .unwrap_or_else(|| panic!("нет узла {label}"))
+    };
+
+    let ask = find("ask_kag");
+    assert_eq!((ask.line_start, ask.line_end), (8, 14), "многострочная сигнатура");
+    let help = find("helper");
+    assert_eq!((help.line_start, help.line_end), (16, 19), "тело после многострочной сигнатуры");
+
+    let route = res
+        .edges
+        .iter()
+        .find(|e| e.label == "ROUTE")
+        .expect("ROUTE для многострочного декоратора");
+    assert_eq!(route.source_node_id, "fn:app/api/chat.py:ask_kag");
+    assert_eq!(route.target_node_id, "route:POST /ask");
+}

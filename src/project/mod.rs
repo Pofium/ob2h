@@ -18,6 +18,12 @@ pub use hooks::install_git_hooks;
 pub use scanjob::{ScanJob, ScanJobManager, ScanJobResult, ScanJobStatus};
 pub use watcher::ProjectWatcher;
 
+/// Версия логики AST-экстрактора. Меняется, когда правки экстрактора делают
+/// старые узлы/рёбра неверными (как Ф41 — резолв импортов, Ф42 — границы тел
+/// TS/классов и фильтр ROUTE/dead-code). Хранится в `kv` на каждый проект:
+/// при несовпадении инкрементальный скан автоматически становится полным.
+pub const AST_EXTRACTOR_VERSION: &str = "42";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectStats {
     pub project_id: String,
@@ -400,7 +406,7 @@ impl ProjectService {
         &self,
         project_id: &str,
         custom_path: Option<&str>,
-        incremental: bool,
+        mut incremental: bool,
     ) -> anyhow::Result<AstScanResult> {
         let project = self
             .get_project(project_id)?
@@ -420,6 +426,28 @@ impl ProjectService {
             "Начало AST-сканирования проекта '{}' (incremental={}) по пути: {}",
             project_id, incremental, scan_path
         );
+
+        // Смена версии экстрактора делает инкрементальные узлы устаревшими →
+        // один раз принудительно пересканируем проект целиком.
+        let version_key = format!("ast_extractor_version:{project_id}");
+        if incremental {
+            let stored: Option<String> = {
+                let conn = self.conn.lock().unwrap();
+                conn.query_row(
+                    "SELECT value FROM kv WHERE key = ?1",
+                    params![version_key],
+                    |row| row.get(0),
+                )
+                .optional()?
+            };
+            if stored.as_deref() != Some(AST_EXTRACTOR_VERSION) {
+                info!(
+                    "Версия AST-экстрактора изменилась ({:?} → {}); полный рескан проекта '{}'",
+                    stored, AST_EXTRACTOR_VERSION, project_id
+                );
+                incremental = false;
+            }
+        }
 
         let known_hashes = if incremental {
             self.get_known_files(project_id)?
@@ -661,6 +689,12 @@ impl ProjectService {
                 params![project_id, rel_path, hash, file_size as i64, lines_count as i64, now],
             )?;
         }
+
+        // Фиксируем версию экстрактора вместе с результатами скана (атомарно).
+        tx.execute(
+            "INSERT OR REPLACE INTO kv (key, value) VALUES (?1, ?2)",
+            params![format!("ast_extractor_version:{project_id}"), AST_EXTRACTOR_VERSION],
+        )?;
 
         // Обновляем время сканирования проекта
         tx.execute(

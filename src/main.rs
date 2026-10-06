@@ -280,8 +280,8 @@ async fn main() -> anyhow::Result<()> {
                     p.id, p.name, p.root_path
                 );
             }
-            ob2h::cli::ProjectCliCommands::Scan { id, path } => {
-                let res = ctx.project.scan_project(&id, path.as_deref(), true)?;
+            ob2h::cli::ProjectCliCommands::Scan { id, path, full } => {
+                let res = ctx.project.scan_project(&id, path.as_deref(), !full)?;
                 let _ = ctx.db.with_conn(|conn| {
                     let _ = ob2h::graph::GraphAnalytics::update_god_nodes(conn, &id);
                     Ok(())
