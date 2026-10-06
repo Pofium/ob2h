@@ -206,7 +206,13 @@ sqlite3 data/ob2h.db "DELETE FROM graph_edges WHERE project_id='omnesbot'; \
 
 - §5.1.1 (вендорные kag/knext/omnesbot) — ⏸ отложено (крупная упаковка).
 - §5.1.2 (`sys.path`-хак) — ⏸ отложено (следует из §5.1.1).
-- §5.1.3 (god-файлы) — ⏸ отложено (механический рефакторинг отдельной веткой).
+- §5.1.3 (god-файлы) — ✅ выполнено (ветка `worklist/omnesbot`): все собственные
+  файлы ≤800 строк, >800 остались только вендорные (это §5.1.1). Backend:
+  `tools.py`, `chat_sse.py`, `extras.py`, `agent_settings.py`, `omnesbot_admin.py`,
+  `extraction.py`, `gbam.py`, `service.py` (→ миксины) разбиты на модули-соседи;
+  frontend: `Settings.tsx`, `ToolsServicesWidget.tsx`, `GraphView.tsx`, `ChatSSE.tsx`,
+  `AgentSettingsWidget.tsx` — на компоненты/хуки. `pytest` 205 passed;
+  `tsc -b` — те же 19 baseline-ошибок, без регрессий.
 - §5.2.4 (циклы импортов) — ⏸ отложено; вендорные + собственные циклы остаются.
 - §5.2.7 (TODO/FIXME/HACK) — ✅ 3 реальных TODO разобраны (лимит графов компании,
   доступ GROUP_ADMIN, LLM-декомпозиция); остальные 27 — шаблонные `XXX` в vendored
