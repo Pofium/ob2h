@@ -139,6 +139,19 @@
   новые `tests/test_ast_extractor.rs`) — там жил тот же парсер в состоянии до
   C#/C/C++/Kotlin/Swift/Ruby, включая ту же дыру с не парсившимися C/C++.
 
+### Fixed
+- **AST: диапазон строк TS/TSX-функций и классов (issue 3.4)**: `line_end`
+  считается по балансу фигурных скобок (`ts_body_end`) — вложенные объекты,
+  строки/комментарии и expression-body стрелки (`=> v + 1`) учтены;
+  `line_end` больше не забывает `line_offset` для Vue/Svelte SFC. `project_impact`
+  и repo-map по фронтенду получили реальные span вместо 1 строки. +1 тест.
+- **Dead-code: точки входа (issue 3.5)**: исправлено направление исключения
+  ROUTE/HANDLES-рёбер (`source_id`, а не `target_id` — FastAPI-роуты больше не
+  шумят), в `entrypoint_reason` добавлены пути (`alembic/`, `migrations/`,
+  `conftest`), имена lifecycle/dunder (`upgrade`/`downgrade`/`setup`/`teardown`/
+  `__init__`), Pydantic/dataclass-модели и framework-декораторы (служебные
+  `@property`/`@staticmethod`/… не считаются). +2 теста.
+
 ## [1.5.0] — 2026-09-18
 
 ### Added

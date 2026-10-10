@@ -130,8 +130,18 @@ pub struct AstScanResult {
 /// вотчера; раньше списки расходились (вотчер не знал `vendor`, обходчик —
 /// `logs`/`backups`).
 pub const SKIP_DIRS: &[&str] = &[
-    ".git", "target", "node_modules", "dist", "build", "venv", ".venv", "vendor", "data", "logs",
-    "backups", "__pycache__",
+    ".git",
+    "target",
+    "node_modules",
+    "dist",
+    "build",
+    "venv",
+    ".venv",
+    "vendor",
+    "data",
+    "logs",
+    "backups",
+    "__pycache__",
 ];
 
 /// Отсутствие ограничения на размер файла. Для существующих исходников cap не
@@ -433,8 +443,21 @@ CREATE TABLE orders (
     LangSpec {
         name: "solidity",
         matcher: Matcher::Ext(&["sol"]),
-        node_types: &["File", "Class", "Interface", "Module", "Function", "Mapping"],
-        edge_labels: &["IMPORTS", "DEFINES", "INHERITS", "IMPLEMENTS", "USES_SCHEMA"],
+        node_types: &[
+            "File",
+            "Class",
+            "Interface",
+            "Module",
+            "Function",
+            "Mapping",
+        ],
+        edge_labels: &[
+            "IMPORTS",
+            "DEFINES",
+            "INHERITS",
+            "IMPLEMENTS",
+            "USES_SCHEMA",
+        ],
         max_bytes: DEFAULT_CAP_BYTES,
         parser: Parser::Solidity,
         fixture: r#"// SPDX-License-Identifier: MIT
@@ -603,7 +626,14 @@ enum Role {
     LangSpec {
         name: "terraform",
         matcher: Matcher::Ext(&["tf", "hcl"]),
-        node_types: &["File", "Resource", "DataSource", "Module", "Variable", "Output"],
+        node_types: &[
+            "File",
+            "Resource",
+            "DataSource",
+            "Module",
+            "Variable",
+            "Output",
+        ],
         edge_labels: &["DEFINES", "DEPENDS_ON"],
         max_bytes: DEFAULT_CAP_BYTES,
         parser: Parser::Terraform,
@@ -663,7 +693,15 @@ COPY --from=builder /app/dist /usr/share/nginx/html
             "compose.yaml",
             "compose.yml",
         ]),
-        node_types: &["File", "Service", "BaseImage", "EnvVar", "Port", "Volume", "Network"],
+        node_types: &[
+            "File",
+            "Service",
+            "BaseImage",
+            "EnvVar",
+            "Port",
+            "Volume",
+            "Network",
+        ],
         edge_labels: &["DEFINES", "DEPENDS_ON", "MOUNTS"],
         max_bytes: DEFAULT_CAP_BYTES,
         parser: Parser::Compose,
@@ -1034,7 +1072,15 @@ end
     LangSpec {
         name: "sfc",
         matcher: Matcher::Ext(&["vue", "svelte"]),
-        node_types: &["File", "Class", "Interface", "Function", "CssClass", "CssId", "CssVar"],
+        node_types: &[
+            "File",
+            "Class",
+            "Interface",
+            "Function",
+            "CssClass",
+            "CssId",
+            "CssVar",
+        ],
         edge_labels: &["IMPORTS", "DEFINES", "STYLES", "BINDS_CLASS"],
         max_bytes: NO_CAP,
         parser: Parser::Sfc,
@@ -1325,8 +1371,12 @@ fn is_k8s_yaml_path(rel_path: &str) -> bool {
     let p = rel_path.to_lowercase();
     let ext_ok = p.ends_with(".yaml") || p.ends_with(".yml");
     ext_ok
-        && (p.contains("k8s/") || p.contains("kubernetes/") || p.contains("deploy/")
-            || p.contains("helm/") || p.contains("charts/") || p.contains("chart/"))
+        && (p.contains("k8s/")
+            || p.contains("kubernetes/")
+            || p.contains("deploy/")
+            || p.contains("helm/")
+            || p.contains("charts/")
+            || p.contains("chart/"))
 }
 
 /// Ф48.1: `<script src>` — внешняя ссылка (http/https/протокол-относительная) →
@@ -1617,7 +1667,7 @@ impl AstCodeExtractor {
 
             // Python patterns
             py_class_re: Regex::new(r"(?m)^\s*class\s+([a-zA-Z0-9_]+)(?:\(([^)]*)\))?:").unwrap(),
-            py_fn_re: Regex::new(r"(?m)^\s*(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)(?:\s*->\s*([^:]+))?:").unwrap(),
+            py_fn_re: Regex::new(r"(?m)^\s*(?:async\s+)?def\s+([a-zA-Z0-9_]+)\s*\(").unwrap(),
             py_import_re: Regex::new(r"(?m)^\s*(?:from\s+([a-zA-Z0-9_.]+)\s+import\s+([^#\n]+)|import\s+([^#\n]+))").unwrap(),
 
             // TS/JS patterns
@@ -1863,7 +1913,10 @@ impl AstCodeExtractor {
                 let rel_str = rel.to_string_lossy().replace('\\', "/");
                 // Ф47.2: единый SKIP_DIRS на любом уровне вложенности
                 // (сам обходчик не обрезает поддерево по имени каталога)
-                if rel_has_skip_dir(&rel_str) {
+                if rel_has_skip_dir(&rel_str)
+                    || rel_str.ends_with("_pb2.py")
+                    || rel_str.ends_with("_pb2_grpc.py")
+                {
                     continue;
                 }
                 // Ф47.1: реестр LANGS — единственный whitelist форматов
@@ -2018,12 +2071,8 @@ impl AstCodeExtractor {
                     let m0 = cap.get(0).unwrap();
                     // Ф54: сигнатура = сам матч (regex покрывает `fn name(args)
                     // -> Type` без тела; переносы схлопываем в пробелы)
-                    let sig = m0
-                        .as_str()
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    let line = content[..m0.start()].matches('\n').count() + 1;
+                    let sig = m0.as_str().split_whitespace().collect::<Vec<_>>().join(" ");
+                    let line = content[..fn_match.start()].matches('\n').count() + 1;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: fn_name.to_string(),
@@ -2154,7 +2203,14 @@ impl AstCodeExtractor {
         }
 
         // 1c. Ф39.1: места вызовов для type-pass
-        collect_call_sites(rel_path, &lines, PY_CALL_SKIP, &self.call_re, line_offset, out);
+        collect_call_sites(
+            rel_path,
+            &lines,
+            PY_CALL_SKIP,
+            &self.call_re,
+            line_offset,
+            out,
+        );
 
         // 2. Извлечение classes
         for (i, line) in lines.iter().enumerate() {
@@ -2162,11 +2218,22 @@ impl AstCodeExtractor {
                 if let Some(name_match) = cap.get(1) {
                     let class_name = name_match.as_str();
                     let node_id = format!("class:{}:{}", rel_path, class_name);
+                    let bases = cap.get(2).map(|m| m.as_str()).unwrap_or("");
+                    let decos = preceding_decorators(&lines, i);
+                    // Ф42 (issue 3.5): Pydantic/dataclass инстанцирует фреймворк,
+                    // а не вызов → это entrypoint, а не мёртвый код.
+                    let kind = if bases.contains("BaseModel") || bases.contains("BaseSettings") {
+                        " (Pydantic-модель)"
+                    } else if decos.iter().any(|d| d.contains("dataclass")) {
+                        " (dataclass)"
+                    } else {
+                        ""
+                    };
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: class_name.to_string(),
                         node_type: "Class".to_string(),
-                        description: format!("Класс `{}` в {}", class_name, rel_path),
+                        description: format!("Класс `{}` в {}{}", class_name, rel_path, kind),
                         file_path: rel_path.to_string(),
                         line_start: i + 1 + line_offset,
                         line_end: i + 1 + line_offset,
@@ -2226,14 +2293,26 @@ impl AstCodeExtractor {
         }
 
         // 3. Извлечение functions
-        // Ф40.2: маршруты FastAPI/Flask — `@app.get("/path")` перед def
+        // Ф40.2/Ф42: маршруты FastAPI/Flask — `@app.get("/path")` перед def.
+        // Декоратор может занимать несколько строк (`@router.post(\n "/x",\n)`),
+        // поэтому склеиваем блок декоратора и ищем путь в нём; ключ — последняя
+        // строка блока (строка непосредственно перед `def`).
         let mut route_by_line: std::collections::HashMap<usize, (String, String)> =
             std::collections::HashMap::new();
-        for (i, line) in lines.iter().enumerate() {
-            if let Some(cap) = self.py_route_re.captures(line) {
-                if let (Some(m), Some(p)) = (cap.get(1), cap.get(2)) {
-                    route_by_line.insert(i, (m.as_str().to_uppercase(), p.as_str().to_string()));
+        let mut li = 0usize;
+        while li < lines.len() {
+            if lines[li].trim_start().starts_with('@') {
+                let end = decorator_block_end(&lines, li);
+                let block = lines[li..=end].join(" ");
+                if let Some(cap) = self.py_route_re.captures(&block) {
+                    if let (Some(m), Some(p)) = (cap.get(1), cap.get(2)) {
+                        route_by_line
+                            .insert(end, (m.as_str().to_uppercase(), p.as_str().to_string()));
+                    }
                 }
+                li = end + 1;
+            } else {
+                li += 1;
             }
         }
         for (i, line) in lines.iter().enumerate() {
@@ -2241,14 +2320,25 @@ impl AstCodeExtractor {
                 if let Some(fn_match) = cap.get(1) {
                     let fn_name = fn_match.as_str();
                     let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    let decos = preceding_decorators(&lines, i);
+                    let description = if decos.is_empty() {
+                        format!("Функция/метод `{}` в {}", fn_name, rel_path)
+                    } else {
+                        format!(
+                            "Функция/метод `{}` в {}. Декораторы: {}",
+                            fn_name,
+                            rel_path,
+                            decos.join(" ")
+                        )
+                    };
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: fn_name.to_string(),
                         node_type: "Function".to_string(),
-                        description: format!("Функция/метод `{}` в {}", fn_name, rel_path),
+                        description,
                         file_path: rel_path.to_string(),
                         line_start: i + 1 + line_offset,
-                        line_end: i + 1 + line_offset,
+                        line_end: py_body_end(&lines, i) + 1 + line_offset,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -2347,6 +2437,7 @@ impl AstCodeExtractor {
                 if let Some(name_match) = cap.get(1) {
                     let class_name = name_match.as_str();
                     let node_id = format!("class:{}:{}", rel_path, class_name);
+                    let line_end = ts_body_end(&lines, i) + 1 + line_offset;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: class_name.to_string(),
@@ -2354,7 +2445,7 @@ impl AstCodeExtractor {
                         description: format!("TypeScript/JS класс `{}` в {}", class_name, rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1 + line_offset,
-                        line_end: i + 1,
+                        line_end,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -2369,6 +2460,7 @@ impl AstCodeExtractor {
                 if let Some(name_match) = cap.get(1) {
                     let iface_name = name_match.as_str();
                     let node_id = format!("interface:{}:{}", rel_path, iface_name);
+                    let line_end = ts_body_end(&lines, i) + 1 + line_offset;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: iface_name.to_string(),
@@ -2376,7 +2468,7 @@ impl AstCodeExtractor {
                         description: format!("Интерфейс/тип `{}` в {}", iface_name, rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1 + line_offset,
-                        line_end: i + 1,
+                        line_end,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -2400,6 +2492,7 @@ impl AstCodeExtractor {
                     .unwrap_or("");
                 if !fn_name.is_empty() {
                     let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    let line_end = ts_body_end(&lines, i) + 1 + line_offset;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: fn_name.to_string(),
@@ -2407,7 +2500,7 @@ impl AstCodeExtractor {
                         description: format!("Функция `{}` в {}", fn_name, rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1 + line_offset,
-                        line_end: i + 1,
+                        line_end,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -3472,8 +3565,22 @@ impl AstCodeExtractor {
         let lines: Vec<&str> = content.lines().collect();
         // Raw-value типы enum — не протоколы, рёбра соответствия для них не выдумываем
         const SWIFT_RAW_TYPES: &[&str] = &[
-            "String", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16",
-            "UInt32", "UInt64", "Double", "Float", "Bool", "Character", "Decimal",
+            "String",
+            "Int",
+            "Int8",
+            "Int16",
+            "Int32",
+            "Int64",
+            "UInt",
+            "UInt8",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+            "Double",
+            "Float",
+            "Bool",
+            "Character",
+            "Decimal",
         ];
 
         // 1. Imports
@@ -3865,8 +3972,10 @@ impl AstCodeExtractor {
                 "script" => {
                     if let Some(src) = attrs.get("src") {
                         if seen_imports.insert(src.clone()) {
-                            let target =
-                                external_or_local_ref(src, &["js", "mjs", "cjs", "ts", "tsx", "jsx"]);
+                            let target = external_or_local_ref(
+                                src,
+                                &["js", "mjs", "cjs", "ts", "tsx", "jsx"],
+                            );
                             out.edges.push(AstEdge {
                                 source_node_id: file_node_id.to_string(),
                                 target_node_id: target,
@@ -3891,10 +4000,7 @@ impl AstCodeExtractor {
                                     target_node_id: stylesheet_target(href),
                                     label: "STYLES".to_string(),
                                     weight: 1.0,
-                                    context: format!(
-                                        "<link rel=\"stylesheet\" href=\"{}\">",
-                                        href
-                                    ),
+                                    context: format!("<link rel=\"stylesheet\" href=\"{}\">", href),
                                     provenance: "EXTRACTED".to_string(),
                                 });
                             }
@@ -4234,11 +4340,7 @@ impl AstCodeExtractor {
                     node_id: node_id.clone(),
                     label: name.as_str().to_string(),
                     node_type: "Class".to_string(),
-                    description: format!(
-                        "Solidity контракт `{}` в {}",
-                        name.as_str(),
-                        rel_path
-                    ),
+                    description: format!("Solidity контракт `{}` в {}", name.as_str(), rel_path),
                     file_path: rel_path.to_string(),
                     line_start: i + 1,
                     line_end: i + 1,
@@ -4263,11 +4365,7 @@ impl AstCodeExtractor {
                     node_id: node_id.clone(),
                     label: name.as_str().to_string(),
                     node_type: "Interface".to_string(),
-                    description: format!(
-                        "Solidity интерфейс `{}` в {}",
-                        name.as_str(),
-                        rel_path
-                    ),
+                    description: format!("Solidity интерфейс `{}` в {}", name.as_str(), rel_path),
                     file_path: rel_path.to_string(),
                     line_start: i + 1,
                     line_end: i + 1,
@@ -4292,11 +4390,7 @@ impl AstCodeExtractor {
                     node_id: node_id.clone(),
                     label: name.as_str().to_string(),
                     node_type: "Module".to_string(),
-                    description: format!(
-                        "Solidity библиотека `{}` в {}",
-                        name.as_str(),
-                        rel_path
-                    ),
+                    description: format!("Solidity библиотека `{}` в {}", name.as_str(), rel_path),
                     file_path: rel_path.to_string(),
                     line_start: i + 1,
                     line_end: i + 1,
@@ -4322,7 +4416,9 @@ impl AstCodeExtractor {
             } else if let Some(cap) = self.sol_special_re.captures(line) {
                 match (cap.get(1), cap.get(2)) {
                     // constructor без имени: label = kind
-                    (Some(k), Some(n)) if !n.is_empty() => (n.as_str().to_string(), k.as_str().to_string()),
+                    (Some(k), Some(n)) if !n.is_empty() => {
+                        (n.as_str().to_string(), k.as_str().to_string())
+                    }
                     (Some(k), _) => (k.as_str().to_string(), k.as_str().to_string()),
                     _ => continue,
                 }
@@ -4334,10 +4430,7 @@ impl AstCodeExtractor {
                 node_id: node_id.clone(),
                 label: name.clone(),
                 node_type: "Function".to_string(),
-                description: format!(
-                    "Solidity {} `{}` в {}",
-                    kind, name, rel_path
-                ),
+                description: format!("Solidity {} `{}` в {}", kind, name, rel_path),
                 file_path: rel_path.to_string(),
                 line_start: i + 1,
                 line_end: i + 1,
@@ -4482,11 +4575,7 @@ impl AstCodeExtractor {
                         node_id: node_id.clone(),
                         label,
                         node_type: "Function".to_string(),
-                        description: format!(
-                            "Zig тест \"{}\" в {}",
-                            name.as_str(),
-                            rel_path
-                        ),
+                        description: format!("Zig тест \"{}\" в {}", name.as_str(), rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
                         line_end: i + 1,
@@ -4589,7 +4678,8 @@ impl AstCodeExtractor {
             if let Some(cap) = self.proto_package_re.captures(line) {
                 if let Some(pkg) = cap.get(1) {
                     let node_id = format!("module:{}:{}", rel_path, pkg.as_str());
-                    let mut description = format!("Protobuf пакет `{}` в {}", pkg.as_str(), rel_path);
+                    let mut description =
+                        format!("Protobuf пакет `{}` в {}", pkg.as_str(), rel_path);
                     if !options.is_empty() {
                         description.push_str("; ");
                         description.push_str(&options.join("; "));
@@ -4640,11 +4730,7 @@ impl AstCodeExtractor {
                         node_id: node_id.clone(),
                         label: name.as_str().to_string(),
                         node_type: "Service".to_string(),
-                        description: format!(
-                            "Protobuf сервис `{}` в {}",
-                            name.as_str(),
-                            rel_path
-                        ),
+                        description: format!("Protobuf сервис `{}` в {}", name.as_str(), rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
                         line_end: i + 1,
@@ -4669,11 +4755,7 @@ impl AstCodeExtractor {
                         node_id: node_id.clone(),
                         label: name.as_str().to_string(),
                         node_type: "Function".to_string(),
-                        description: format!(
-                            "Protobuf rpc `{}` в {}",
-                            name.as_str(),
-                            rel_path
-                        ),
+                        description: format!("Protobuf rpc `{}` в {}", name.as_str(), rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
                         line_end: i + 1,
@@ -4706,11 +4788,7 @@ impl AstCodeExtractor {
                         node_id: node_id.clone(),
                         label: name.as_str().to_string(),
                         node_type: "Struct".to_string(),
-                        description: format!(
-                            "Protobuf message `{}` в {}",
-                            name.as_str(),
-                            rel_path
-                        ),
+                        description: format!("Protobuf message `{}` в {}", name.as_str(), rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
                         line_end: i + 1,
@@ -4734,11 +4812,7 @@ impl AstCodeExtractor {
                         node_id: node_id.clone(),
                         label: name.as_str().to_string(),
                         node_type: "Enum".to_string(),
-                        description: format!(
-                            "Protobuf enum `{}` в {}",
-                            name.as_str(),
-                            rel_path
-                        ),
+                        description: format!("Protobuf enum `{}` в {}", name.as_str(), rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
                         line_end: i + 1,
@@ -4765,7 +4839,10 @@ impl AstCodeExtractor {
                 if ty.starts_with('.') || !seen.insert(ty.to_string()) {
                     continue;
                 }
-                let target = declared.get(ty).cloned().unwrap_or(format!("module:{}", ty));
+                let target = declared
+                    .get(ty)
+                    .cloned()
+                    .unwrap_or(format!("module:{}", ty));
                 // источник — последний message, объявленный до использования
                 let src = declared
                     .values()
@@ -4824,7 +4901,9 @@ impl AstCodeExtractor {
 
         // 2. Поля Query/Mutation/Subscription → Function
         for cap in self.gql_query_block_re.captures_iter(content) {
-            let Some(kind) = cap.get(1).map(|m| m.as_str().to_string()) else { continue };
+            let Some(kind) = cap.get(1).map(|m| m.as_str().to_string()) else {
+                continue;
+            };
             let Some(body) = cap.get(2) else { continue };
             let offset = content[..body.start()].matches('\n').count();
             for (k, line) in body.as_str().lines().enumerate() {
@@ -4926,11 +5005,7 @@ impl AstCodeExtractor {
                         node_id: node_id.clone(),
                         label: name.as_str().to_string(),
                         node_type: "Enum".to_string(),
-                        description: format!(
-                            "GraphQL enum `{}` в {}",
-                            name.as_str(),
-                            rel_path
-                        ),
+                        description: format!("GraphQL enum `{}` в {}", name.as_str(), rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
                         line_end: i + 1,
@@ -4961,14 +5036,14 @@ impl AstCodeExtractor {
         content: &str,
         out: &mut AstScanResult,
     ) -> bool {
-        let value: serde_json::Value = if let Ok(v) = serde_json::from_str::<serde_json::Value>(content)
-        {
-            v
-        } else if let Ok(v) = serde_yaml_ng::from_str::<serde_json::Value>(content) {
-            v
-        } else {
-            return false;
-        };
+        let value: serde_json::Value =
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(content) {
+                v
+            } else if let Ok(v) = serde_yaml_ng::from_str::<serde_json::Value>(content) {
+                v
+            } else {
+                return false;
+            };
 
         // Классификатор (50.5): характерный корневой ключ
         let is_swagger = value.get("openapi").is_some() || value.get("swagger").is_some();
@@ -4999,7 +5074,9 @@ impl AstCodeExtractor {
         if let Some(paths) = value.get("paths").and_then(|p| p.as_object()) {
             for (path, item) in paths {
                 for method in HTTP_METHODS {
-                    let Some(op) = item.get(*method) else { continue };
+                    let Some(op) = item.get(*method) else {
+                        continue;
+                    };
                     let method_up = method.to_uppercase();
                     let endpoint_id = format!("endpoint:{}:{} {}", rel_path, method_up, path);
                     let route_id = format!("route:{} {}", method_up, path);
@@ -5112,10 +5189,7 @@ impl AstCodeExtractor {
                             node_id: field_id.clone(),
                             label: "body".to_string(),
                             node_type: "Field".to_string(),
-                            description: format!(
-                                "Request body `{}` в {}",
-                                path, rel_path
-                            ),
+                            description: format!("Request body `{}` в {}", path, rel_path),
                             file_path: rel_path.to_string(),
                             line_start: 1,
                             line_end: 1,
@@ -5130,9 +5204,10 @@ impl AstCodeExtractor {
                         });
                         // $ref тела → USES_SCHEMA
                         if let Some(schema_name) = find_ref_name(body) {
-                            let target = schema_nodes.get(&schema_name).cloned().unwrap_or(
-                                format!("struct:{}:{}", rel_path, schema_name),
-                            );
+                            let target = schema_nodes
+                                .get(&schema_name)
+                                .cloned()
+                                .unwrap_or(format!("struct:{}:{}", rel_path, schema_name));
                             out.edges.push(AstEdge {
                                 source_node_id: field_id,
                                 target_node_id: target,
@@ -5290,9 +5365,10 @@ impl AstCodeExtractor {
 
             // module "n" { source = ... } — DEPENDS_ON к file:/module:
             if kind.as_str() == "module" {
-                if let Some(src) = self.tf_source_re.captures(
-                    &content[cap.get(0).map(|m| m.start()).unwrap_or(0)..],
-                ) {
+                if let Some(src) = self
+                    .tf_source_re
+                    .captures(&content[cap.get(0).map(|m| m.start()).unwrap_or(0)..])
+                {
                     let s = src.get(1).map(|m| m.as_str()).unwrap_or("");
                     let target = if s.starts_with("./") || s.starts_with("../") {
                         format!(
@@ -5396,7 +5472,11 @@ impl AstCodeExtractor {
                         node_id: node_id.clone(),
                         label: name.as_str().to_string(),
                         node_type: "EnvVar".to_string(),
-                        description: format!("Docker переменная `{}` в {}", name.as_str(), rel_path),
+                        description: format!(
+                            "Docker переменная `{}` в {}",
+                            name.as_str(),
+                            rel_path
+                        ),
                         file_path: rel_path.to_string(),
                         line_start: 1,
                         line_end: 1,
@@ -5416,16 +5496,15 @@ impl AstCodeExtractor {
         for cap in self.docker_copy_re.captures_iter(content) {
             let Some(rest) = cap.get(1) else { continue };
             for token in rest.as_str().split_whitespace() {
-                if token.starts_with('/') && !token.starts_with("//") || !token.contains("://") && token.contains('.') || !token.contains("://") && token.contains('/')
+                if token.starts_with('/') && !token.starts_with("//")
+                    || !token.contains("://") && token.contains('.')
+                    || !token.contains("://") && token.contains('/')
                 {
                     // локальный путь (не URL, не флаг)
                     if token.contains("://") || token.starts_with("--") {
                         continue;
                     }
-                    let target = format!(
-                        "file:{}",
-                        token.trim_end_matches('/')
-                    );
+                    let target = format!("file:{}", token.trim_end_matches('/'));
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
                         target_node_id: target,
@@ -5529,12 +5608,10 @@ impl AstCodeExtractor {
 
             // build → DEPENDS_ON к Dockerfile
             let build_target = match svc.get("build") {
-                Some(serde_json::Value::String(ctx)) => {
-                    Some(format!(
-                        "file:{}/Dockerfile",
-                        ctx.trim_end_matches('/').trim_start_matches("./")
-                    ))
-                }
+                Some(serde_json::Value::String(ctx)) => Some(format!(
+                    "file:{}/Dockerfile",
+                    ctx.trim_end_matches('/').trim_start_matches("./")
+                )),
                 Some(serde_json::Value::Object(b)) => {
                     let ctx = b
                         .get("context")
@@ -5647,7 +5724,8 @@ impl AstCodeExtractor {
                     let p = match p {
                         serde_json::Value::String(s) => s.clone(),
                         serde_json::Value::Object(_) => {
-                            let pub_port = p.get("published").and_then(|v| v.as_str()).unwrap_or("");
+                            let pub_port =
+                                p.get("published").and_then(|v| v.as_str()).unwrap_or("");
                             let target = p.get("target").and_then(|t| t.as_i64()).unwrap_or(0);
                             format!("{}:{}", pub_port, target)
                         }
@@ -5691,7 +5769,11 @@ impl AstCodeExtractor {
                         if value.is_empty() || !seen_items.insert(value.clone()) {
                             continue;
                         }
-                        let prefix = if key == "volumes" { "volume" } else { "network" };
+                        let prefix = if key == "volumes" {
+                            "volume"
+                        } else {
+                            "network"
+                        };
                         let node_id = format!("{}:{}", prefix, value);
                         out.nodes.push(AstNode {
                             node_id: node_id.clone(),
@@ -5704,7 +5786,11 @@ impl AstCodeExtractor {
                             .to_string(),
                             description: format!(
                                 "{} `{}` ({} в {})",
-                                if key == "volumes" { "Том" } else { "Сеть" },
+                                if key == "volumes" {
+                                    "Том"
+                                } else {
+                                    "Сеть"
+                                },
                                 value,
                                 name,
                                 rel_path
@@ -5812,7 +5898,10 @@ impl AstCodeExtractor {
             }
 
             // configMapRef/secretRef/envFrom/serviceAccountName → PendingRef
-            for ref_name in find_yaml_strings(doc, "configMapRef").iter().map(|s| s.to_string()) {
+            for ref_name in find_yaml_strings(doc, "configMapRef")
+                .iter()
+                .map(|s| s.to_string())
+            {
                 out.pending_refs.push(PendingRef {
                     source_node_id: node_id.clone(),
                     target_prefix: "k8s:".to_string(),
@@ -5821,7 +5910,10 @@ impl AstCodeExtractor {
                     context: format!("configMapRef {}", ref_name),
                 });
             }
-            for ref_name in find_yaml_strings(doc, "secretRef").iter().map(|s| s.to_string()) {
+            for ref_name in find_yaml_strings(doc, "secretRef")
+                .iter()
+                .map(|s| s.to_string())
+            {
                 out.pending_refs.push(PendingRef {
                     source_node_id: node_id.clone(),
                     target_prefix: "k8s:".to_string(),
@@ -5860,7 +5952,8 @@ impl AstCodeExtractor {
         let label_sets: Vec<(String, serde_json::Value)> = doc_nodes
             .iter()
             .filter_map(|(id, _, doc)| {
-                doc.pointer("/metadata/labels").map(|l| (id.clone(), l.clone()))
+                doc.pointer("/metadata/labels")
+                    .map(|l| (id.clone(), l.clone()))
             })
             .collect();
         for (id, _, doc) in &doc_nodes {
@@ -5870,9 +5963,8 @@ impl AstCodeExtractor {
                         continue;
                     }
                     let matches = selector.as_object().is_some_and(|sel| {
-                        sel.iter().all(|(k, v)| {
-                            labels.get(k).and_then(|l| l.as_str()) == v.as_str()
-                        })
+                        sel.iter()
+                            .all(|(k, v)| labels.get(k).and_then(|l| l.as_str()) == v.as_str())
                     });
                     if matches {
                         out.edges.push(AstEdge {
@@ -5905,7 +5997,9 @@ impl AstCodeExtractor {
         let name = rel_path.rsplit('/').next().unwrap_or(rel_path);
         match name.to_lowercase().as_str() {
             "cargo.toml" => self.parse_manifest_cargo(rel_path, file_node_id, content, out),
-            "package.json" => self.parse_manifest_package_json(rel_path, file_node_id, content, out),
+            "package.json" => {
+                self.parse_manifest_package_json(rel_path, file_node_id, content, out)
+            }
             "pyproject.toml" => self.parse_manifest_pyproject(rel_path, file_node_id, content, out),
             "requirements.txt" => {
                 self.parse_manifest_requirements(rel_path, file_node_id, content, out)
@@ -5994,7 +6088,11 @@ impl AstCodeExtractor {
             for (name, spec) in deps {
                 match spec {
                     serde_json::Value::String(req) => {
-                        let w = if mult < 1.0 { 0.3 } else { Self::dep_weight(req) };
+                        let w = if mult < 1.0 {
+                            0.3
+                        } else {
+                            Self::dep_weight(req)
+                        };
                         self.push_dep(out, file_node_id, "rust", name, req, w);
                     }
                     serde_json::Value::Object(t) => {
@@ -6023,7 +6121,11 @@ impl AstCodeExtractor {
                             });
                         } else {
                             let req = t.get("version").and_then(|v| v.as_str()).unwrap_or("*");
-                            let w = if mult < 1.0 { 0.3 } else { Self::dep_weight(req) };
+                            let w = if mult < 1.0 {
+                                0.3
+                            } else {
+                                Self::dep_weight(req)
+                            };
                             self.push_dep(out, file_node_id, "rust", name, req, w);
                         }
                     }
@@ -6053,7 +6155,11 @@ impl AstCodeExtractor {
             };
             for (name, spec) in deps {
                 let Some(req) = spec.as_str() else { continue };
-                let w = if mult < 1.0 { 0.3 } else { Self::dep_weight(req) };
+                let w = if mult < 1.0 {
+                    0.3
+                } else {
+                    Self::dep_weight(req)
+                };
                 self.push_dep(out, file_node_id, "npm", name, req, w);
             }
         }
@@ -6134,7 +6240,9 @@ impl AstCodeExtractor {
         // [dependency-groups] (PEP 735) — dev-вес
         if let Some(groups) = v.get("dependency-groups").and_then(|d| d.as_object()) {
             for (_, items) in groups {
-                let Some(items) = items.as_array() else { continue };
+                let Some(items) = items.as_array() else {
+                    continue;
+                };
                 for d in items {
                     let Some(d) = d.as_str() else { continue };
                     let name: String = d
@@ -6254,7 +6362,11 @@ impl AstCodeExtractor {
                     "pub",
                     name,
                     req,
-                    if mult < 1.0 { 0.3 } else { Self::dep_weight(req) },
+                    if mult < 1.0 {
+                        0.3
+                    } else {
+                        Self::dep_weight(req)
+                    },
                 );
             }
         }
@@ -6286,7 +6398,11 @@ impl AstCodeExtractor {
                     "composer",
                     name,
                     req,
-                    if mult < 1.0 { 0.3 } else { Self::dep_weight(req) },
+                    if mult < 1.0 {
+                        0.3
+                    } else {
+                        Self::dep_weight(req)
+                    },
                 );
             }
         }
@@ -6612,13 +6728,7 @@ impl AstCodeExtractor {
                     let fn_name = fn_match.as_str();
                     if matches!(
                         fn_name,
-                        "if" | "for"
-                            | "while"
-                            | "case"
-                            | "until"
-                            | "return"
-                            | "time"
-                            | "select"
+                        "if" | "for" | "while" | "case" | "until" | "return" | "time" | "select"
                     ) {
                         continue;
                     }
@@ -6800,8 +6910,7 @@ fn normalize_api_path(p: &str) -> String {
             _ => out.push(c),
         }
     }
-    out.trim_end_matches('/')
-        .to_lowercase()
+    out.trim_end_matches('/').to_lowercase()
 }
 
 /// Ф49.4 (PLAN_v1.7): INFERRED-мосты контракт↔код по точным совпадениям:
@@ -6947,6 +7056,204 @@ pub fn resolve_bridges(scan: &mut AstScanResult) -> usize {
     added
 }
 
+/// Ф42 (issue 14): конец блока Python-декоратора: балансируем круглые/квадратные
+/// скобки от строки `start` до их закрытия. Однострочные `@property` дают `start`.
+/// ponytail: скобки внутри строк/комментариев не различаются — для типовых
+/// декораторов FastAPI достаточно.
+fn decorator_block_end(lines: &[&str], start: usize) -> usize {
+    let mut depth: i32 = 0;
+    let mut opened = false;
+    for i in start..lines.len() {
+        for ch in lines[i].chars() {
+            match ch {
+                '(' | '[' => {
+                    depth += 1;
+                    opened = true;
+                }
+                ')' | ']' => depth -= 1,
+                _ => {}
+            }
+        }
+        if opened && depth <= 0 {
+            return i;
+        }
+        if !opened {
+            return i;
+        }
+    }
+    start
+}
+
+/// Ф42 (issue 14): конец тела Python-функции по отступам. Сначала находим конец
+/// сигнатуры (закрывающая `:` вне скобок), затем — последнюю строку с отступом
+/// больше `def`. Пустое/однострочное тело → строка `def`.
+fn py_body_end(lines: &[&str], def_line: usize) -> usize {
+    let sig_end = py_signature_end(lines, def_line);
+    let def = lines.get(def_line).copied().unwrap_or("");
+    let indent = def.len() - def.trim_start().len();
+    let mut last = sig_end;
+    for (i, line) in lines.iter().enumerate().skip(sig_end + 1) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let ind = line.len() - line.trim_start().len();
+        if ind <= indent {
+            break;
+        }
+        last = i;
+    }
+    last
+}
+
+/// Строка с закрывающей `:` сигнатуры Python-функции (учитывает многострочные
+/// сигнатуры и двоеточия в аннотациях внутри скобок).
+fn py_signature_end(lines: &[&str], def_line: usize) -> usize {
+    let mut depth: i32 = 0;
+    let mut opened = false;
+    for (i, line) in lines.iter().enumerate().skip(def_line) {
+        for ch in line.chars() {
+            match ch {
+                '(' | '[' | '{' => {
+                    depth += 1;
+                    opened = true;
+                }
+                ')' | ']' | '}' => depth -= 1,
+                ':' if opened && depth == 0 => return i,
+                _ => {}
+            }
+        }
+    }
+    def_line
+}
+
+/// Ф42 (issue 3.4): конец тела TS/JS-блока по балансу фигурных скобок.
+/// Возвращает 0-based индекс строки закрывающей `}` (или `;` для expression-body
+/// стрелок). `start` — 0-based строка объявления.
+///
+/// ponytail: не полноценный парсер — template-литералы `${}` и inline-типы
+/// возврата (`: { ok: boolean }`) могут дать пару строк погрешности; для графа и
+/// impact этого достаточно, точность — только через tree-sitter.
+fn ts_body_end(lines: &[&str], start: usize) -> usize {
+    let joined = lines.get(start..).map(|s| s.join("\n")).unwrap_or_default();
+    let ch: Vec<char> = joined.chars().collect();
+    let mut line = start;
+    let mut paren = 0i32;
+    let mut depth = 0i32;
+    let mut opened = false;
+    let mut i = 0usize;
+    let mut in_str: Option<char> = None;
+    let mut esc = false;
+    let mut line_comment = false;
+    let mut block_comment = false;
+    while i < ch.len() {
+        let c = ch[i];
+        if c == '\n' {
+            line += 1;
+            line_comment = false;
+            i += 1;
+            continue;
+        }
+        if line_comment {
+            i += 1;
+            continue;
+        }
+        if block_comment {
+            if c == '*' && i + 1 < ch.len() && ch[i + 1] == '/' {
+                block_comment = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if let Some(q) = in_str {
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == q {
+                in_str = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '/' if i + 1 < ch.len() && ch[i + 1] == '/' => {
+                line_comment = true;
+                i += 2;
+            }
+            '/' if i + 1 < ch.len() && ch[i + 1] == '*' => {
+                block_comment = true;
+                i += 2;
+            }
+            '"' | '\'' | '`' => {
+                in_str = Some(c);
+                i += 1;
+            }
+            '(' | '[' => {
+                paren += 1;
+                i += 1;
+            }
+            ')' | ']' => {
+                paren -= 1;
+                i += 1;
+            }
+            '{' if !opened => {
+                if paren <= 0 {
+                    opened = true;
+                    depth = 1;
+                }
+                i += 1;
+            }
+            '{' => {
+                depth += 1;
+                i += 1;
+            }
+            '}' if opened => {
+                depth -= 1;
+                if depth == 0 {
+                    return line;
+                }
+                i += 1;
+            }
+            // expression-body стрелки закончилось на закрытии внешнего блока
+            '}' if !opened && paren <= 0 => {
+                return line.saturating_sub(1).max(start);
+            }
+            ';' if !opened && paren <= 0 => {
+                return line;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    line
+}
+
+/// Декораторы перед объявлением, включая блоки с аргументами на нескольких строках.
+fn preceding_decorators(lines: &[&str], i: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut k = i;
+    while k > 0 {
+        let prev = lines[k - 1].trim();
+        if prev.starts_with('@') {
+            out.push(prev.to_string());
+            k -= 1;
+        } else {
+            let start = (0..k - 1).rev().find(|&j| {
+                lines[j].trim_start().starts_with('@') && decorator_block_end(lines, j) == k - 1
+            });
+            let Some(start) = start else { break };
+            out.push(lines[start..k].join(" ").trim().to_string());
+            k = start;
+        }
+    }
+    out.reverse();
+    out
+}
+
 /// Убирает содержимое круглых скобок (`Base(x, y), IBar` → `Base, IBar`) —
 /// чтобы запятые в аргументах конструктора не ломали разбор списка баз.
 fn strip_paren_groups(s: &str) -> String {
@@ -7035,8 +7342,8 @@ fn module_to_paths(module: &str, from_file: &str) -> Vec<String> {
         }
         return out;
     }
-    if m.starts_with('.') || m.contains('.') {
-        // Python
+    if m.starts_with('.') {
+        // Python относительный импорт
         let dots = m.chars().take_while(|&c| c == '.').count();
         let rest = &m[dots..];
         let mut base = parent(from_file);
@@ -7055,8 +7362,188 @@ fn module_to_paths(module: &str, from_file: &str) -> Vec<String> {
             out.push(format!("{prefix}{rel}.py"));
             out.push(format!("{prefix}{rel}/__init__.py"));
         }
+    } else if !m.contains('/') && !m.contains(' ') {
+        // Абсолютный Python-модуль (`app.services.x`) или top-level пакет
+        // (`kag`, `knext`, `omnesbot`), доступный через sys.path на services/.
+        let rel = m.replace('.', "/");
+        for pre in [
+            "backend/app/services/",
+            "backend/app/",
+            "backend/",
+            "app/",
+            "",
+        ] {
+            out.push(format!("{pre}{rel}.py"));
+            out.push(format!("{pre}{rel}/__init__.py"));
+        }
     }
     out
+}
+
+/// Ф41: резолв IMPORTS-рёбер во внутренние файлы проекта.
+///
+/// Экстрактор эмитит `module:<сырое имя>`: относительные импорты Python
+/// (`from .auth import …`), Vite-алиасы `@/…`, голые модули с `as`-алиасами
+/// и импорты через запятую. Здесь имя нормализуется (первый компонент,
+/// отрезан алиас) и, если ему соответствует файл проекта, цель ребра
+/// переписывается на `file:<rel_path>`; иначе остаётся внешним модулем.
+/// Возвращает число резолвнутых рёбер.
+pub fn resolve_imports(scan: &mut AstScanResult) -> usize {
+    // file_hashes содержит и неизменённые файлы инкрементального прохода.
+    let mut files: HashSet<String> = scan.file_hashes.keys().cloned().collect();
+    files.extend(
+        scan.nodes
+            .iter()
+            .filter(|n| n.node_type == "File")
+            .map(|n| n.file_path.clone()),
+    );
+
+    let edges = std::mem::take(&mut scan.edges);
+    let mut resolved = 0usize;
+    let mut out_edges = Vec::with_capacity(edges.len() + 16);
+
+    for edge in edges {
+        if edge.label != "IMPORTS" || !edge.target_node_id.starts_with("module:") {
+            out_edges.push(edge);
+            continue;
+        }
+        let raw = edge
+            .target_node_id
+            .trim_start_matches("module:")
+            .to_string();
+        let from_file = edge.source_node_id.trim_start_matches("file:").to_string();
+        // Только Python допускает `import a, b` и `import x as y` в одном стейтменте.
+        let parts: Vec<String> = if from_file.ends_with(".py") {
+            raw.split(',')
+                .map(|p| p.split(" as ").next().unwrap_or("").trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect()
+        } else {
+            vec![raw.clone()]
+        };
+
+        for part in parts {
+            let mut e = edge.clone();
+            e.context = format!("import {}", part);
+            match resolve_module_file(&part, &from_file, &files) {
+                Some(f) => {
+                    e.target_node_id = format!("file:{}", f);
+                    resolved += 1;
+                }
+                None => {
+                    e.target_node_id = format!("module:{}", part);
+                }
+            }
+            out_edges.push(e);
+        }
+    }
+
+    scan.edges = out_edges;
+    resolved
+}
+
+/// Найти файл проекта, соответствующий импортируемому модулю.
+fn resolve_module_file(module: &str, from_file: &str, files: &HashSet<String>) -> Option<String> {
+    const TS_EXT: &[&str] = &["ts", "tsx", "js", "jsx"];
+    const PY_EXT: &[&str] = &["py"];
+
+    fn dir_of(p: &str) -> String {
+        p.rsplit_once('/')
+            .map(|(d, _)| d.to_string())
+            .unwrap_or_default()
+    }
+
+    fn join(base: &str, rel: &str) -> String {
+        let joined = format!("{base}/{rel}");
+        let mut parts: Vec<&str> = Vec::new();
+        for seg in joined.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => {
+                    parts.pop();
+                }
+                s => parts.push(s),
+            }
+        }
+        parts.join("/")
+    }
+
+    let m = module.trim();
+    if m.is_empty() {
+        return None;
+    }
+
+    // Vite/tsconfig-алиас `@/…` → frontend/src/renderer (или frontend/src).
+    if let Some(rest) = m.strip_prefix("@/") {
+        for pre in ["frontend/src/renderer/", "frontend/src/"] {
+            if let Some(f) = first_existing(&format!("{pre}{rest}"), TS_EXT, files) {
+                return Some(f);
+            }
+        }
+        return None;
+    }
+
+    // TS/JS относительные `./x`, `../x`.
+    if m.starts_with("./") || m.starts_with("../") {
+        let p = join(&dir_of(from_file), m);
+        return first_existing(&p, TS_EXT, files);
+    }
+
+    // Python относительные `.x`, `..x.y`.
+    if m.starts_with('.') {
+        let dots = m.chars().take_while(|&c| c == '.').count();
+        let rest = &m[dots..];
+        let mut base = dir_of(from_file);
+        for _ in 1..dots {
+            base = dir_of(&base);
+        }
+        if rest.is_empty() {
+            let init = format!("{base}/__init__.py");
+            return files.contains(&init).then_some(init);
+        }
+        let rel = rest.replace('.', "/");
+        return first_existing(&format!("{base}/{rel}"), PY_EXT, files);
+    }
+
+    // Абсолютные: Python `app.services.x`, top-level `kag`/`knext`/`omnesbot`
+    // (sys.path на services/), плюс голые TS-модули без слэша.
+    if !m.contains('/') {
+        let rel = m.replace('.', "/");
+        for pre in ["backend/app/services/", "backend/app/", "backend/", "app/"] {
+            if let Some(f) = first_existing(&format!("{pre}{rel}"), PY_EXT, files) {
+                return Some(f);
+            }
+        }
+        for pre in ["frontend/src/renderer/", "frontend/src/"] {
+            if let Some(f) = first_existing(&format!("{pre}{rel}"), TS_EXT, files) {
+                return Some(f);
+            }
+        }
+        // Python: модуль-сосед (`import helpers`).
+        let sib = format!("{}/{}", dir_of(from_file), rel);
+        if let Some(f) = first_existing(&sib, PY_EXT, files) {
+            return Some(f);
+        }
+    }
+
+    None
+}
+
+/// `.ext`-вариант или index/__init__ внутри каталога.
+fn first_existing(base: &str, exts: &[&str], files: &HashSet<String>) -> Option<String> {
+    for ext in exts {
+        let p = format!("{base}.{ext}");
+        if files.contains(&p) {
+            return Some(p);
+        }
+    }
+    for idx in ["index.ts", "index.tsx", "index.js", "__init__.py"] {
+        let p = format!("{base}/{idx}");
+        if files.contains(&p) {
+            return Some(p);
+        }
+    }
+    None
 }
 
 /// Ф39.1: собрать места вызовов `name(` — без `.`-методов (receiver-типы
@@ -7097,8 +7584,23 @@ fn collect_call_sites(
             }
             let start = m.start();
             let bytes = line.as_bytes();
-            if start > 0 && (bytes[start - 1] == b'.' || bytes[start - 1] == b'!') {
-                continue; // AMBIGUOUS: метод с неизвестным receiver / макрос
+            if start > 0 && bytes[start - 1] == b'!' {
+                continue; // AMBIGUOUS: макрос
+            }
+            if start > 0 && bytes[start - 1] == b'.' {
+                // Ф42 (issue 14): `self.method()` / `cls.method()` резолвим в
+                // метод того же файла; произвольный receiver — по-прежнему
+                // AMBIGUOUS. Граница слова: `myself.` не считается `self.`.
+                let recv = line[..start - 1].trim_end();
+                let is_self = recv == "self"
+                    || recv == "cls"
+                    || recv.ends_with(" self")
+                    || recv.ends_with(" cls")
+                    || recv.ends_with("(self")
+                    || recv.ends_with("(cls");
+                if !is_self {
+                    continue;
+                }
             }
             out.call_sites.push(CallSite {
                 rel_path: rel_path.to_string(),

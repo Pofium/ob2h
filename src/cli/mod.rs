@@ -193,6 +193,9 @@ pub enum ProjectCliCommands {
         id: String,
         #[arg(short, long)]
         path: Option<String>,
+        /// Полный рескан: игнорировать кэш изменённых файлов и пересобрать AST с нуля
+        #[arg(long, default_value_t = false)]
+        full: bool,
     },
     /// Список зарегистрированных проектов
     List,

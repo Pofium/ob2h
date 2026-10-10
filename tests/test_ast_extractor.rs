@@ -28,7 +28,7 @@ fn test_parse_rust_code() {
     extractor.parse_file("src/memory/service.rs", rust_code, &mut res);
 
     assert!(!res.nodes.is_empty());
-    
+
     // Проверяем извлечение структур, трейтов, функций
     let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
     assert!(node_labels.contains(&"MemoryService".to_string()));
@@ -204,7 +204,11 @@ fn test_parse_java_code() {
     "#;
 
     let mut res = AstScanResult::default();
-    extractor.parse_file("src/main/java/com/example/service/AccountManager.java", java_code, &mut res);
+    extractor.parse_file(
+        "src/main/java/com/example/service/AccountManager.java",
+        java_code,
+        &mut res,
+    );
 
     let node_labels: Vec<String> = res.nodes.iter().map(|n| n.label.clone()).collect();
     assert!(node_labels.contains(&"AccountManager".to_string()));
@@ -629,4 +633,148 @@ usage() {
     let edge_labels: Vec<String> = res.edges.iter().map(|e| e.label.clone()).collect();
     assert!(edge_labels.contains(&"IMPORTS".to_string()));
     assert!(edge_labels.contains(&"DEFINES".to_string()));
+}
+
+#[test]
+fn test_ts_function_and_class_body_spans() {
+    let extractor = AstCodeExtractor::new();
+    let code = r#"import { ref } from 'vue';
+
+export function loadUser(id: string) {
+    const payload = {
+        id,
+        ok: true,
+    };
+    return payload;
+}
+
+export const pick = (v: number) => v + 1;
+
+export class Store {
+    items: string[] = [];
+}
+
+export const noop = () => console.log('}{ not a brace');
+"#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("src/User.ts", code, &mut res);
+
+    let span = |label: &str| {
+        let n = res
+            .nodes
+            .iter()
+            .find(|n| n.label == label)
+            .unwrap_or_else(|| panic!("нет узла {label}"));
+        (n.line_start, n.line_end)
+    };
+
+    // Ф42 (issue 3.4): у функций/классов есть диапазон тела, а не одна строка
+    assert_eq!(span("loadUser"), (3, 9), "функция с вложенным объектом");
+    assert_eq!(
+        span("pick"),
+        (11, 11),
+        "expression-body стрелка — одна строка"
+    );
+    assert_eq!(span("Store"), (13, 15), "класс до закрывающей скобки");
+    assert_eq!(span("noop"), (17, 17), "скобки внутри строки не считаются");
+}
+
+#[test]
+fn test_python_multiline_signature_and_route() {
+    // Ф42 (issue 14): многострочные `def` и многострочные route-декораторы.
+    let extractor = AstCodeExtractor::new();
+    let code = r#"from fastapi import APIRouter
+router = APIRouter()
+
+@router.post(
+    "/ask",
+    status_code=200,
+)
+async def ask_kag(
+    self,
+    query: str,
+    limit: int = 5,
+) -> dict:
+    result = self._run(query)
+    return result
+
+def helper(
+    a: int,
+) -> int:
+    return a
+"#;
+
+    let mut res = AstScanResult::default();
+    extractor.parse_file("app/api/chat.py", code, &mut res);
+
+    let find = |label: &str| {
+        res.nodes
+            .iter()
+            .find(|n| n.label == label)
+            .unwrap_or_else(|| panic!("нет узла {label}"))
+    };
+
+    let ask = find("ask_kag");
+    assert_eq!(
+        (ask.line_start, ask.line_end),
+        (8, 14),
+        "многострочная сигнатура"
+    );
+    let help = find("helper");
+    assert_eq!(
+        (help.line_start, help.line_end),
+        (16, 19),
+        "тело после многострочной сигнатуры"
+    );
+
+    let route = res
+        .edges
+        .iter()
+        .find(|e| e.label == "ROUTE")
+        .expect("ROUTE для многострочного декоратора");
+    assert_eq!(route.source_node_id, "fn:app/api/chat.py:ask_kag");
+    assert_eq!(route.target_node_id, "route:POST /ask");
+}
+
+/// Многострочный декоратор регистрирует функцию как точку входа.
+#[test]
+fn test_python_multiline_decorator_keeps_entrypoint() {
+    let extractor = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    extractor.parse_file(
+        "app/commands.py",
+        "@click.command(\n    name=\"run\",\n)\ndef run_command():\n    return 1\n",
+        &mut res,
+    );
+    let node = res.nodes.iter().find(|n| n.label == "run_command").unwrap();
+    assert!(node.description.contains("@click.command("));
+    assert_eq!((node.line_start, node.line_end), (4, 5));
+}
+
+/// Встроенные Python/TS блоки используют координаты всего документа.
+#[test]
+fn test_embedded_code_spans_keep_offsets() {
+    let extractor = AstCodeExtractor::new();
+    let mut sfc = AstScanResult::default();
+    extractor.parse_file(
+        "src/View.vue",
+        "<template>\n<div />\n</template>\n<script lang=\"ts\">\nexport function load() {\n  return 1;\n}\n</script>",
+        &mut sfc,
+    );
+    let node = sfc.nodes.iter().find(|n| n.label == "load").unwrap();
+    assert_eq!((node.line_start, node.line_end), (5, 7));
+
+    let mut notebook = AstScanResult::default();
+    extractor.parse_file(
+        "analysis.ipynb",
+        r#"{"cells":[{"cell_type":"code","source":["x = 1\n"]},{"cell_type":"code","source":["def compute():\n","    return x\n"]}]}"#,
+        &mut notebook,
+    );
+    let node = notebook
+        .nodes
+        .iter()
+        .find(|n| n.label == "compute")
+        .unwrap();
+    assert_eq!((node.line_start, node.line_end), (3, 4));
 }
