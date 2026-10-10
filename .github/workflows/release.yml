@@ -1,0 +1,144 @@
+name: Release Builds (Cross-platform)
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Версия для сборки (tag-semver, без v)"
+        required: true
+        default: "1.8.0"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  BIN_NAME: ob2h
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.build }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - build: Windows-x86_64-msvc
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: .zip
+          - build: Linux-x86_64-musl
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            ext: .tar.gz
+          - build: macOS-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            ext: .tar.gz
+          - build: macOS-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            ext: .tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable + target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Install system deps (Linux musl-tools)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build release
+        uses: clechasseur/rs-cargo@v2
+        with:
+          command: build
+          args: --release --target ${{ matrix.target }}
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ -z "$VERSION" || "$VERSION" == refs/* ]]; then VERSION="${{ github.event.inputs.version }}"; fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          STAGE="target/stage/${BIN_NAME}-${VERSION}"
+          mkdir -p "$STAGE"
+          EXE=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then EXE=".exe"; fi
+          cp -v "target/${{ matrix.target }}/release/${BIN_NAME}${EXE}" "$STAGE/"
+          for d in plugin skills; do if [[ -d "$d" ]]; then cp -rv "$d" "$STAGE/"; fi; done
+          for f in README.md CHANGELOG.md AGENTS.md; do if [[ -f "$f" ]]; then cp -v "$f" "$STAGE/"; fi; done
+
+      - name: Package .tar.gz
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ env.VERSION }}"
+          OUT="target/artifacts/${BIN_NAME}-${VERSION}-${{ matrix.build }}.tar.gz"
+          mkdir -p "$(dirname "$OUT")"
+          tar -C "target/stage" -czf "$OUT" "${BIN_NAME}-${VERSION}"
+          ls -lah "$OUT"
+          echo "ARTIFACT=$OUT" >> $GITHUB_ENV
+
+      - name: Package .zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $Version = $env:VERSION
+          $StageRoot = "target/stage"
+          $Out = "target/artifacts/${env:BIN_NAME}-${Version}-${{ matrix.build }}.zip"
+          New-Item -ItemType Directory -Force -Path (Split-Path $Out -Parent) | Out-Null
+          Compress-Archive -Path (Join-Path $StageRoot "${env:BIN_NAME}-${Version}") -DestinationPath $Out -Force
+          Get-Item $Out | Format-List Name,Length
+          "ARTIFACT=$Out" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: SHA256 checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="${{ env.ARTIFACT }}"
+          DIR="$(dirname "$OUT")"
+          NAME="$(basename "$OUT")"
+          (cd "$DIR" && sha256sum "$NAME" > "$NAME.sha256")
+          echo "CHECKSUM=${OUT}.sha256" >> $GITHUB_ENV
+          cat "${OUT}.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.build }}
+          path: |
+            ${{ env.ARTIFACT }}
+            ${{ env.CHECKSUM }}
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create Release + upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ob2h v${GITHUB_REF_NAME#v}
+          generate_release_notes: true
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
