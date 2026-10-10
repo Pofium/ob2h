@@ -17,6 +17,7 @@ pub mod memory;
 pub mod project;
 pub mod ralph;
 pub mod sync;
+pub mod update;
 pub mod vector;
 pub mod workspace;
 

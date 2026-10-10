@@ -6,8 +6,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use ob2h::cli::{
     BenchCommands, Cli, Commands, DbCommands, DreamCommands, PluginCommands, SyncCommands,
-    Vec0Commands,
+    UpdateCommands, Vec0Commands,
 };
+use chrono::DateTime;
+use ob2h::update::{check_update, current_version, download_and_apply, notify_user, CheckResult};
 use ob2h::config::Settings;
 use ob2h::mcp::McpServer;
 use ob2h::{init_app, start_background_workers};
@@ -44,6 +46,29 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         None | Some(Commands::Serve) => {
+            // ADR-15: ежедневная проверка обновлений при старте serve (не блокируем
+            // запуск MCP-сервера — запускаем check в отдельной задаче, уведомляем в лог).
+            if ctx.settings.update_enabled && ctx.settings.update_check_on_start {
+                let db = ctx.db.clone();
+                let settings = ctx.settings.clone();
+                tokio::spawn(async move {
+                    match check_update(&db, &settings, false).await {
+                        CheckResult::NewAvailable { release, notify: true } => {
+                            notify_user(&release);
+                        }
+                        CheckResult::FetchError(msg) => {
+                            tracing::debug!("Проверка обновлений не удалась: {msg}");
+                        }
+                        _ => {
+                            // UpToDate или notify=false — ничего не пишем в stderr,
+                            // только отладочное сообщение в лог.
+                            let cur = current_version();
+                            tracing::debug!("Проверка обновлений: текущая версия v{cur}, обновлений нет");
+                        }
+                    }
+                });
+            }
+
             start_background_workers(ctx.clone());
             let server = Arc::new(McpServer::new(ctx));
             server.run_stdio().await?;
@@ -261,6 +286,108 @@ async fn main() -> anyhow::Result<()> {
         },
         Some(Commands::SkillInstall) => {
             skill_install()?;
+        }
+        Some(Commands::Update { command }) => match command {
+            UpdateCommands::Check => {
+                println!("🔎 Проверка обновлений на GitHub: {0} (канал {1})",
+                    ctx.settings.update_repo, ctx.settings.update_channel);
+                match check_update(&ctx.db, &ctx.settings, true).await {
+                    CheckResult::UpToDate { last_check_ts, last_seen } => {
+                        let cur = current_version();
+                        let when = last_check_ts
+                            .and_then(|ts| DateTime::from_timestamp(ts, 0))
+                            .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                            .unwrap_or_else(|| "—".to_string());
+                        let last = last_seen.unwrap_or_else(|| "—".to_string());
+                        println!(
+                            "✅ Обновлений нет (текущая версия v{cur}, последняя проверка: {when}, \
+                             последняя виденная версия релиза: {last})"
+                        );
+                    }
+                    CheckResult::NewAvailable { release, .. } => {
+                        notify_user(&release);
+                    }
+                    CheckResult::FetchError(msg) => {
+                        eprintln!("❌ Не удалось проверить обновления: {msg}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            UpdateCommands::Status => {
+                let cur = current_version();
+                let last_check_ts = ctx.db.get_kv("update_last_check_ts").ok().flatten();
+                let last_seen = ctx.db.get_kv("update_last_seen_tag").ok().flatten();
+                let when = last_check_ts
+                    .as_deref()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .and_then(|ts| DateTime::from_timestamp(ts, 0))
+                    .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                    .unwrap_or_else(|| "никогда".to_string());
+
+                println!("📦 Статус обновлений OB2H:");
+                println!("  • Текущая версия:      v{cur}");
+                println!("  • Репозиторий:         {}", ctx.settings.update_repo);
+                println!("  • Канал обновлений:    {}", ctx.settings.update_channel);
+                println!("  • Авто-проверка:       {}", if ctx.settings.update_enabled && ctx.settings.update_check_on_start { "вкл (при старте serve, раз в ~{}ч)".replace("{}", &ctx.settings.update_interval_hours.to_string()) } else { "выкл".to_string() });
+                println!("  • Последняя проверка:  {when}");
+                println!("  • Последняя виденная:  {}", last_seen.as_deref().unwrap_or("—"));
+                println!();
+                println!("Подсказка: ob2h update check — принудительно проверить сейчас");
+                println!("Подсказка: ob2h update apply — скачать и применить последнюю версию");
+            }
+            UpdateCommands::Apply { yes } => {
+                // (1) Сначала проверяем, есть ли вообще новая версия
+                println!("🔎 Проверка последней версии перед применением…");
+                let release = match check_update(&ctx.db, &ctx.settings, true).await {
+                    CheckResult::NewAvailable { release, .. } => {
+                        notify_user(&release);
+                        release
+                    }
+                    CheckResult::UpToDate { last_seen, .. } => {
+                        let cur = current_version();
+                        println!(
+                            "✅ Уже установлена актуальная версия v{cur} \
+                             (репо {}, канал {}). Последний релиз: {}.",
+                            ctx.settings.update_repo,
+                            ctx.settings.update_channel,
+                            last_seen.as_deref().unwrap_or("—")
+                        );
+                        println!("Для принудительной переустановки используйте git pull + cargo build --release.");
+                        return Ok(());
+                    }
+                    CheckResult::FetchError(msg) => {
+                        eprintln!("❌ Не удалось проверить обновления: {msg}");
+                        std::process::exit(1);
+                    }
+                };
+
+                // (2) Интерактивное подтверждение
+                if !yes {
+                    use std::io::{self, Write};
+                    print!(
+                        "⚠️  Будет применено обновление до {} с заменой бинарника, плагина и скилла. Продолжить? [y/N]: ",
+                        release.tag
+                    );
+                    io::stdout().flush().ok();
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input).ok();
+                    let answer = input.trim().to_lowercase();
+                    if !(answer == "y" || answer == "yes" || answer == "да") {
+                        println!("Обновление отменено.");
+                        return Ok(());
+                    }
+                }
+
+                // (3) Качаем + распаковываем + self-replace + plugin/skill install.
+                if let Err(e) = download_and_apply(&release, &ctx.settings).await {
+                    eprintln!("❌ Не удалось применить обновление: {e:#}");
+                    std::process::exit(1);
+                }
+
+                // После self-replace текущий бинарник заменится при завершении процесса — выходим.
+                tracing::info!("Процесс завершается для замены бинарника (self-replace в действии).");
+                std::process::exit(0);
+            }
         }
         Some(Commands::Agent { command }) => match command {
             ob2h::cli::AgentCommands::Install { agent, path } => {

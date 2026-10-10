@@ -68,6 +68,11 @@ pub enum Commands {
     },
     /// Установить/обновить скилл ob2h в Hermes (пути темплейтятся под эту машину)
     SkillInstall,
+    /// Проверка и применение обновлений из GitHub Releases (ADR-15)
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommands,
+    },
     /// Ф35.1: эксперимент sqlite-vec — vec0-индекс над graph_nodes (флаг OB2H_VEC0=1)
     Vec0 {
         #[command(subcommand)]
@@ -311,6 +316,21 @@ pub enum PluginCommands {
     Uninstall,
     /// Проверить установку плагина и активность в конфиге Hermes
     Status,
+}
+
+/// Подкоманды автообновления (ADR-15).
+#[derive(Subcommand, Debug)]
+pub enum UpdateCommands {
+    /// Принудительно проверить GitHub Releases на новую версию (игнорируя daily-gate).
+    Check,
+    /// Показать статус: текущая версия, время последней проверки, какая версия доступна.
+    Status,
+    /// Скачать и применить последнее обновление: self-replace бинарника + plugin install + skill install.
+    Apply {
+        /// Пропустить интерактивное подтверждение перед применением (для CI/скриптов).
+        #[arg(short, long, default_value_t = false)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

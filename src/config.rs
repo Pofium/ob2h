@@ -79,6 +79,19 @@ pub struct Settings {
     pub autosync_enabled: bool,
     pub autosync_interval_minutes: u64,
 
+    // --- Автообновление (ADR-15) ---
+    /// Включено ли автообновление (проверки + команда apply).
+    pub update_enabled: bool,
+    /// Проверять ли новую версию при старте `ob2h serve` (daily gate).
+    pub update_check_on_start: bool,
+    /// Интервал между проверками в часах (по умолчанию 24).
+    pub update_interval_hours: u64,
+    /// Репозиторий GitHub Releases в формате `owner/repo`.
+    pub update_repo: String,
+    /// Канал обновлений: `stable` — latest release (без pre-release),
+    /// `nightly` — последний release включая pre-release.
+    pub update_channel: String,
+
     // --- Служебное ---
     pub log_level: String,
     pub max_tool_output_chars: usize,
@@ -246,6 +259,22 @@ impl Settings {
             .and_then(|v| v.parse().ok())
             .unwrap_or(120);
 
+        // ADR-15: автообновление из GitHub Releases
+        let update_enabled = env::var("OB2H_UPDATE_ENABLED")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
+        let update_check_on_start = env::var("OB2H_UPDATE_CHECK_ON_START")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
+        let update_interval_hours = env::var("OB2H_UPDATE_INTERVAL_HOURS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(24);
+        let update_repo = env::var("OB2H_UPDATE_REPO")
+            .unwrap_or_else(|_| "presnyakov/ob2h".to_string());
+        let update_channel = env::var("OB2H_UPDATE_CHANNEL")
+            .unwrap_or_else(|_| "stable".to_string());
+
         Self {
             data_dir,
             llm_base_url,
@@ -285,6 +314,11 @@ impl Settings {
             watcher_debounce_ms,
             autosync_enabled,
             autosync_interval_minutes,
+            update_enabled,
+            update_check_on_start,
+            update_interval_hours,
+            update_repo,
+            update_channel,
             log_level,
             max_tool_output_chars,
         }
@@ -308,6 +342,11 @@ impl Settings {
         self.data_dir.join("logs")
     }
 
+    /// Временная директория для закачек обновлений (self-replace, zip-распаковка).
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.data_dir.join("tmp")
+    }
+
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
         let dirs = [
             &self.data_dir,
@@ -316,6 +355,7 @@ impl Settings {
             &self.workspace_dir().join("daily"),
             &self.backups_dir(),
             &self.logs_dir(),
+            &self.tmp_dir(),
         ];
         for d in dirs {
             std::fs::create_dir_all(d)?;

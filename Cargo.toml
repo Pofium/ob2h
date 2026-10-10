@@ -36,6 +36,9 @@ notify-debouncer-mini = "0.4.1"
 sqlite-vec = "0.1.9"
 toml = "0.9"
 serde_yaml_ng = "0.10"
+self-replace = "1"
+semver = "1"
+zip = "2"
 
 [dev-dependencies]
 tempfile = "3.17"

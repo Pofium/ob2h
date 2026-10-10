@@ -3,6 +3,27 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## Unreleased
+
+### Added
+- **Команда `ob2h update` (check/apply/status)** с подкомандами:
+  - `ob2h update check` — принудительная проверка GitHub Releases на новую версию
+  - `ob2h update apply [--yes]` — скачать последний релиз, распаковать,
+    self-replace бинарник, выполнить `plugin install` + `skill install`
+  - `ob2h update status` — текущая версия, когда последняя проверка,
+    какая версия доступна
+- **Ежедневная проверка обновлений при старте `ob2h serve`**: если прошло >24ч
+  с последней проверки (ключ `kv:update_last_check_ts`), автоматически опрашивается
+  GitHub Releases; при наличии новой версии — уведомление в лог и stdout
+  (обновление не применяется автоматически — только уведомление).
+- **Env-параметры автообновления (OB2H_UPDATE_*)**: ENABLED (true/false),
+  INTERVAL_HOURS (24), REPO (`presnyakov/ob2h`), CHANNEL (`stable` = latest release),
+  CHECK_ON_START (true).
+
+### Changed
+- Новые зависимости: `self-replace 1` (самозамена exe), `semver 1` (сравнение версий),
+  `zip 2` (распаковка релизных архивов, переиспользует существующий `flate2`).
+
 ## [1.7.0] — 2026-10-03
 
 ### Added
