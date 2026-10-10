@@ -102,6 +102,32 @@ fn python_from_import_resolved() {
     assert!(calls.iter().all(|e| e.provenance == "RESOLVED"));
 }
 
+/// Вызов вне тела функции не становится исходящим CALLS предыдущей функции.
+#[test]
+fn python_module_level_call_has_no_function_caller() {
+    let mut scan = parse_all(&[(
+        "app/main.py",
+        "def first():\n    pass\n\ndef second():\n    pass\n\ndef third():\n    second()\n\nfirst()\n",
+    )]);
+    ob2h::project::ast::resolve_calls(&mut scan);
+
+    let calls: Vec<_> = scan
+        .edges
+        .iter()
+        .filter(|edge| edge.label == "CALLS")
+        .collect();
+    assert!(calls.iter().any(|edge| {
+        edge.source_node_id == "fn:app/main.py:third"
+            && edge.target_node_id == "fn:app/main.py:second"
+    }));
+    assert!(
+        !calls
+            .iter()
+            .any(|edge| edge.target_node_id == "fn:app/main.py:first"),
+        "верхнеуровневый вызов не принадлежит third: {calls:?}"
+    );
+}
+
 #[test]
 fn db_scan_stores_provenance_and_legacy_rows_readable() {
     let db = Database::in_memory().unwrap();
@@ -217,11 +243,16 @@ fn imports_resolved_to_internal_files() {
         ),
         ("frontend/src/renderer/lib/utils.ts", "export const cn = () => '';\n"),
         ("frontend/src/renderer/pages/local.ts", "export const x = 1;\n"),
+        (
+            "src/components/View.tsx",
+            "import { load } from '@/lib/load';\n",
+        ),
+        ("src/lib/load.ts", "export const load = () => 1;\n"),
     ]);
     let n = ob2h::project::ast::resolve_imports(&mut scan);
     assert!(
-        n >= 3,
-        "как минимум 3 внутренних импорта резолвнуто, получено {n}"
+        n >= 4,
+        "как минимум 4 внутренних импорта резолвнуто, получено {n}"
     );
 
     let targets = |src: &str| -> Vec<String> {
@@ -258,6 +289,11 @@ fn imports_resolved_to_internal_files() {
     assert!(
         chat.contains(&"module:react".to_string()),
         "внешний пакет остаётся модулем: {chat:?}"
+    );
+    let view = targets("file:src/components/View.tsx");
+    assert!(
+        view.contains(&"file:src/lib/load.ts".to_string()),
+        "алиас корневого src/: {view:?}"
     );
 }
 

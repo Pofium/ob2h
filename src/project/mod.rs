@@ -22,7 +22,7 @@ pub use watcher::ProjectWatcher;
 /// старые узлы/рёбра неверными (как Ф41 — резолв импортов, Ф42 — границы тел
 /// TS/классов и фильтр ROUTE/dead-code). Хранится в `kv` на каждый проект:
 /// при несовпадении инкрементальный скан автоматически становится полным.
-pub const AST_EXTRACTOR_VERSION: &str = "43";
+pub const AST_EXTRACTOR_VERSION: &str = "44";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectStats {

@@ -778,3 +778,40 @@ fn test_embedded_code_spans_keep_offsets() {
         .unwrap();
     assert_eq!((node.line_start, node.line_end), (3, 4));
 }
+
+/// Go/Zig функции и Zig-тесты сохраняют границы тела, включая вложенные блоки.
+#[test]
+fn test_go_and_zig_function_body_spans() {
+    let extractor = AstCodeExtractor::new();
+    let mut go = AstScanResult::default();
+    extractor.parse_file(
+        "src/main.go",
+        "package main\n\nfunc compute(x int) int {\n    if x > 0 {\n        return x\n    }\n    return 0\n}\n",
+        &mut go,
+    );
+    let compute = go
+        .nodes
+        .iter()
+        .find(|node| node.label == "compute")
+        .unwrap();
+    assert_eq!((compute.line_start, compute.line_end), (3, 8));
+
+    let mut zig = AstScanResult::default();
+    extractor.parse_file(
+        "src/main.zig",
+        "pub fn compute(x: i32) i32 {\n    if (x > 0) {\n        return x;\n    }\n    return 0;\n}\n\ntest \"compute\" {\n    try check(compute(1));\n}\n",
+        &mut zig,
+    );
+    let compute = zig
+        .nodes
+        .iter()
+        .find(|node| node.label == "compute")
+        .unwrap();
+    assert_eq!((compute.line_start, compute.line_end), (1, 6));
+    let test = zig
+        .nodes
+        .iter()
+        .find(|node| node.label == "test_compute")
+        .unwrap();
+    assert_eq!((test.line_start, test.line_end), (8, 10));
+}

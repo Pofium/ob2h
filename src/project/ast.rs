@@ -2554,6 +2554,7 @@ impl AstCodeExtractor {
                 if let Some(fn_match) = cap.get(1) {
                     let fn_name = fn_match.as_str();
                     let node_id = format!("fn:{}:{}", rel_path, fn_name);
+                    let line_end = ts_body_end(&lines, i) + 1;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: fn_name.to_string(),
@@ -2561,7 +2562,7 @@ impl AstCodeExtractor {
                         description: format!("Go функция/метод `{}` в {}", fn_name, rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
-                        line_end: i + 1,
+                        line_end,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -4539,6 +4540,7 @@ impl AstCodeExtractor {
             if let Some(cap) = self.zig_fn_re.captures(line) {
                 if let Some(name) = cap.get(1) {
                     let node_id = format!("fn:{}:{}", rel_path, name.as_str());
+                    let line_end = ts_body_end(&lines, i) + 1;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: name.as_str().to_string(),
@@ -4551,7 +4553,7 @@ impl AstCodeExtractor {
                         ),
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
-                        line_end: i + 1,
+                        line_end,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -4571,6 +4573,7 @@ impl AstCodeExtractor {
                     // (starts_with "test_") выводит тесты из dead-code
                     let label = format!("test_{}", name.as_str());
                     let node_id = format!("fn:{}:{}", rel_path, label);
+                    let line_end = ts_body_end(&lines, i) + 1;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label,
@@ -4578,7 +4581,7 @@ impl AstCodeExtractor {
                         description: format!("Zig тест \"{}\" в {}", name.as_str(), rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1,
-                        line_end: i + 1,
+                        line_end,
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -7473,9 +7476,9 @@ fn resolve_module_file(module: &str, from_file: &str, files: &HashSet<String>) -
         return None;
     }
 
-    // Vite/tsconfig-алиас `@/…` → frontend/src/renderer (или frontend/src).
+    // Типовые корни Vite/tsconfig-алиаса `@/…`.
     if let Some(rest) = m.strip_prefix("@/") {
-        for pre in ["frontend/src/renderer/", "frontend/src/"] {
+        for pre in ["frontend/src/renderer/", "frontend/src/", "src/"] {
             if let Some(f) = first_existing(&format!("{pre}{rest}"), TS_EXT, files) {
                 return Some(f);
             }
@@ -7652,11 +7655,16 @@ pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
     let mut added = 0usize;
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for site in &scan.call_sites {
-        // вызывающий — последний символ файла, чей line_start <= строке вызова
+        // Python: вызов вне тела функции не должен приписываться предыдущей функции.
+        let is_python = site.rel_path.ends_with(".py") || site.rel_path.ends_with(".ipynb");
         let Some(ci) = syms_by_file.get(site.rel_path.as_str()).and_then(|idxs| {
             let mut caller = None;
             for &i in idxs {
-                if scan.nodes[i].line_start <= site.line {
+                let node = &scan.nodes[i];
+                if node.line_start <= site.line {
+                    if is_python && (node.node_type != "Function" || site.line > node.line_end) {
+                        continue;
+                    }
                     caller = Some(i);
                 } else {
                     break;
