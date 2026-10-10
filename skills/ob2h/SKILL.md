@@ -18,6 +18,26 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   с чужого origin не существуют локально — используй их как контекст, а не как цели
   для файловых операций.
 
+## Как вызывать память, когда прямых инструментов нет (MCP-коннектор)
+- Часть сессий видит ob2h-инструменты как НЕ зарегистрированные: вызов `memory_save`
+  /`memory_search`/`graph_search`/`omnes_stats` напрямую возвращает `Unknown tool`.
+  Рабочий путь — коннектор: `mcp__ob2h__server_invoke_tool(tool_name=..., tool_input={...})`,
+  схему конкретного инструмента брать через `mcp__ob2h__server_get_tool_schema`
+  (она же перечисляет ВСЕ доступные имена инструментов сервера).
+- Кириллица в `tool_input` через коннектор проходит нормально — отдельный JSON-RPC-драйв
+  к `ob2h serve` нужен только если коннектор сам отвалился с ошибкой транспорта.
+- Проверяй запись ЧТЕНИЕМ обратно (`memory_search` по ключу), а не по ответу `saved`.
+
+## Полный текст записи и замена устаревших фактов
+- `memory_search` отдаёт сниппеты ~200 символов — для правки существующей записи этого
+  мало. Полный текст брать из БД read-only: `sqlite3.connect("file:<data>/ob2h.db?mode=ro", uri=True)`,
+  таблица `memories` (колонки `key, content, category, importance, trust, origin, deleted_at`).
+- Устаревший факт НЕ удалять: `memory_update(key=...)` с текстом «оригинал целиком +
+  пометка [УСТАРЕЛО <дата>: заменено — см. <новый ключ>]». История сохраняется, а recall
+  больше не тянет мёртвый адрес без оговорки.
+- Один факт = одна запись с осмысленным `key` (напр. `hmem-<тема>-<дата>`); зеркальные
+  копии `m_*` (cat=general) создаёт сам плагин из MEMORY.md — их не править руками.
+
 ## Режимы подключения (не путать при диагностике)
 | Режим | Как выглядит | Что важно |
 |---|---|---|
@@ -39,10 +59,6 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   dream_run/status/log/restore, omnes_stats/backup, project_init/scan/scan_status/
   context/graph_search/report/impact, project_call_path (callers/callees/call-path),
   ralph_start/iteration/verdict/context/report, ast_diff, ast_history.
-- Детерминированный AST-граф кода: `project_scan` извлекает классы, функции, трейты и связи
-  со 100% точностью (Graphify-подход) без вызовов LLM; скан идёт в фоне и не упирается
-  в таймаут MCP-клиента — по умолчанию инструмент ждёт до 45 с, долгий скан отвечает
-  «still running», результат досматривается `project_scan_status` (там же сводка из БД).
 - Детерминированный AST-граф кода: `project_scan` извлекает классы, функции, трейты и связи
   со 100% точностью (Graphify-подход) без вызовов LLM; скан идёт в фоне и не упирается
   в таймаут MCP-клиента — по умолчанию инструмент ждёт до 45 с, долгий скан отвечает
@@ -73,7 +89,8 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   деградации recall/MRR). CLI: `ob2h stats | doctor [--fix] | dream run/status/log/restore |
   bench [--mode history] | backup [--scope quick] [verify <path>] |
   db quantize-embeddings | memory dedup [--dry-run] | install/uninstall |
-  plugin install/uninstall/status | skill install | agent install/status |
+  plugin install/uninstall/status | skill-install | agent install/status |
+  update check/apply/status (v1.8.0, ADR-15) |
   project init/scan/list/report/dead-code/repo-map |
   ralph findings-to-memory | sync status/verify/export/import/apply-inbox/push/pull`.
 
@@ -130,6 +147,33 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
    применяется его `sync apply-inbox`; прямой `sync import <файл>` на удалённой машине
    тоже работает.
 
+13. **Сравнение/слияние memory_links — только по ключам через JOIN**: таблица ссылается
+   на rowid `memories.id`, который у сторон НЕ совпадает. Запрос на обеих сторонах:
+   `SELECT m1.key, m2.key, l.kind, l.weight, l.created_at FROM memory_links l
+   JOIN memories m1 ON m1.id=l.from_id JOIN memories m2 ON m2.id=l.to_id
+   WHERE l.deleted_at IS NULL`; разницу переносить минимальным бандлом
+   (`type: "mlink"`, поля `from_key`/`to_key`, origin отправителя) в обе стороны.
+14. **После пересборки exe повторяй `plugin install` и `skill-install`** — плагин и скилл
+   вшиты в бинарник (`include_str!`), файлы на диске обновляет только установка из НОВОГО
+   exe. Точные команды (из корня репо, с явным env — иначе `plugin install` перепинит
+   `ob2h.json` на `cwd/data`): `OB2H_DATA_DIR={{DATA_DIR}} "{{BINARY}}" plugin install` и
+   `"{{BINARY}}" skill-install` — подкоманда именно **`skill-install`** (`ob2h skill` →
+   `unrecognized subcommand 'skill'`; в AGENTS.md §5 опечатка «ob2h skill install»).
+   Сверка файлов с репо — `diff --strip-trailing-cr` (в репо LF, `cmp` даёт ложный DIFF).
+   **`skill-install` ПЕРЕЗАПИСЫВАЕТ установленный SKILL.md шаблоном, вшитым в бинарь** —
+   правки, сделанные руками прямо в `~/.hermes/skills/devops/ob2h/SKILL.md`, молча
+   теряются: всё ценное вносить в `skills/ob2h/SKILL.md` репо и коммитить.
+   **Карта локальной установки:** Hermes-плагин и MCP-сервер работают из `{{BINARY}}`
+   (эталон, закреплён в `ob2h.json`); копия в PATH (`~/.cargo/bin/ob2h.exe` — её берут
+   `ob2h` в шелле и MCP-конфиг Antigravity) обновляется ВРУЧНУЮ копированием exe.
+   Релизный zip содержит ТОТ ЖЕ exe, что собран в `target/release/` (сверять sha256),
+   поэтому «обновить локально до версии X» = скопировать exe из `target/artifacts/*.zip`
+   или `target/release/` + прогнать установщики + `ob2h --version`.
+15. **Варианты `skills/<агент>/SKILL.md` не темплейтятся** (только корневой ob2h проходит
+   skill-install): при переезде репо/store правь пути exe и env `OB2H_DATA_DIR` в каждом
+   варианте И в живых MCP-конфигах агентов, учитывая оба написания: `X:\...\target\release\ob2h.exe`
+   и `X:/.../data` (прямой слеш в env-примерах).
+
 ## Проверка работоспособности (read-only, без LLM)
 `memory_search`, `memory_context`, `omnes_stats`, `graph_stats`, `dream_status`,
 `workspace_read`, `ob2h sync status`. `omnes_backup` — безопасно, пишет в
@@ -143,4 +187,16 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
 ## Ссылки
 - `references/testing.md` — транскрипт из state.db + JSON-RPC драйв сервера (изолированный OB2H_DATA_DIR)
 - `references/autodream-and-history.md` — устройство дрима/истории
-- Планы: `{{PROJECT_DIR}}/PLAN_v1.3.md`, `{{PROJECT_DIR}}/PLAN_v1.4.md`; скилл Ralph-циклов — `ralph-loop`
+- `references/coding-graph.md` — кодовый граф (Ф36–Ф40): точки read-path, правила расширения
+  сканера новым языком/форматом, деплой бинарника на живую БД
+- Планы: `{{PROJECT_DIR}}/PLAN_v1.3.md`, `{{PROJECT_DIR}}/PLAN_v1.4.md`, `{{PROJECT_DIR}}/PLAN_v1.6.md`
+  (System One слой: Laya за флагами OB2H_S1_*, дефолт off — реранк memory_search, дрим-гейты,
+  инструмент s1; черновик rev.1, ждёт ревью владельца); скилл Ralph-циклов — `ralph-loop`
+
+## Автообновление (v1.8.0, ADR-15) — известное ограничение
+- `ob2h update check|apply|status` ходит ТОЛЬКО в GitHub API (`api.github.com`,
+  Accept `application/vnd.github+json`), но дефолтный `OB2H_UPDATE_REPO=presnyakov/ob2h`
+  на GitHub не существует (там репозиторий `Pofium/ob2h`) → `update check` из коробки
+  падает `404 Not Found`. Обход без правок кода: `OB2H_UPDATE_REPO=Pofium/ob2h ob2h update check`
+  (проверено 10.10.2026 — видит v1.8.0). Релизы на GitVerse апдейтер НЕ видит: у GitVerse
+  свой хост `api.gitverse.ru` и свой Accept-хедер — поддержки нет.
