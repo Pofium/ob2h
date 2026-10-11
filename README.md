@@ -106,12 +106,15 @@ ob2h doctor --fix
 ```
 Команда автоматически обнаружит и сконфигурирует Claude Code, Cursor, Windsurf, ZCode, Gemini/Antigravity, Qwen Code, OpenCode и DSH (DeepSeek Harness).
 
-Для DSH (`dsh` / Electron-GUI) интеграция — это MCP-сервер через штатный плагин
-`@deepseek-ai/dsh-mcp-client` плюс скилл `ob2h`; подробности и режим только-MCP
-(без автозахвата ходов) — в [`docs/DSH_INTEGRATION.md`](docs/DSH_INTEGRATION.md):
+Для DSH (`dsh` / Electron-GUI) интеграция — двухслойная: MCP-сервер через штатный плагин
+`@deepseek-ai/dsh-mcp-client` (36 инструментов `mcp__ob2h__*`) плюс скилл `ob2h` **и**
+cordis-плагин `plugin/dsh-ob2h`, который даёт то же, что MemoryProvider в Hermes:
+сам подмешивает релевантные воспоминания блоком `<agent_memory>` перед ходом и сам
+пишет состоявшиеся ходы в память. Подробности — в
+[`docs/DSH_INTEGRATION.md`](docs/DSH_INTEGRATION.md):
 
 ```bash
-ob2h agent install --agent dsh     # блок mcp-ob2h в patch-слое профиля + скилл в $DSH_HOME/skills
+ob2h agent install --agent dsh     # блок ob2h в patch-слое профиля (MCP + плагин) + скилл
 ob2h agent status                  # строка «DSH (DeepSeek Harness)»
 ```
 
@@ -215,7 +218,7 @@ ob2h doctor --fix   # автоисправление конфигов агент
 # Мультиагентное управление (Claude, Cursor, Windsurf, ZCode, Gemini, Qwen, OpenCode, DSH)
 ob2h agent install --agent all
 ob2h agent status
-ob2h agent install --agent dsh     # DeepSeek Harness: MCP через dsh-mcp-client + скилл
+ob2h agent install --agent dsh     # DeepSeek Harness: MCP через dsh-mcp-client + cordis-плагин + скилл
 
 # Управление проектами и AST-сканирование кодовой базы
 ob2h project list
