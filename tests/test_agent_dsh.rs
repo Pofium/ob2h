@@ -17,6 +17,7 @@ fn test_patch_block_fields() -> anyhow::Result<()> {
         exe,
         &std::path::PathBuf::from(r"C:\Projects\ob2h"),
         &std::path::PathBuf::from(r"C:\Projects\ob2h\data"),
+        None,
     );
 
     // Поля Config, которые требует dsh-mcp-client.
@@ -27,12 +28,67 @@ fn test_patch_block_fields() -> anyhow::Result<()> {
     assert!(block.contains("args: ['serve']"));
     assert!(block.contains("cwd: 'C:/Projects/ob2h'"));
     assert!(block.contains("OB2H_DATA_DIR: 'C:/Projects/ob2h/data'"));
-    // Секрет в патче не хранится — только индирекция через env хоста.
-    assert!(block.contains("!!js process.env.OB2H_LLM_API_KEY"));
+    // Секрет в патче не хранится вообще: ключ ob2h берёт из .env рядом с cwd.
+    // Упоминание переменной в поясняющем комментарии допустимо — важны отсутствие
+    // YAML-строки присваивания и отсутствие подстановки пустой строки.
+    assert!(!block.contains("OB2H_LLM_API_KEY:"));
+    assert!(!block.contains("!!js"));
     assert!(!block.contains("sk-"));
+    // Без исходника плагина строка insert остаётся одна (MCP-клиент) + пояснение.
+    assert_eq!(block.matches("- insert:").count(), 1);
+    assert!(!block.contains("id: ob2h-memory"));
+    assert!(block.contains("cordis-плагин-провайдер не найден"));
     // Обратные слэши в YAML-одинарных кавычках ломали бы путь на Linux-сборке.
     assert!(!block.contains(r"C:\"));
     let _ = tmp;
+    Ok(())
+}
+
+#[test]
+fn test_patch_block_with_plugin_provider() -> anyhow::Result<()> {
+    let block = AgentManager::render_dsh_patch_block(
+        r"C:\Projects\ob2h\target\release\ob2h.exe",
+        &std::path::PathBuf::from(r"C:\Projects\ob2h"),
+        &std::path::PathBuf::from(r"C:\Projects\ob2h\data"),
+        Some(&std::path::PathBuf::from(
+            r"C:\Projects\ob2h\plugin\dsh-ob2h\index.js",
+        )),
+    );
+
+    // Второй insert — cordis-плагин-провайдер с абсолютным путём (0.2.0-rc.2 его резолвит).
+    assert_eq!(block.matches("- insert:").count(), 1);
+    assert!(block.contains("    - id: ob2h-memory"));
+    assert!(block.contains("name: 'C:/Projects/ob2h/plugin/dsh-ob2h/index.js'"));
+    assert!(block.contains("binary: 'C:/Projects/ob2h/target/release/ob2h.exe'"));
+    assert!(block.contains("source: 'dsh'"));
+    assert!(block.contains("author: 'dsh'"));
+    assert!(!block.contains("{{"));
+    assert!(!block.contains(r"C:\"));
+    Ok(())
+}
+
+#[test]
+fn test_plugin_entry_and_llm_key_detection() -> anyhow::Result<()> {
+    // В тестовом окружении cwd — корень репозитория, исходник плагина на месте.
+    let cwd = std::env::current_dir()?;
+    let entry = AgentManager::dsh_plugin_entry("ob2h", &cwd);
+    assert!(
+        entry
+            .as_ref()
+            .map(|p| p.ends_with("index.js"))
+            .unwrap_or(false),
+        "плагин должен находиться от корня репозитория: {entry:?}"
+    );
+
+    let tmp = tempdir()?;
+    assert!(!AgentManager::llm_key_configured(tmp.path()));
+    fs::write(tmp.path().join(".env"), "OB2H_LLM_API_KEY=\n")?;
+    assert!(!AgentManager::llm_key_configured(tmp.path()));
+    fs::write(
+        tmp.path().join(".env"),
+        "OB2H_LLM_BASE_URL=https://api.deepseek.com/v1\nOB2H_LLM_API_KEY=test-key-value\n",
+    )?;
+    assert!(AgentManager::llm_key_configured(tmp.path()));
     Ok(())
 }
 
@@ -46,6 +102,7 @@ fn test_upsert_appends_and_preserves_user_patches() -> anyhow::Result<()> {
         "C:/ob2h/ob2h.exe",
         &std::path::PathBuf::from("C:/ob2h"),
         &std::path::PathBuf::from("C:/ob2h/data"),
+        None,
     );
     let outcome = AgentManager::upsert_dsh_patch(&patch, &block)?;
     assert_eq!(outcome, DshPatchOutcome::Appended);
@@ -66,6 +123,7 @@ fn test_upsert_creates_missing_file() -> anyhow::Result<()> {
         "C:/ob2h/ob2h.exe",
         &std::path::PathBuf::from("C:/ob2h"),
         &std::path::PathBuf::from("C:/ob2h/data"),
+        None,
     );
 
     let outcome = AgentManager::upsert_dsh_patch(&patch, &block)?;
@@ -84,6 +142,7 @@ fn test_upsert_is_idempotent_and_updatable() -> anyhow::Result<()> {
         "C:/old/ob2h.exe",
         &std::path::PathBuf::from("C:/old"),
         &std::path::PathBuf::from("C:/old/data"),
+        None,
     );
     assert_eq!(
         AgentManager::upsert_dsh_patch(&patch, &block_old)?,
@@ -103,6 +162,7 @@ fn test_upsert_is_idempotent_and_updatable() -> anyhow::Result<()> {
         "C:/new/ob2h.exe",
         &std::path::PathBuf::from("C:/new"),
         &std::path::PathBuf::from("C:/new/data"),
+        None,
     );
     assert_eq!(
         AgentManager::upsert_dsh_patch(&patch, &block_new)?,
@@ -128,6 +188,7 @@ fn test_upsert_skips_manual_entry() -> anyhow::Result<()> {
         "C:/ob2h/ob2h.exe",
         &std::path::PathBuf::from("C:/ob2h"),
         &std::path::PathBuf::from("C:/ob2h/data"),
+        None,
     );
     assert_eq!(
         AgentManager::upsert_dsh_patch(&patch, &block)?,

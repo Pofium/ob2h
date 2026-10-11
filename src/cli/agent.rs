@@ -24,8 +24,10 @@ pub enum AgentTarget {
 const DSH_PATCH_BEGIN: &str = "# >>> ob2h:begin";
 const DSH_PATCH_END: &str = "# <<< ob2h:end";
 
-/// Блок patch-слоя профиля DSH: строка `insert` с одним сервером `dsh-mcp-client`.
-/// Плейсхолдеры: `{{BINARY}}`, `{{PROJECT_DIR}}`, `{{DATA_DIR}}`, `{{LLM_BASE_URL}}`, `{{LLM_MODEL}}`.
+/// Блок patch-слоя профиля DSH: два `insert` — MCP-клиент (инструменты) и
+/// cordis-плагин-провайдер (автозахват ходов + prefetch памяти).
+/// Плейсхолдеры: `{{BINARY}}`, `{{PROJECT_DIR}}`, `{{DATA_DIR}}`, `{{LLM_BASE_URL}}`,
+/// `{{LLM_MODEL}}`, `{{PLUGIN_ITEM}}` (готовый элемент списка `insert` под плагин).
 const DSH_PATCH_BLOCK_TEMPLATE: &str = r#"# >>> ob2h:begin — блок управляется `ob2h agent install --agent dsh`; ручные правки теряются
 - insert:
     - id: mcp-ob2h
@@ -41,8 +43,10 @@ const DSH_PATCH_BLOCK_TEMPLATE: &str = r#"# >>> ob2h:begin — блок упра
           OB2H_DATA_DIR: '{{DATA_DIR}}'
           OB2H_LLM_BASE_URL: '{{LLM_BASE_URL}}'
           OB2H_LLM_MODEL: '{{LLM_MODEL}}'
-          OB2H_LLM_API_KEY: !!js process.env.OB2H_LLM_API_KEY ?? ''
-# <<< ob2h:end — конец блока ob2h"#;
+          # API-ключ берётся самим ob2h из .env рядом с cwd (в .gitignore) или из
+          # OB2H_LLM_API_KEY в окружении хоста; пустую строку сюда НЕ пишем — она
+          # затирает переменную и мешает ob2h подхватить .env.
+{{PLUGIN_ITEM}}# <<< ob2h:end — конец блока ob2h"#;
 
 /// Исходник скилла для DSH (`skills/dsh/SKILL.md`), ставится в `$DSH_HOME/skills/ob2h/`.
 const DSH_SKILL_SOURCE: &str = include_str!("../../skills/dsh/SKILL.md");
@@ -395,21 +399,56 @@ description: "Долговременная память, AST-граф кода �
             .unwrap_or(false)
     }
 
-    /// Блок `insert` для `cordis.patch.yml` — ровно поля Config плагина `dsh-mcp-client`.
-    /// Ключ LLM передаётся через `!!js process.env.OB2H_LLM_API_KEY`: сам секрет в файле
-    /// не хранится (иначе его не видно в git-истории, но и в патче ему не место).
-    pub fn render_dsh_patch_block(exe: &str, project_dir: &Path, data_dir: &Path) -> String {
+    /// Блок `insert` для `cordis.patch.yml` — ровно поля Config плагина `dsh-mcp-client`
+    /// плюс, если найден исходник, элемент под cordis-плагин-провайдер `plugin/dsh-ob2h`.
+    /// Ключ LLM в патч не пишется: ob2h сам берёт его из `.env` рядом с cwd или из env хоста.
+    pub fn render_dsh_patch_block(
+        exe: &str,
+        project_dir: &Path,
+        data_dir: &Path,
+        plugin_entry: Option<&Path>,
+    ) -> String {
         let sl = |p: &Path| p.to_string_lossy().replace('\\', "/");
         let base_url = std::env::var("OB2H_LLM_BASE_URL")
             .unwrap_or_else(|_| "https://api.deepseek.com/v1".to_string());
         let model = std::env::var("OB2H_LLM_MODEL")
             .unwrap_or_else(|_| "deepseek-v4-flash".to_string());
+        let plugin_item = match plugin_entry {
+            Some(path) => format!(
+                "    - id: ob2h-memory\n      name: '{}'\n      config:\n        binary: '{}'\n        cwd: '{}'\n        dataDir: '{}'\n        source: 'dsh'\n        author: 'dsh'\n",
+                sl(path),
+                exe.replace('\\', "/"),
+                sl(project_dir),
+                sl(data_dir)
+            ),
+            None => "    # cordis-плагин-провайдер не найден (plugin/dsh-ob2h/index.js) — работает только MCP-клиент\n".to_string(),
+        };
         DSH_PATCH_BLOCK_TEMPLATE
             .replace("{{BINARY}}", &exe.replace('\\', "/"))
             .replace("{{PROJECT_DIR}}", &sl(project_dir))
             .replace("{{DATA_DIR}}", &sl(data_dir))
             .replace("{{LLM_BASE_URL}}", &base_url)
             .replace("{{LLM_MODEL}}", &model)
+            .replace("{{PLUGIN_ITEM}}", &plugin_item)
+    }
+
+    /// Найти корень репозитория ob2h по расположению бинарника или рабочему каталогу.
+    pub fn ob2h_repo_root(exe: &str, project_dir: &Path) -> Option<PathBuf> {
+        let exe_dir = Path::new(exe).parent()?;
+        // target/release/ob2h.exe → корень репозитория на два уровня выше.
+        [exe_dir.join("../.."), project_dir.to_path_buf()]
+            .into_iter()
+            .find(|candidate| candidate.join("Cargo.toml").is_file())
+    }
+
+    /// Путь к входному файлу cordis-плагина `dsh-ob2h` (если исходник на месте).
+    pub fn dsh_plugin_entry(exe: &str, project_dir: &Path) -> Option<PathBuf> {
+        let relative = Path::new("plugin").join("dsh-ob2h").join("index.js");
+        let mut candidates = vec![project_dir.join(&relative)];
+        if let Some(root) = Self::ob2h_repo_root(exe, project_dir) {
+            candidates.insert(0, root.join(&relative));
+        }
+        candidates.into_iter().find(|p| p.is_file())
     }
 
     /// Идемпотентная вставка/обновление блока по маркерам; остальные патчи не трогаются.
@@ -514,7 +553,9 @@ description: "Долговременная память, AST-граф кода �
             .unwrap_or_else(|| profile_dir.display().to_string());
 
         let patch_file = profile_dir.join("cordis.patch.yml");
-        let block = Self::render_dsh_patch_block(exe, &project_dir, &data_dir);
+        let plugin_entry = Self::dsh_plugin_entry(exe, &project_dir);
+        let block =
+            Self::render_dsh_patch_block(exe, &project_dir, &data_dir, plugin_entry.as_deref());
         match Self::upsert_dsh_patch(&patch_file, &block)? {
             DshPatchOutcome::Unchanged => println!(
                 "✅ DSH (профиль {}): блок ob2h в {} уже актуален",
@@ -544,10 +585,43 @@ description: "Долговременная память, AST-граф кода �
         println!("✅ DSH: скилл ob2h установлен: {}", skill_file.display());
 
         println!("💡 Профили с patchReload: live подхватывают патч без перезапуска; иначе перезапустите DSH.");
-        println!(
-            "💡 Инструменты появятся как mcp__ob2h__*; LLM-инструменты (dream_run, knowledge_extract, graph_reason) требуют OB2H_LLM_API_KEY в окружении хоста DSH."
-        );
+        match &plugin_entry {
+            Some(path) => println!(
+                "✅ DSH: cordis-плагин памяти подключён (автозахват ходов + prefetch <agent_memory>): {}",
+                path.display()
+            ),
+            None => println!(
+                "⚠️ DSH: cordis-плагин не найден (ожидался plugin/dsh-ob2h/index.js рядом с Cargo.toml) — работает только MCP-клиент, автозахвата ходов не будет"
+            ),
+        }
+        println!("💡 Инструменты появятся как mcp__ob2h__*.");
+        if !Self::llm_key_configured(&project_dir) {
+            println!(
+                "⚠️ LLM-инструменты (dream_run, knowledge_extract, graph_reason) выключены: положите OB2H_LLM_API_KEY в {}",
+                project_dir.join(".env").display()
+            );
+        }
         Ok(())
+    }
+
+    /// Есть ли ключ LLM: в окружении процесса или в `.env` рабочего каталога ob2h.
+    pub fn llm_key_configured(project_dir: &Path) -> bool {
+        if std::env::var("OB2H_LLM_API_KEY")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        fs::read_to_string(project_dir.join(".env"))
+            .map(|content| {
+                content.lines().any(|line| {
+                    line.trim_start()
+                        .strip_prefix("OB2H_LLM_API_KEY=")
+                        .map(|value| !value.trim().trim_matches('"').trim_matches('\'').is_empty())
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
     }
 
     /// Вспомогательный метод для обновления JSON файла конфигурации MCP.
