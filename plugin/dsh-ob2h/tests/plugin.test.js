@@ -5,11 +5,14 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   apply,
   blocksToText,
+  createLogger,
   install,
   queryFromMessages,
   resolveOptions,
@@ -255,6 +258,82 @@ test('сабагентские сессии не пишутся в память'
       (item) => item.method === 'tools/call' && item.params.name === 'session_ingest',
     )
     assert.equal(ingests.length, 0)
+  } finally {
+    await resources.memory.close()
+  }
+})
+
+test('файловый лог фиксирует решения recall и захвата', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ob2h-plugin-'))
+  const logFile = join(dir, 'logs', 'dsh-plugin.log')
+  const harness = fakeContext()
+  const opts = options({ logFile, logEvents: true })
+  const resources = makeResources(opts)
+
+  const waitFor = async (pattern) => {
+    const deadline = Date.now() + 8_000
+    while (Date.now() < deadline) {
+      try {
+        const text = readFileSync(logFile, 'utf8')
+        if (pattern.test(text)) return text
+      } catch {
+        // файла ещё нет
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    return readFileSync(logFile, 'utf8')
+  }
+
+  try {
+    const logger = createLogger(harness.ctx, opts)
+    assert.equal(logger.file, logFile)
+    install(harness.ctx, opts, resources, logger)
+
+    // 1. recall: подмешивание блока.
+    await harness.preStep(
+      { step: 1, signal: { aborted: false }, agent: { id: 'a1', session: { id: 's-log' } } },
+      async () => ({ kind: 'enter', messages: [entry('что мы знаем про кофе')] }),
+    )
+    // 2. turn/end без предшествующего turn/start — плагин загрузился в середине хода.
+    await harness.emit('session/event', { id: 's-log' }, { type: 'turn/end', data: { turn: 7 } })
+    // 3. Полный ход.
+    await harness.emit('session/event', { id: 's-log' }, { type: 'turn/start', data: { turn: 8 } })
+    await harness.emit('session/event', { id: 's-log' }, {
+      type: 'user/message',
+      data: { ...entry('вопрос человека'), source: { kind: 'user' } },
+    })
+    await harness.emit('session/event', { id: 's-log' }, {
+      type: 'user/message',
+      data: { ...entry('уточнение по ходу'), source: { kind: 'user' } },
+    })
+    await harness.emit('session/event', { id: 's-log' }, {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: 'ответ модели' }] } },
+    })
+    await harness.emit('session/event', { id: 's-log' }, { type: 'turn/end', data: { turn: 8 } })
+    await resources.memory.flush()
+
+    // Обе реплики человека попали в одну запись хода (руление посреди хода не теряется).
+    const journal = JSON.parse(await resources.rpc.toolCall('test_journal', {}))
+    const ingest = journal.find(
+      (item) => item.method === 'tools/call' && item.params?.name === 'session_ingest',
+    )
+    assert.ok(ingest, 'плагин должен вызвать session_ingest')
+    assert.equal(ingest.params.arguments.session_id, 's-log')
+    assert.equal(ingest.params.arguments.source, options().source)
+    const userMessage = ingest.params.arguments.messages.find((m) => m.role === 'user')
+    assert.equal(userMessage.content, 'вопрос человека\n\nуточнение по ходу')
+    const assistantMessage = ingest.params.arguments.messages.find((m) => m.role === 'assistant')
+    assert.equal(assistantMessage.content, 'ответ модели')
+
+    const log = await waitFor(/записан ход/)
+    assert.match(log, /INFO память подключена/)
+    assert.match(log, /INFO pre-step: подмешан блок памяти/)
+    assert.match(log, /INFO turn\/end s-log: пропущен — нет состояния/)
+    assert.match(log, /INFO turn\/end s-log: записан ход/)
+    // verbose-режим трассирует каждое событие и содержимое хода
+    assert.match(log, /EVENT event turn\/start s-log/)
+    assert.match(log, /EVENT user\/message s-log: \d+ симв\./)
   } finally {
     await resources.memory.close()
   }

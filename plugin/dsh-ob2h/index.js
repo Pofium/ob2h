@@ -19,6 +19,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { Ob2hMemory } from './lib/provider.js'
 import { Ob2hRpc } from './lib/rpc.js'
 
@@ -54,6 +56,53 @@ export const DEFAULTS = {
   maxChars: 4_000,
   callTimeoutMs: 900_000,
   startupTimeoutMs: 30_000,
+  // В Desktop-режиме логи харнесса не сохраняются на диск, поэтому плагин умеет
+  // писать свой лог файлом; `logEvents` дублирует туда каждое разобранное событие.
+  logFile: '',
+  logEvents: false,
+}
+
+/**
+ * Логгер плагина: пишет в `ctx.logger` (виден в консоли харнесса) и, если задан
+ * `logFile`, — в файл. Файловый лог нужен потому, что в Desktop-режиме вывод хоста
+ * не попадает никуда, где его можно прочитать постфактум.
+ */
+export function createLogger(ctx, options) {
+  const file = options.logFile
+    ? join(options.logFile)
+    : options.dataDir
+      ? join(options.dataDir, 'logs', 'dsh-plugin.log')
+      : ''
+  let prepared = false
+  const write = (level, message) => {
+    if (file) {
+      try {
+        if (!prepared) {
+          mkdirSync(dirname(file), { recursive: true })
+          prepared = true
+        }
+        appendFileSync(file, `[${new Date().toISOString()}] ${level} ${message}\n`)
+      } catch {
+        prepared = false // не повторять mkdir на каждый вызов, но и не падать
+      }
+    }
+    if (ctx?.logger) {
+      if (level === 'ERROR' || level === 'WARN') ctx.logger.warn?.(`ob2h: ${message}`)
+      else ctx.logger.debug?.(`ob2h: ${message}`)
+    }
+  }
+  return {
+    file,
+    info: (message) => write('INFO', message),
+    warn: (message) => write('WARN', message),
+    error: (message) => write('ERROR', message),
+    event: (message) => {
+      if (options.logEvents) write('EVENT', message)
+    },
+    debug: (message) => {
+      if (options.logEvents) write('DEBUG', message)
+    },
+  }
 }
 
 /** Собрать текст из блоков контента сообщения (`[{type:'text',text}]` или строка). */
@@ -142,9 +191,10 @@ export function createResources(options, logger) {
  * @param {any} ctx — контекст cordis (нужны systemPrompt.section, on, effect, get, logger)
  * @param {ReturnType<typeof resolveOptions>} options
  * @param {{rpc: Ob2hRpc, memory: Ob2hMemory}} resources
+ * @param {ReturnType<typeof createLogger>} [pluginLogger] — по умолчанию пишет в ctx.logger
  */
-export function install(ctx, options, resources) {
-  const logger = ctx.logger ?? console
+export function install(ctx, options, resources, pluginLogger) {
+  const logger = pluginLogger ?? createLogger(ctx, options)
   const { rpc, memory } = resources
 
   /** Живые агенты: нужны, чтобы не писать в память ходы сабагентов. */
@@ -183,18 +233,30 @@ export function install(ctx, options, resources) {
           // Ровно один раз на ход: на последующих шагах блок уже в истории.
           if (payload?.step !== 1) return decision
           const agent = payload.agent
-          if (!isPrimary(agent)) return decision
+          if (!isPrimary(agent)) {
+            logger.info(`pre-step: пропущен — сессия сабагента (${agent?.id ?? '?'})`)
+            return decision
+          }
           const query = queryFromMessages(decision.messages)
-          if (!query) return decision
+          if (!query) {
+            logger.info('pre-step: пропущен — в батче нет пользовательского текста')
+            return decision
+          }
           const block = await memory.recall(
             agent?.session?.id ?? agent?.id ?? '',
             query,
             options.recallTimeoutMs,
           )
-          if (!block) return decision
+          if (!block) {
+            logger.info(`pre-step: память пуста для "${query.slice(0, 60)}"`)
+            return decision
+          }
+          logger.info(
+            `pre-step: подмешан блок памяти (${block.length} симв.) для "${query.slice(0, 60)}"`,
+          )
           return { ...decision, messages: [...decision.messages, snapshotMessage(block)] }
         } catch (error) {
-          logger.debug?.(`ob2h: recall пропущен: ${String(error)}`)
+          logger.warn(`recall пропущен: ${String(error)}`)
           return decision
         }
       },
@@ -212,15 +274,20 @@ export function install(ctx, options, resources) {
         const sessionId = session?.id
         if (!sessionId) return
         const data = event?.data ?? {}
+        logger.event(`event ${event?.type} ${sessionId}`)
         switch (event?.type) {
           case 'turn/start':
             turns.set(sessionId, { user: '', assistant: [] })
+            logger.event(`turn/start ${sessionId} (ход ${data.turn ?? '?'})`)
             return
           case 'user/message': {
             const state = turns.get(sessionId)
             // Только настоящий ввод человека: инъекции плагинов (kind != 'user') не пишем.
             if (!state || data.source?.kind !== 'user') return
-            state.user = blocksToText(data.content)
+            // Человек может «рулить» посреди хода: сохраняем все его реплики хода.
+            const text = blocksToText(data.content).trim()
+            if (text) state.user = state.user ? `${state.user}\n\n${text}` : text
+            logger.event(`user/message ${sessionId}: ${state.user.length} симв.`)
             return
           }
           case 'assistant/message': {
@@ -233,17 +300,33 @@ export function install(ctx, options, resources) {
           case 'turn/end': {
             const state = turns.get(sessionId)
             turns.delete(sessionId)
-            if (!state) return
-            if (!state.user.trim() && state.assistant.length === 0) return
+            if (!state) {
+              // Штатная ситуация только при горячей загрузке плагина в середине хода
+              // или после перезапуска хоста: `turn/start` этого хода мы не видели.
+              logger.info(
+                `turn/end ${sessionId}: пропущен — нет состояния (ход начался до загрузки плагина)`,
+              )
+              return
+            }
+            if (!state.user.trim() && state.assistant.length === 0) {
+              logger.info(`turn/end ${sessionId}: пропущен — пустой ход`)
+              return
+            }
             const agent = typeof agents?.get === 'function' ? agents.get(sessionId) : undefined
-            if (!isPrimary(agent)) return
+            if (!isPrimary(agent)) {
+              logger.info(`turn/end ${sessionId}: пропущен — сессия сабагента`)
+              return
+            }
             memory.recordTurn(sessionId, state.user, state.assistant.join('\n\n'))
+            logger.info(
+              `turn/end ${sessionId}: записан ход (user ${state.user.trim().length} симв., assistant ${state.assistant.join('\n\n').length} симв.)`,
+            )
             return
           }
           default:
         }
       } catch (error) {
-        logger.debug?.(`ob2h: захват хода пропущен: ${String(error)}`)
+        logger.warn(`захват хода пропущен: ${String(error)}`)
       }
     })
 
@@ -259,8 +342,8 @@ export function install(ctx, options, resources) {
   )
   void rpc
     .start()
-    .then(() => logger.info?.('ob2h: память подключена (долгоживущий ob2h serve)'))
-    .catch((error) => logger.warn?.(`ob2h: процесс не поднялся сразу: ${String(error)}`))
+    .then(() => logger.info(`память подключена (долгоживущий ob2h serve; лог: ${logger.file || 'ctx.logger'})`))
+    .catch((error) => logger.warn(`процесс не поднялся сразу: ${String(error)}`))
 
   return { rpc, memory }
 }
@@ -273,9 +356,10 @@ export function install(ctx, options, resources) {
  */
 export function apply(ctx, config = {}) {
   const options = resolveOptions(config)
+  const logger = createLogger(ctx, options)
   if (!options.binary) {
-    ;(ctx.logger ?? console).warn?.('ob2h: не задан путь к бинарнику (config.binary) — плагин выключен')
+    logger.warn('не задан путь к бинарнику (config.binary) — плагин выключен')
     return undefined
   }
-  return install(ctx, options, createResources(options, ctx.logger ?? console))
+  return install(ctx, options, createResources(options, logger), logger)
 }
