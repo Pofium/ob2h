@@ -62,6 +62,8 @@ fn test_patch_block_with_plugin_provider() -> anyhow::Result<()> {
     assert!(block.contains("binary: 'C:/Projects/ob2h/target/release/ob2h.exe'"));
     assert!(block.contains("source: 'dsh'"));
     assert!(block.contains("author: 'dsh'"));
+    assert!(block.contains("logFile: '"));
+    assert!(block.contains("/logs/dsh-plugin.log'"));
     assert!(!block.contains("{{"));
     assert!(!block.contains(r"C:\"));
     Ok(())

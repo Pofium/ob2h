@@ -415,10 +415,11 @@ description: "Долговременная память, AST-граф кода �
             .unwrap_or_else(|_| "deepseek-v4-flash".to_string());
         let plugin_item = match plugin_entry {
             Some(path) => format!(
-                "    - id: ob2h-memory\n      name: '{}'\n      config:\n        binary: '{}'\n        cwd: '{}'\n        dataDir: '{}'\n        source: 'dsh'\n        author: 'dsh'\n",
+                "    - id: ob2h-memory\n      name: '{}'\n      config:\n        binary: '{}'\n        cwd: '{}'\n        dataDir: '{}'\n        source: 'dsh'\n        author: 'dsh'\n        logFile: '{}/logs/dsh-plugin.log'\n",
                 sl(path),
                 exe.replace('\\', "/"),
                 sl(project_dir),
+                sl(data_dir),
                 sl(data_dir)
             ),
             None => "    # cordis-плагин-провайдер не найден (plugin/dsh-ob2h/index.js) — работает только MCP-клиент\n".to_string(),
