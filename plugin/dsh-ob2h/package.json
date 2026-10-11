@@ -1,0 +1,23 @@
+{
+  "name": "dsh-ob2h",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "cordis-плагин DeepSeek Harness: автозахват ходов и prefetch <agent_memory> через ob2h serve (JSON-RPC stdio)",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./provider": "./lib/provider.js",
+    "./rpc": "./lib/rpc.js"
+  },
+  "files": [
+    "index.js",
+    "lib"
+  ],
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
