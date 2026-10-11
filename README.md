@@ -27,7 +27,7 @@
 
 Обычные ИИ-ассистенты забывают контекст и архитектуру ваших репозиториев, как только закрывается чат.
 
-**OB2H (OmnesBot to Harness)** — это локальный «мозг», долговременная память и AST-граф кода для AI-агентов (**Hermes, Claude Code, Cursor, Windsurf, ZCode, Gemini CLI, Qwen Code, OpenCode**), полностью написанный на **Rust**.
+**OB2H (OmnesBot to Harness)** — это локальный «мозг», долговременная память и AST-граф кода для AI-агентов (**Hermes, Claude Code, Cursor, Windsurf, ZCode, Gemini CLI, Qwen Code, OpenCode, DSH**), полностью написанный на **Rust**.
 
 Он даёт агенту возможность:
 1. 🧠 **Помнить всё важное о вас и ваших проектах**: факты, предпочтения, стек технологий и архитектурные решения.
@@ -104,7 +104,16 @@ Hermes. Теперь **каждый ход диалога пишется в па
 ob2h agent install --agent all
 ob2h doctor --fix
 ```
-Команда автоматически обнаружит и сконфигурирует Claude Code, Cursor, Windsurf, ZCode, Gemini/Antigravity, Qwen Code и OpenCode!
+Команда автоматически обнаружит и сконфигурирует Claude Code, Cursor, Windsurf, ZCode, Gemini/Antigravity, Qwen Code, OpenCode и DSH (DeepSeek Harness).
+
+Для DSH (`dsh` / Electron-GUI) интеграция — это MCP-сервер через штатный плагин
+`@deepseek-ai/dsh-mcp-client` плюс скилл `ob2h`; подробности и режим только-MCP
+(без автозахвата ходов) — в [`docs/DSH_INTEGRATION.md`](docs/DSH_INTEGRATION.md):
+
+```bash
+ob2h agent install --agent dsh     # блок mcp-ob2h в patch-слое профиля + скилл в $DSH_HOME/skills
+ob2h agent status                  # строка «DSH (DeepSeek Harness)»
+```
 
 ---
 
@@ -203,9 +212,10 @@ ob2h plugin status
 ob2h doctor
 ob2h doctor --fix   # автоисправление конфигов агентов и Git-хуков
 
-# Мультиагентное управление (Claude, Cursor, Windsurf, ZCode, Gemini, Qwen, OpenCode)
+# Мультиагентное управление (Claude, Cursor, Windsurf, ZCode, Gemini, Qwen, OpenCode, DSH)
 ob2h agent install --agent all
 ob2h agent status
+ob2h agent install --agent dsh     # DeepSeek Harness: MCP через dsh-mcp-client + скилл
 
 # Управление проектами и AST-сканирование кодовой базы
 ob2h project list

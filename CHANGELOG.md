@@ -6,6 +6,17 @@
 ## Unreleased
 
 ### Added
+- **Интеграция с DSH (DeepSeek Harness): `ob2h agent install --agent dsh`** — MCP-сервер
+  ob2h подключается к харнессу штатным плагином `@deepseek-ai/dsh-mcp-client`:
+  идемпотентный блок `insert` между маркерами `# >>> ob2h:begin` … `# <<< ob2h:end`
+  в `$DSH_HOME/profiles/<профиль>/cordis.patch.yml` (чужие патчи и ручная запись с
+  `serverName: ob2h` не трогаются) + скилл `ob2h` в `$DSH_HOME/skills/ob2h/SKILL.md`
+  из нового исходника `skills/dsh/SKILL.md` (пути темплейтятся под машину). Инструменты
+  видны модели как `mcp__ob2h__*`; профиль определяется по `$DSH_PROFILE`/`desktop`/`web`,
+  дом — по `$DSH_HOME`/`~/.dsh`, `--path` задаёт профиль явно. Контракт MCP-инструментов
+  не менялся. Гайд — `docs/DSH_INTEGRATION.md`, ADR-16 в `PLAN.md` §6.
+- **`ob2h agent status` и `ob2h doctor` показывают DSH** — строка «DSH (DeepSeek Harness)»
+  с путём patch-файла профиля; `doctor --fix` доустанавливает блок.
 - **Команда `ob2h update` (check/apply/status)** с подкомандами:
   - `ob2h update check` — принудительная проверка GitHub Releases на новую версию
   - `ob2h update apply [--yes]` — скачать последний релиз, распаковать,

@@ -168,10 +168,10 @@ pub enum DbCommands {
 pub enum AgentCommands {
     /// Установить и настроить интеграцию для агента
     Install {
-        /// Целевой агент (all|claude|cursor|windsurf|zcode|gemini|qwen|opencode|hermes)
+        /// Целевой агент (all|claude|cursor|windsurf|zcode|gemini|qwen|opencode|dsh|hermes)
         #[arg(short, long, default_value = "all")]
         agent: AgentTarget,
-        /// Кастомный путь к проекту (для локальной конфигурации .cursor / .zcode)
+        /// Кастомный путь к проекту (для локальной конфигурации .cursor / .zcode) или к профилю DSH
         #[arg(short, long)]
         path: Option<String>,
     },

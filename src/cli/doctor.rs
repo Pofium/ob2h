@@ -491,6 +491,29 @@ impl Doctor {
             },
             details: format!("Конфиг: {}", opencode_cfg.display()),
         });
+
+        // 8. DSH (DeepSeek Harness): регистрация — блок в patch-слое профиля.
+        let dsh_home = AgentManager::dsh_home();
+        let dsh_profile = AgentManager::dsh_profile_dir(&dsh_home);
+        let dsh_patch = dsh_profile
+            .as_ref()
+            .map(|p| p.join("cordis.patch.yml"))
+            .unwrap_or_else(|| dsh_home.join("profiles").join("desktop").join("cordis.patch.yml"));
+        let mut dsh_has_ob2h = AgentManager::dsh_patch_configured(&dsh_patch);
+        if !dsh_has_ob2h && self.fix && dsh_profile.is_some() {
+            let _ = AgentManager::install_dsh(&exe, None);
+            dsh_has_ob2h = AgentManager::dsh_patch_configured(&dsh_patch);
+        }
+        results.push(DoctorItem {
+            category: "AI-Агенты (MCP)".to_string(),
+            name: "DSH (DeepSeek Harness)".to_string(),
+            status: if dsh_has_ob2h {
+                DoctorStatus::Ok
+            } else {
+                DoctorStatus::Warn
+            },
+            details: format!("Patch-слой: {}", dsh_patch.display()),
+        });
     }
 
     fn check_project_hooks(&self, results: &mut Vec<DoctorItem>) {
