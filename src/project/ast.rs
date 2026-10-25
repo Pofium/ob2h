@@ -2073,6 +2073,7 @@ impl AstCodeExtractor {
                     // -> Type` без тела; переносы схлопываем в пробелы)
                     let sig = m0.as_str().split_whitespace().collect::<Vec<_>>().join(" ");
                     let line = content[..fn_match.start()].matches('\n').count() + 1;
+                    let line_end = ts_body_end(&lines, line.saturating_sub(1)) + 1;
                     out.nodes.push(AstNode {
                         node_id: node_id.clone(),
                         label: fn_name.to_string(),
@@ -2080,7 +2081,7 @@ impl AstCodeExtractor {
                         description: format!("Функция `{}` ({}) в {}", fn_name, sig, rel_path),
                         file_path: rel_path.to_string(),
                         line_start: line,
-                        line_end: line,
+                        line_end: line_end.max(line),
                     });
                     out.edges.push(AstEdge {
                         source_node_id: file_node_id.to_string(),
@@ -7474,6 +7475,41 @@ fn resolve_module_file(module: &str, from_file: &str, files: &HashSet<String>) -
     let m = module.trim();
     if m.is_empty() {
         return None;
+    }
+
+    // Rust crate::, super::, self::
+    if m.starts_with("crate::") || m.starts_with("super::") || m.starts_with("self::") || m.contains("::") {
+        let ups = m.matches("super::").count();
+        let rel = m.trim_start_matches("crate::");
+        let rel = rel.trim_start_matches("self::");
+        let mut rel = rel.to_string();
+        for _ in 0..ups {
+            rel = rel.trim_start_matches("super::").to_string();
+        }
+        let parts: Vec<&str> = rel.split("::").filter(|p| !p.is_empty()).collect();
+        let prefix = if m.starts_with("crate::") {
+            "src/".to_string()
+        } else if ups > 0 {
+            let mut d = dir_of(from_file);
+            for _ in 0..ups {
+                d = dir_of(&d);
+            }
+            if d.is_empty() { d } else { format!("{d}/") }
+        } else {
+            let d = dir_of(from_file);
+            if d.is_empty() { String::new() } else { format!("{d}/") }
+        };
+        for k in (1..=parts.len()).rev() {
+            let b = parts[..k].join("/");
+            let f1 = format!("{prefix}{b}.rs");
+            if files.contains(&f1) {
+                return Some(f1);
+            }
+            let f2 = format!("{prefix}{b}/mod.rs");
+            if files.contains(&f2) {
+                return Some(f2);
+            }
+        }
     }
 
     // Типовые корни Vite/tsconfig-алиаса `@/…`.
