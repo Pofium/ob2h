@@ -476,6 +476,67 @@ impl ProjectService {
             Vec::new()
         };
 
+        // Для инкрементального сканирования подгружаем существующие символы и ast_refs
+        // из неизменённых файлов, чтобы не терять межфайловые связи при резолве.
+        if incremental && (!scan_res.file_meta.is_empty() || !deleted_files.is_empty()) {
+            let conn = self.conn.lock().unwrap();
+            // Подгружаем символы неизменённых файлов
+            let mut stmt = conn.prepare(
+                "SELECT node_id, label, node_type, description, file_path, line_start, line_end                  FROM graph_nodes WHERE project_id = ?1 AND provenance = 'ast'"
+            )?;
+            let rows = stmt.query_map(params![project_id], |r| {
+                Ok(crate::project::ast::AstNode {
+                    node_id: r.get(0)?,
+                    label: r.get(1)?,
+                    node_type: r.get(2)?,
+                    description: r.get(3)?,
+                    file_path: r.get(4)?,
+                    line_start: r.get::<_, i64>(5)? as usize,
+                    line_end: r.get::<_, i64>(6)? as usize,
+                })
+            })?;
+            for row in rows.flatten() {
+                if !scan_res.file_meta.contains_key(&row.file_path) && !deleted_files.contains(&row.file_path) {
+                    scan_res.nodes.push(row);
+                }
+            }
+
+            // Подгружаем сохранённые ast_refs (вызовы и импорты) для неизменённых файлов
+            let mut stmt_refs = conn.prepare(
+                "SELECT rel_path, line, kind, name, module, item, alias FROM ast_refs WHERE project_id = ?1"
+            )?;
+            let ref_rows = stmt_refs.query_map(params![project_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)? as usize,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                ))
+            })?;
+            for r in ref_rows.flatten() {
+                let (rel_path, line, kind, name, module, item, alias) = r;
+                if !scan_res.file_meta.contains_key(&rel_path) && !deleted_files.contains(&rel_path) {
+                    if kind == "call" {
+                        scan_res.call_sites.push(crate::project::ast::CallSite {
+                            rel_path,
+                            line,
+                            name,
+                        });
+                    } else if kind == "import" {
+                        scan_res.imports.push(crate::project::ast::ImportRef {
+                            rel_path,
+                            module: module.unwrap_or_default(),
+                            item,
+                            alias,
+                        });
+                    }
+                }
+            }
+        }
+
         // Ф39.1: type-pass — резолв простых вызовов (Rust/Python) по импортам
         // и same-file; CALLS-рёбра получают provenance=RESOLVED
         // Ф41: резолв IMPORTS-рёбер во внутренние файлы (относительные Python,
@@ -672,6 +733,54 @@ impl ProjectService {
                         edge.provenance,
                     ],
                 )?;
+            }
+        }
+
+        // Сохраняем/обновляем ast_refs для изменённых или всех файлов
+        if !incremental {
+            tx.execute("DELETE FROM ast_refs WHERE project_id = ?1", params![project_id])?;
+        } else {
+            for del_file in &deleted_files {
+                tx.execute("DELETE FROM ast_refs WHERE project_id = ?1 AND rel_path = ?2", params![project_id, del_file])?;
+            }
+            for rel_path in scan_res.file_meta.keys() {
+                tx.execute("DELETE FROM ast_refs WHERE project_id = ?1 AND rel_path = ?2", params![project_id, rel_path])?;
+            }
+        }
+
+        {
+            let mut insert_ref = tx.prepare_cached(
+                "INSERT INTO ast_refs (project_id, rel_path, line, kind, name, module, item, alias, created_at)                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+            )?;
+            for site in &scan_res.call_sites {
+                if !incremental || scan_res.file_meta.contains_key(&site.rel_path) {
+                    insert_ref.execute(params![
+                        project_id,
+                        site.rel_path,
+                        site.line as i64,
+                        "call",
+                        site.name,
+                        None::<String>,
+                        None::<String>,
+                        None::<String>,
+                        now
+                    ])?;
+                }
+            }
+            for imp in &scan_res.imports {
+                if !incremental || scan_res.file_meta.contains_key(&imp.rel_path) {
+                    insert_ref.execute(params![
+                        project_id,
+                        imp.rel_path,
+                        0i64,
+                        "import",
+                        imp.item.as_deref().unwrap_or(&imp.module),
+                        Some(&imp.module),
+                        imp.item.as_deref(),
+                        imp.alias.as_deref(),
+                        now
+                    ])?;
+                }
             }
         }
 

@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -106,6 +106,24 @@ CREATE INDEX IF NOT EXISTS idx_memlink_to   ON memory_links(to_id);
 pub const MIGRATION_V7: &str = r#"
 ALTER TABLE memory_links ADD COLUMN deleted_at TEXT;
 CREATE INDEX IF NOT EXISTS idx_memlink_deleted ON memory_links(deleted_at);
+"#;
+
+/// M8 (v1.8+): ast_refs для точного инкрементального перерезолва межфайловых CALLS/IMPORTS.
+pub const MIGRATION_V8: &str = r#"
+CREATE TABLE IF NOT EXISTS ast_refs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  rel_path TEXT NOT NULL,
+  line INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  module TEXT,
+  item TEXT,
+  alias TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ast_refs_proj_path ON ast_refs(project_id, rel_path);
+CREATE INDEX IF NOT EXISTS idx_ast_refs_target_name ON ast_refs(project_id, name);
 "#;
 
 /// M6 (v1.3, Фазы 26–27): Ralph Knowledge Layer — циклы разработки.
@@ -336,6 +354,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V5)?;
         conn.execute_batch(MIGRATION_V6)?;
         conn.execute_batch(MIGRATION_V7)?;
+        conn.execute_batch(MIGRATION_V8)?;
     } else {
         if current_version < 2 {
             conn.execute_batch(MIGRATION_V2)?;
@@ -354,6 +373,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         }
         if current_version < 7 {
             conn.execute_batch(MIGRATION_V7)?;
+        }
+        if current_version < 8 {
+            conn.execute_batch(MIGRATION_V8)?;
         }
     }
 
