@@ -82,7 +82,7 @@ fn tools_list_serialization_contains_annotations() {
         .filter(|t| t["annotations"]["destructiveHint"] == Value::Bool(true))
         .count();
     assert!(read_only >= 10, "read-only инструментов: {read_only}");
-    assert_eq!(destructive, 2, "destructive: {destructive}");
+    assert_eq!(destructive, 3, "destructive: {destructive}");
     // контракт аргументов не тронут: inputSchema у всех на месте
     assert!(json.iter().all(|t| t["inputSchema"].is_object()));
 }

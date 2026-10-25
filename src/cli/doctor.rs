@@ -105,6 +105,37 @@ impl Doctor {
             });
         }
 
+        // 3.6 Ф59.3: Secrets Vault статус
+        if let Some(ref db) = self.db {
+            let (init, rec_count): (bool, i64) = db
+                .with_conn(|conn| {
+                    let inited: bool = conn
+                        .query_row(
+                            "SELECT value FROM kv WHERE key = 'secrets.initialized'",
+                            [],
+                            |r| r.get::<_, String>(0),
+                        )
+                        .map(|v| v == "1")
+                        .unwrap_or(false);
+                    let count: i64 = conn
+                        .query_row("SELECT count(*) FROM secrets", [], |r| r.get(0))
+                        .unwrap_or(0);
+                    Ok((inited, count))
+                })
+                .unwrap_or((false, 0));
+
+            results.push(DoctorItem {
+                category: "Хранилище секретов (Secrets Vault)".to_string(),
+                name: "Состояние сейфа".to_string(),
+                status: if init { DoctorStatus::Ok } else { DoctorStatus::Warn },
+                details: if init {
+                    format!("инициализировано; записей: {rec_count}; разблокировка: 'ob2h secrets unlock'")
+                } else {
+                    "не инициализировано; запуск: 'ob2h secrets init'".to_string()
+                },
+            });
+        }
+
         // 4. Проверка подключения AI-агентов
         self.check_agents(&mut results);
 

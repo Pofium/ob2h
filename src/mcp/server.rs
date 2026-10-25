@@ -1548,14 +1548,17 @@ impl McpServer {
                         let rf: i64 = conn
                             .query_row("SELECT count(*) FROM ralph_findings", [], |r| r.get(0))
                             .unwrap_or(0);
-                        Ok((m, r, d, c, gn, ge, dr, rr, ri, rf))
+                        let sec: i64 = conn
+                            .query_row("SELECT count(*) FROM secrets", [], |r| r.get(0))
+                            .unwrap_or(0);
+                        Ok((m, r, d, c, gn, ge, dr, rr, ri, rf, sec))
                     })
                     .unwrap_or_default();
 
                 format!(
-                    "memories={} relations={} documents={} chunks={} graph_nodes={} graph_edges={} dream_runs={} db={}KB backend={} ralph: runs={} iters={} findings={}",
+                    "memories={} relations={} documents={} chunks={} graph_nodes={} graph_edges={} dream_runs={} db={}KB backend={} ralph: runs={} iters={} findings={} secrets: records={}",
                     counts.0, counts.1, counts.2, counts.3, counts.4, counts.5, counts.6, db_size / 1024, backend,
-                    counts.7, counts.8, counts.9
+                    counts.7, counts.8, counts.9, counts.10
                 )
             }
             "omnes_backup" => match self.ctx.backup.create() {
@@ -1916,6 +1919,57 @@ impl McpServer {
                     Ok(imp) => imp.markdown_summary,
                     Err(e) => format!("[Error] {e}"),
                 }
+            }
+            "secrets_status" => {
+                match self.ctx.secrets.status() {
+                    Ok(st) => {
+                        serde_json::to_string_pretty(&st).unwrap_or_else(|e| format!("[Error] {e}"))
+                    }
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "secrets_set" => {
+                let name = match args.get("name").and_then(|v| v.as_str()) {
+                    Some(n) => n,
+                    None => return "[Error] name is required".to_string(),
+                };
+                let value = match args.get("value").and_then(|v| v.as_str()) {
+                    Some(v) => v,
+                    None => return "[Error] value is required".to_string(),
+                };
+                let hint = args.get("hint").and_then(|v| v.as_str());
+
+                match self.ctx.secrets.set(name, value, hint) {
+                    Ok(()) => format!("✓ Секрет \"{name}\" успешно зашифрован и сохранен"),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "secrets_get" => {
+                let name = match args.get("name").and_then(|v| v.as_str()) {
+                    Some(n) => n,
+                    None => return "[Error] name is required".to_string(),
+                };
+
+                match self.ctx.secrets.get(name) {
+                    Ok(val) => val.to_string(),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "secrets_delete" => {
+                let name = match args.get("name").and_then(|v| v.as_str()) {
+                    Some(n) => n,
+                    None => return "[Error] name is required".to_string(),
+                };
+
+                match self.ctx.secrets.delete(name) {
+                    Ok(true) => format!("✓ Секрет \"{name}\" успешно удален"),
+                    Ok(false) => format!("[Error] секрет \"{name}\" не найден"),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "secrets_lock" => {
+                self.ctx.secrets.lock();
+                "✓ Хранилище секретов заблокировано".to_string()
             }
             other => format!("[Error] Unknown tool {other}"),
         }

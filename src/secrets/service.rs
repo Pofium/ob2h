@@ -158,6 +158,18 @@ impl SecretsService {
         Ok(())
     }
 
+    /// Разблокировка через проверенный ключ (для IPC)
+    pub fn unlock_with_key(&self, key: Zeroizing<[u8; 32]>) {
+        let deadline = Instant::now() + self.default_ttl;
+        let mut session_guard = self.session.lock().unwrap();
+        *session_guard = Some(UnlockedSession {
+            key,
+            deadline,
+            ttl: self.default_ttl,
+        });
+        info!("Хранилище секретов разблокировано через IPC (TTL: {} сек)", self.default_ttl.as_secs());
+    }
+
     /// Блокировка хранилища и немедленное затирание ключа из памяти.
     pub fn lock(&self) {
         let mut session_guard = self.session.lock().unwrap();

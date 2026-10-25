@@ -4,6 +4,8 @@ pub mod bench_history;
 pub mod db;
 pub mod dedup;
 pub mod doctor;
+pub mod secrets;
+pub use secrets::{SecretsCli, SecretsCommands};
 
 pub use agent::{AgentManager, AgentTarget};
 use clap::{Parser, Subcommand};
@@ -89,6 +91,11 @@ pub enum Commands {
         command: ProjectCliCommands,
     },
     /// Ralph Knowledge Layer: циклы разработки (Фазы 26–28)
+    /// Хранилище зашифрованных секретов (v1.9, Фаза 57)
+    Secrets {
+        #[command(subcommand)]
+        command: SecretsCommands,
+    },
     Ralph {
         #[command(subcommand)]
         command: RalphCommands,

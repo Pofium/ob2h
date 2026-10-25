@@ -24,8 +24,10 @@ pub fn annotations_for(name: &str) -> Option<serde_json::Value> {
         "project_scan_status",
         "ralph_report",
         "workspace_read",
+        "secrets_status",
+        "secrets_get",
     ];
-    const DESTRUCTIVE: &[&str] = &["memory_forget", "dream_restore"];
+    const DESTRUCTIVE: &[&str] = &["memory_forget", "dream_restore", "secrets_delete"];
 
     if READ_ONLY.contains(&name) {
         return Some(serde_json::json!({ "readOnlyHint": true, "destructiveHint": false }));
@@ -547,6 +549,58 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "note": { "type": "string", "description": "Причина слияния — попадает в meta обеих сторон" }
                 },
                 "required": ["keys"]
+            }),
+        },
+        // v1.9: Secrets Vault (Фаза 58)
+        McpToolDef {
+            name: "secrets_status".to_string(),
+            description: "Проверить статус хранилища секретов (Secrets Vault): инициализировано ли, заблокировано или разблокировано, оставшееся время TTL и список известных имен секретов без их значений.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        McpToolDef {
+            name: "secrets_set".to_string(),
+            description: "Сохранить или обновить зашифрованный секрет (пароль, токен, API-ключ). Требует разблокированного хранилища ('ob2h secrets unlock'). name: идентификатор [A-Za-z0-9._-], value: значение секрета (до 64 КБ), hint: краткое человекочитаемое описание назначения секрета.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Имя секрета [A-Za-z0-9._-]" },
+                    "value": { "type": "string", "description": "Секретное значение (до 64 КБ)" },
+                    "hint": { "type": "string", "description": "Несекретное пояснение или подсказка (опционально)" }
+                },
+                "required": ["name", "value"]
+            }),
+        },
+        McpToolDef {
+            name: "secrets_get".to_string(),
+            description: "Расшифровать и получить значение секрета по имени. Требует разблокированного хранилища ('ob2h secrets unlock'). Никогда не вызывается автоматически — только по прямому указанию пользователя.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Имя запрашиваемого секрета" }
+                },
+                "required": ["name"]
+            }),
+        },
+        McpToolDef {
+            name: "secrets_delete".to_string(),
+            description: "Удалить секрет из зашифрованного хранилища по имени. Требует разблокированного хранилища.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Имя удаляемого секрета" }
+                },
+                "required": ["name"]
+            }),
+        },
+        McpToolDef {
+            name: "secrets_lock".to_string(),
+            description: "Немедленно заблокировать хранилище секретов и затереть мастер-ключ из оперативной памяти процесса.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
             }),
         },
     ]

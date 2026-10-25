@@ -200,3 +200,10 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   падает `404 Not Found`. Обход без правок кода: `OB2H_UPDATE_REPO=Pofium/ob2h ob2h update check`
   (проверено 10.10.2026 — видит v1.8.0). Релизы на GitVerse апдейтер НЕ видит: у GitVerse
   свой хост `api.gitverse.ru` и свой Accept-хедер — поддержки нет.
+
+## Хранилище секретов (Secrets Vault, v1.9)
+- Зашифрованный сейф для ключей, токенов и паролей на базе Argon2id + XChaCha20-Poly1305 (схема M9).
+- **Правило 1 (Ввод PIN):** Пин вводится ТОЛЬКО пользователем в локальном терминале (`ob2h secrets unlock`). Агенту ЗАПРЕЩЕНО запрашивать PIN в чате или пытаться передавать его в аргументы инструментов.
+- **Правило 2 (Явный запрос):** Доступ к секрету (`secrets_get(name)`) вызывается только при явной команде пользователя («используй токен X для вызова API»).
+- **Правило 3 (Изоляция):** Модели строго ЗАПРЕЩЕНО сохранять расшифрованные секреты в память (`memory_save`), заметки (`workspace_write`) или выводить их в открытый чат без необходимости.
+- Инструменты MCP: `secrets_status`, `secrets_set`, `secrets_get`, `secrets_delete`, `secrets_lock`.

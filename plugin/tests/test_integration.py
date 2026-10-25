@@ -41,10 +41,8 @@ class TestRealServer(unittest.TestCase):
     def test_handshake_and_contract(self):
         tools = self.rpc.tools_list()
         names = [t["name"] for t in tools]
-        # контракт v1.5: 36 инструментов = 25 базовых v1.2 + memory_feedback №26
-        # + ralph_*/ast_* №27–33 (v1.3) + memory_merge №34 (Ф31.2)
-        # + project_call_path №35 (Ф36, трек C) + project_scan_status №36 (MCP-only scan)
-        self.assertEqual(len(names), 36)
+        # контракт v1.9: 41 инструмент (v1.5 36 + 5 secrets_* Ф58)
+        self.assertEqual(len(names), 41)
         for required in (
             "memory_feedback",
             "memory_merge",
@@ -57,6 +55,11 @@ class TestRealServer(unittest.TestCase):
             "ast_history",
             "project_call_path",
             "project_scan_status",
+            "secrets_status",
+            "secrets_set",
+            "secrets_get",
+            "secrets_delete",
+            "secrets_lock",
         ):
             self.assertIn(required, names)
 

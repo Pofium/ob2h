@@ -4,7 +4,7 @@ use ob2h::mcp::McpServer;
 use ob2h::mcp::tools::list_tools;
 use tempfile::tempdir;
 
-/// Снапшот контракта: 36 инструментов (26 базовых v1.3 + 7 Ralph + memory_merge
+/// Снапшот контракта: 41 инструмент (v1.9: +5 secrets_*) (26 базовых v1.3 + 7 Ralph + memory_merge
 /// + project_scan_status).
 #[test]
 fn test_tools_list_contract_snapshot() {
@@ -52,6 +52,12 @@ fn test_tools_list_contract_snapshot() {
         "ast_history",
         // v1.4: Явное слияние дублей (Фаза 31)
         "memory_merge",
+        // v1.9: Secrets Vault (Фаза 58)
+        "secrets_status",
+        "secrets_set",
+        "secrets_get",
+        "secrets_delete",
+        "secrets_lock",
     ];
     assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.4.md");
 }

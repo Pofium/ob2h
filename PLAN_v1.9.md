@@ -299,34 +299,34 @@ ciphertext = nonce (24 b) || ciphertext || tag (16 b)
 ### Фаза 57 — Сервис и CLI (оценка: 1 день)
 - [x] **57.1** `src/secrets/service.rs` (`SecretsService`): состояние `Locked|Unlocked{K, deadline}`,
       `init`, `unlock`, `lock`, `rekey`, `set/get/delete/list`, TTL-проверка, zeroize, аудит-логи.
-- [ ] **57.2** CLI-подкоманда `ob2h secrets` (`src/cli/`): `init`, `unlock`, `lock`, `status`,
+- [x] **57.2** CLI-подкоманда `ob2h secrets` (`src/cli/`): `init`, `unlock`, `lock`, `status`,
       `rekey`, `list`, `show <name>` (для человека, печатает значение в stdout).
 - [x] **57.3** Env-конфиг в `src/config.rs`: `OB2H_SECRETS_TTL_MIN` (дефолт 30),
       `OB2H_SECRETS_AUTO_LOCK` (дефолт true), `OB2H_SECRETS_KDF_MEM_MIB` (дефолт 64).
-- [ ] **57.4** Тесты: TTL с замоканным сервисом времени; rekey-транзакционность (сбой на
+- [x] **57.4** Тесты: TTL с замоканным сервисом времени; rekey-транзакционность (сбой на
       середине не портит vault); CLI-поток (stdin без эха — тест через подменённый stdin).
 
 ### Фаза 58 — MCP-инструменты (оценка: 1 день)
-- [ ] **58.1** Регистрация в `src/mcp/tools.rs`: `secrets_status`, `secrets_set`, `secrets_get`,
+- [x] **58.1** Регистрация в `src/mcp/tools.rs`: `secrets_status`, `secrets_set`, `secrets_get`,
       `secrets_delete`, `secrets_lock` (формат описаний — как у существующих; ошибки — `[Error] …`).
-- [ ] **58.2** Контракт: tools/list 36 → 41; снапшот-тест инструментов обновлён.
-- [ ] **58.3** Тесты интеграционные: MCP-клиент вызывает set/get/lock/status; `[Error] locked`
+- [x] **58.2** Контракт: tools/list 36 → 41; снапшот-тест инструментов обновлён.
+- [x] **58.3** Тесты интеграционные: MCP-клиент вызывает set/get/lock/status; `[Error] locked`
       при locked; `[Error] not initialized` до init.
 
 ### Фаза 59 — Интеграция, изоляция, доки (оценка: 1 день)
-- [ ] **59.1** Синк: убедиться, что `src/sync/mod.rs` не читает `secrets`; добавить тест
+- [x] **59.1** Синк: убедиться, что `src/sync/mod.rs` не читает `secrets`; добавить тест
       «бандл после export не содержит secrets».
-- [ ] **59.2** Изоляция от LLM-конвейеров: проверка, что `secrets` не попадает в
+- [x] **59.2** Изоляция от LLM-конвейеров: проверка, что `secrets` не попадает в
       `memory_search`/`build_context`/`graph_*`/`dream` (по построению — отдельная таблица;
       тест на absence в контексте).
-- [ ] **59.3** `ob2h doctor` показывает статус vault (инициализирован/заперт); `omnes_stats` —
+- [x] **59.3** `ob2h doctor` показывает статус vault (инициализирован/заперт); `omnes_stats` —
       блок `secrets` (число записей, без значений).
-- [ ] **59.4** Скилл `skills/ob2h/SKILL.md`: раздел «Секреты» — правила безопасного
+- [x] **59.4** Скилл `skills/ob2h/SKILL.md`: раздел «Секреты» — правила безопасного
       использования (unlock только CLI; инструменты только по явной команде пользователя;
       значения не вставлять в чат/память). Синхронно — вариант для DSH, если затронут.
-- [ ] **59.5** `CHANGELOG.md` (Unreleased): контракт +5 инструментов; README: раздел про
+- [x] **59.5** `CHANGELOG.md` (Unreleased): контракт +5 инструментов; README: раздел про
       secrets; документация в `docs/ARCHITECTURE.md` (таблица secrets).
-- [ ] **59.6** Полный `cargo test` + `cargo clippy --all-targets` + Python-тесты плагина
+- [x] **59.6** Полный `cargo test` + `cargo clippy --all-targets` + Python-тесты плагина
       (контракт 41) зелёные.
 
 **DoD v1.9:** все чекбоксы Ф56–Ф59 закрыты; сценарии С-1…С-7 проходят; контракт 41;

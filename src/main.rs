@@ -69,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
                 });
             }
 
+            let _ipc = ob2h::secrets::IpcServer::start(&ctx.settings.data_dir, ctx.secrets.clone()).await?;
             start_background_workers(ctx.clone());
             let server = Arc::new(McpServer::new(ctx));
             server.run_stdio().await?;
@@ -507,6 +508,14 @@ async fn main() -> anyhow::Result<()> {
                     installed
                 );
             }
+        },
+        Some(Commands::Secrets { command }) => {
+            ob2h::cli::secrets::SecretsCli::handle(
+                &ctx.settings.data_dir,
+                ctx.db.clone(),
+                command,
+                ctx.settings.secrets_ttl_min * 60,
+            ).await?;
         },
     }
 
