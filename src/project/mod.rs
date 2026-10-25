@@ -617,42 +617,42 @@ impl ProjectService {
             std::collections::HashMap::new();
 
         for node in &scan_res.nodes {
-            tx.execute(
-                r#"
-                INSERT INTO graph_nodes (
-                    node_id, label, node_type, description, val, created_at, updated_at,
-                    project_id, file_path, line_start, line_end, provenance, is_god_node
-                )
-                VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?9, 'ast', 0)
-                ON CONFLICT(node_id) DO UPDATE SET
-                    label = excluded.label,
-                    node_type = excluded.node_type,
-                    description = excluded.description,
-                    updated_at = excluded.updated_at,
-                    project_id = excluded.project_id,
-                    file_path = excluded.file_path,
-                    line_start = excluded.line_start,
-                    line_end = excluded.line_end,
-                    provenance = 'ast'
-                "#,
-                params![
-                    node.node_id,
-                    node.label,
-                    node.node_type,
-                    node.description,
-                    now,
-                    project_id,
-                    node.file_path,
-                    node.line_start as i64,
-                    node.line_end as i64,
-                ],
-            )?;
-
-            let pk: i64 = tx.query_row(
-                "SELECT id FROM graph_nodes WHERE node_id = ?1",
-                params![node.node_id],
-                |r| r.get(0),
-            )?;
+            let pk: i64 = {
+                let mut stmt = tx.prepare_cached(
+                    r#"
+                    INSERT INTO graph_nodes (
+                        node_id, label, node_type, description, val, created_at, updated_at,
+                        project_id, file_path, line_start, line_end, provenance, is_god_node
+                    )
+                    VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?9, 'ast', 0)
+                    ON CONFLICT(node_id) DO UPDATE SET
+                        label = excluded.label,
+                        node_type = excluded.node_type,
+                        description = excluded.description,
+                        updated_at = excluded.updated_at,
+                        project_id = excluded.project_id,
+                        file_path = excluded.file_path,
+                        line_start = excluded.line_start,
+                        line_end = excluded.line_end,
+                        provenance = 'ast'
+                    RETURNING id
+                    "#
+                )?;
+                stmt.query_row(
+                    params![
+                        node.node_id,
+                        node.label,
+                        node.node_type,
+                        node.description,
+                        now,
+                        project_id,
+                        node.file_path,
+                        node.line_start as i64,
+                        node.line_end as i64,
+                    ],
+                    |r| r.get(0),
+                )?
+            };
             node_id_to_pk.insert(node.node_id.clone(), pk);
         }
 
