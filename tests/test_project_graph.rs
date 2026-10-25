@@ -76,3 +76,40 @@ fn test_project_scan_and_analytics() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_detect_project_by_path_boundaries() -> anyhow::Result<()> {
+    let db = Database::in_memory()?;
+    let project_service = ProjectService::new(db.conn_arc());
+
+    let tmp_root = tempdir()?;
+    let app_dir = tmp_root.path().join("app");
+    let app_test_dir = tmp_root.path().join("app-test");
+    let nested_dir = app_dir.join("nested");
+    fs::create_dir_all(&app_dir)?;
+    fs::create_dir_all(&app_test_dir)?;
+    fs::create_dir_all(&nested_dir)?;
+
+    project_service.register_project("app", "App", app_dir.to_str().unwrap(), None, None)?;
+    project_service.register_project("nested", "Nested", nested_dir.to_str().unwrap(), None, None)?;
+
+    // 1. Точное совпадение
+    let detected = project_service.detect_project_by_path(app_dir.to_str().unwrap())?;
+    assert_eq!(detected.unwrap().id, "app");
+
+    // 2. Вложенная директория внутри app
+    let sub = app_dir.join("src");
+    fs::create_dir_all(&sub)?;
+    let detected_sub = project_service.detect_project_by_path(sub.to_str().unwrap())?;
+    assert_eq!(detected_sub.unwrap().id, "app");
+
+    // 3. Директория с похожим префиксом "app-test" НЕ должна матчиться на "app"
+    let detected_diff = project_service.detect_project_by_path(app_test_dir.to_str().unwrap())?;
+    assert!(detected_diff.is_none());
+
+    // 4. Более глубокий (nested) проект должен иметь приоритет над родительским
+    let detected_nested = project_service.detect_project_by_path(nested_dir.to_str().unwrap())?;
+    assert_eq!(detected_nested.unwrap().id, "nested");
+
+    Ok(())
+}

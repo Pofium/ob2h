@@ -271,19 +271,34 @@ impl ProjectService {
         &self,
         current_dir: &str,
     ) -> anyhow::Result<Option<ProjectRecord>> {
-        let normalized = PathBuf::from(current_dir);
-        let abs_current = std::fs::canonicalize(&normalized)
-            .unwrap_or(normalized)
-            .to_string_lossy()
-            .replace('\\', "/");
+        let norm_curr = PathBuf::from(current_dir);
+        let abs_current = std::fs::canonicalize(&norm_curr).unwrap_or(norm_curr);
 
         let projects = self.list_projects()?;
-        for p in projects {
-            if abs_current.starts_with(&p.root_path) {
-                return Ok(Some(p));
-            }
-        }
-        Ok(None)
+        let mut matches: Vec<ProjectRecord> = projects
+            .into_iter()
+            .filter(|p| {
+                let p_root = PathBuf::from(&p.root_path);
+                let canon_p_root = std::fs::canonicalize(&p_root).unwrap_or(p_root);
+
+                if abs_current.starts_with(&canon_p_root) {
+                    return true;
+                }
+
+                // Фоллбэк без UNC-префикса для Windows и mock-путей
+                let curr_str = abs_current.to_string_lossy().replace('\\', "/");
+                let root_str = canon_p_root.to_string_lossy().replace('\\', "/");
+                let clean_curr = curr_str.trim_start_matches("//?/").trim_start_matches(r"\\?\\");
+                let clean_root = root_str.trim_start_matches("//?/").trim_start_matches(r"\\?\\");
+                let p_curr = std::path::Path::new(clean_curr);
+                let p_root = std::path::Path::new(clean_root);
+
+                p_curr.starts_with(p_root)
+            })
+            .collect();
+
+        matches.sort_by(|a, b| b.root_path.len().cmp(&a.root_path.len()));
+        Ok(matches.into_iter().next())
     }
 
     /// Возвращает мапу известных файлов проекта rel_path -> sha256.

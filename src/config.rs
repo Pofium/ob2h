@@ -92,6 +92,9 @@ pub struct Settings {
     /// `nightly` — последний release включая pre-release.
     pub update_channel: String,
 
+    // --- Автономный режим (Фаза 61.4) ---
+    pub offline: bool,
+
     // --- Служебное ---
     pub log_level: String,
     pub max_tool_output_chars: usize,
@@ -271,9 +274,20 @@ impl Settings {
             .and_then(|v| v.parse().ok())
             .unwrap_or(24);
         let update_repo = env::var("OB2H_UPDATE_REPO")
-            .unwrap_or_else(|_| "presnyakov/ob2h".to_string());
+            .unwrap_or_else(|_| "Pofium/ob2h".to_string());
         let update_channel = env::var("OB2H_UPDATE_CHANNEL")
             .unwrap_or_else(|_| "stable".to_string());
+
+        let offline = env::var("OB2H_OFFLINE")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false);
+
+        if offline {
+            std::env::set_var("HF_HUB_OFFLINE", "1");
+        }
+
+        let update_enabled = if offline { false } else { update_enabled };
+        let update_check_on_start = if offline { false } else { update_check_on_start };
 
         Self {
             data_dir,
@@ -319,6 +333,7 @@ impl Settings {
             update_interval_hours,
             update_repo,
             update_channel,
+            offline,
             log_level,
             max_tool_output_chars,
         }

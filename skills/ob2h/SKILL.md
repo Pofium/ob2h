@@ -195,7 +195,7 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
 
 ## Автообновление (v1.8.0, ADR-15) — известное ограничение
 - `ob2h update check|apply|status` ходит ТОЛЬКО в GitHub API (`api.github.com`,
-  Accept `application/vnd.github+json`), но дефолтный `OB2H_UPDATE_REPO=presnyakov/ob2h`
+  Accept `application/vnd.github+json`), но дефолтный `OB2H_UPDATE_REPO=Pofium/ob2h`
   на GitHub не существует (там репозиторий `Pofium/ob2h`) → `update check` из коробки
   падает `404 Not Found`. Обход без правок кода: `OB2H_UPDATE_REPO=Pofium/ob2h ob2h update check`
   (проверено 10.10.2026 — видит v1.8.0). Релизы на GitVerse апдейтер НЕ видит: у GitVerse
