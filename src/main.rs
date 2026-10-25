@@ -431,6 +431,17 @@ async fn main() -> anyhow::Result<()> {
                     res.lines_total
                 );
             }
+            ob2h::cli::ProjectCliCommands::ImportCodegraph { id, db_path } => {
+                let (nodes, edges) = ctx.project.import_codegraph(&id, &db_path)?;
+                let _ = ctx.db.with_conn(|conn| {
+                    let _ = ob2h::graph::GraphAnalytics::update_god_nodes(conn, &id);
+                    Ok(())
+                });
+                println!(
+                    "Импорт из CodeGraph завершён для '{}': импортировано узлов={}, связей={}",
+                    id, nodes, edges
+                );
+            }
             ob2h::cli::ProjectCliCommands::List => {
                 let list = ctx.project.list_projects()?;
                 if list.is_empty() {

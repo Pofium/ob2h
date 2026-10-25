@@ -202,6 +202,13 @@ pub enum ProjectCliCommands {
         #[arg(long, default_value_t = false)]
         full: bool,
     },
+    /// Импортировать граф кода из индекса CodeGraph (.codegraph/codegraph.db)
+    ImportCodegraph {
+        #[arg(short, long)]
+        id: String,
+        #[arg(short, long)]
+        db_path: String,
+    },
     /// Список зарегистрированных проектов
     List,
     /// Сгенерировать архитектурный дайджест проекта

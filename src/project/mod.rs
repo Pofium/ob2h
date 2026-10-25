@@ -831,6 +831,115 @@ impl ProjectService {
         Ok(scan_res)
     }
 
+    /// Импортировать граф из внешней SQLite базы CodeGraph (.codegraph/codegraph.db).
+    pub fn import_codegraph(&self, project_id: &str, codegraph_db_path: &str) -> anyhow::Result<(usize, usize)> {
+        let cg_conn = rusqlite::Connection::open_with_flags(
+            codegraph_db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )?;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+
+        let mut nodes_count = 0usize;
+        let mut edges_count = 0usize;
+        let mut cg_to_pk: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+
+        // 1. Читаем nodes из CodeGraph
+        {
+            let mut stmt = cg_conn.prepare(
+                "SELECT id, name, kind, file_path, start_line, end_line, signature, docstring FROM nodes"
+            )?;
+            let mut insert_node = tx.prepare_cached(
+                "INSERT INTO graph_nodes (
+                    node_id, label, node_type, description, val, created_at, updated_at,
+                    project_id, file_path, line_start, line_end, provenance, is_god_node
+                 ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?9, 'codegraph', 0)
+                 ON CONFLICT(node_id) DO UPDATE SET
+                    label = excluded.label,
+                    node_type = excluded.node_type,
+                    description = excluded.description,
+                    updated_at = excluded.updated_at,
+                    provenance = 'codegraph'
+                 RETURNING id"
+            )?;
+
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, i64>(4)? as usize,
+                    r.get::<_, i64>(5)? as usize,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<String>>(7)?,
+                ))
+            })?;
+
+            for r in rows.flatten() {
+                let (id, name, kind, file_path, start_line, end_line, sig, doc) = r;
+                let desc = sig.or(doc).unwrap_or_else(|| format!("{kind} {name}"));
+                let pk: i64 = insert_node.query_row(
+                    params![
+                        format!("cg:{id}"),
+                        name,
+                        kind,
+                        desc,
+                        now,
+                        project_id,
+                        file_path,
+                        start_line as i64,
+                        end_line as i64,
+                    ],
+                    |row| row.get(0),
+                )?;
+                cg_to_pk.insert(id, pk);
+                nodes_count += 1;
+            }
+        }
+
+        // 2. Читаем edges из CodeGraph
+        {
+            let mut stmt = cg_conn.prepare("SELECT source, target, kind FROM edges")?;
+            let mut insert_edge = tx.prepare_cached(
+                "INSERT INTO graph_edges (
+                    source_id, target_id, label, weight, contexts, created_at,
+                    project_id, provenance, confidence, updated_at
+                 ) VALUES (?1, ?2, ?3, 1.0, '', ?4, ?5, 'codegraph', 1.0, ?4)
+                 ON CONFLICT(source_id, target_id, label) DO UPDATE SET
+                    updated_at = excluded.updated_at,
+                    provenance = 'codegraph'"
+            )?;
+
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?;
+
+            for r in rows.flatten() {
+                let (src, dst, kind) = r;
+                if let (Some(&src_pk), Some(&dst_pk)) = (cg_to_pk.get(&src), cg_to_pk.get(&dst)) {
+                    insert_edge.execute(params![
+                        src_pk,
+                        dst_pk,
+                        kind.to_uppercase(),
+                        now,
+                        project_id,
+                    ])?;
+                    edges_count += 1;
+                }
+            }
+        }
+
+        tx.commit()?;
+        Ok((nodes_count, edges_count))
+    }
+
     /// Статистика проекта.
     pub fn get_project_stats(&self, project_id: &str) -> anyhow::Result<ProjectStats> {
         let project = self
