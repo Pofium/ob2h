@@ -270,7 +270,7 @@ impl McpServer {
                 let tools = list_tools();
                 // Ф35.3: аннотации (readOnlyHint/destructiveHint) — harness-подсказки;
                 // добавляются на сериализацию, структура McpToolDef не меняется.
-                let tools: Vec<serde_json::Value> = tools
+                let mut tools: Vec<serde_json::Value> = tools
                     .iter()
                     .map(|t| {
                         let mut v =
@@ -281,6 +281,12 @@ impl McpServer {
                         v
                     })
                     .collect();
+                // Стабильный детерминированный порядок инструментов по имени для оптимизации prompt cache LLM (MCP 2026)
+                tools.sort_by(|a, b| {
+                    let name_a = a.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let name_b = b.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    name_a.cmp(name_b)
+                });
                 let result = serde_json::json!({ "tools": tools });
                 Some(JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
