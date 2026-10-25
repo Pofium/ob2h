@@ -40,6 +40,10 @@ serde_yaml_ng = "0.10"
 self-replace = "1"
 semver = "1"
 zip = "2"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+zeroize = { version = "1.8", features = ["derive"] }
+getrandom = "0.2"
 
 [dev-dependencies]
 tempfile = "3.17"

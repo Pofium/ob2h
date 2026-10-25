@@ -94,6 +94,7 @@ pub struct Settings {
 
     // --- Автономный режим (Фаза 61.4) ---
     pub offline: bool,
+    pub secrets_ttl_min: u64,
 
     // --- Служебное ---
     pub log_level: String,
@@ -278,6 +279,11 @@ impl Settings {
         let update_channel = env::var("OB2H_UPDATE_CHANNEL")
             .unwrap_or_else(|_| "stable".to_string());
 
+        let secrets_ttl_min = env::var("OB2H_SECRETS_TTL_MIN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
         let offline = env::var("OB2H_OFFLINE")
             .map(|v| v == "1" || v.to_lowercase() == "true")
             .unwrap_or(false);
@@ -334,6 +340,7 @@ impl Settings {
             update_repo,
             update_channel,
             offline,
+            secrets_ttl_min,
             log_level,
             max_tool_output_chars,
         }

@@ -15,6 +15,7 @@ pub mod llm;
 pub mod mcp;
 pub mod memory;
 pub mod project;
+pub mod secrets;
 pub mod ralph;
 pub mod sync;
 pub mod update;
@@ -70,6 +71,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
     let graph = Arc::new(GraphService::new(db.clone(), embedder.clone()));
     let project = Arc::new(ProjectService::new_with_embedder(db.conn_arc(), Some(embedder.clone())));
     let ralph = Arc::new(RalphService::new(db.clone(), project.clone(), settings.data_dir.clone()));
+    let secrets = Arc::new(crate::secrets::SecretsService::new(db.conn_arc(), settings.secrets_ttl_min * 60));
     let dream = Arc::new(Dream::new(
         workspace.clone(),
         gitstore.clone(),
@@ -115,6 +117,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         backup,
         sync,
         ralph,
+        secrets,
         dream_lock,
         active_workspace,
         active_project_id,

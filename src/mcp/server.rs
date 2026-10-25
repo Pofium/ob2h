@@ -40,6 +40,7 @@ pub struct AppContext {
     pub backup: Arc<BackupManager>,
     pub sync: Arc<crate::sync::SyncManager>,
     pub ralph: Arc<crate::ralph::RalphService>,
+    pub secrets: Arc<crate::secrets::SecretsService>,
     pub dream_lock: Arc<Mutex<()>>,
     pub active_workspace: Arc<tokio::sync::RwLock<Option<std::path::PathBuf>>>,
     pub active_project_id: Arc<tokio::sync::RwLock<Option<String>>>,

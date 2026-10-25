@@ -286,22 +286,22 @@ ciphertext = nonce (24 b) || ciphertext || tag (16 b)
 Нумерация фаз продолжается после Ф55 (v1.7): **Ф56–Ф59**. Ветка `feat/v1.9`.
 
 ### Фаза 56 — Крипто-ядро + миграция M9 (оценка: 1 день)
-- [ ] **56.1** Зависимости в `Cargo.toml`: `argon2 = "0.5"`, `chacha20poly1305 = "0.10"`,
+- [x] **56.1** Зависимости в `Cargo.toml`: `argon2 = "0.5"`, `chacha20poly1305 = "0.10"`,
       `zeroize = "1"`, `getrandom = "0.2"` (проверить `cargo tree` — без тяжёлых транзитивных).
-- [ ] **56.2** `src/secrets/crypto.rs`: KDF (Argon2id, параметры из `kdf_params`), AEAD
+- [x] **56.2** `src/secrets/crypto.rs`: KDF (Argon2id, параметры из `kdf_params`), AEAD
       (XChaCha20-Poly1305, `aad=name`, формат `nonce‖ct‖tag`), проверка verifier.
-- [ ] **56.3** Миграция `MIGRATION_V9` в `src/db/schema.rs` (таблица `secrets` + `kv`-ключи),
+- [x] **56.3** Миграция `MIGRATION_V9` в `src/db/schema.rs` (таблица `secrets` + `kv`-ключи),
       `SCHEMA_VERSION=9`, ветка `if current_version < 9`.
-- [ ] **56.4** Тесты (юнит, без сети): roundtrip encrypt/decrypt; неверный пин; неверный `aad`;
+- [x] **56.4** Тесты (юнит, без сети): roundtrip encrypt/decrypt; неверный пин; неверный `aad`;
       порча одного байта ciphertext → ошибка целостности; миграция M9 на свежей БД и на копии
       старой (schema 8) идемпотентна.
 
 ### Фаза 57 — Сервис и CLI (оценка: 1 день)
-- [ ] **57.1** `src/secrets/service.rs` (`SecretsService`): состояние `Locked|Unlocked{K, deadline}`,
+- [x] **57.1** `src/secrets/service.rs` (`SecretsService`): состояние `Locked|Unlocked{K, deadline}`,
       `init`, `unlock`, `lock`, `rekey`, `set/get/delete/list`, TTL-проверка, zeroize, аудит-логи.
 - [ ] **57.2** CLI-подкоманда `ob2h secrets` (`src/cli/`): `init`, `unlock`, `lock`, `status`,
       `rekey`, `list`, `show <name>` (для человека, печатает значение в stdout).
-- [ ] **57.3** Env-конфиг в `src/config.rs`: `OB2H_SECRETS_TTL_MIN` (дефолт 30),
+- [x] **57.3** Env-конфиг в `src/config.rs`: `OB2H_SECRETS_TTL_MIN` (дефолт 30),
       `OB2H_SECRETS_AUTO_LOCK` (дефолт true), `OB2H_SECRETS_KDF_MEM_MIB` (дефолт 64).
 - [ ] **57.4** Тесты: TTL с замоканным сервисом времени; rekey-транзакционность (сбой на
       середине не портит vault); CLI-поток (stdin без эха — тест через подменённый stdin).

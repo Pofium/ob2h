@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -333,6 +333,20 @@ CREATE TRIGGER IF NOT EXISTS chunks_fts_au AFTER UPDATE ON chunks BEGIN
 END;
 "#;
 
+
+pub const MIGRATION_V9: &str = r#"
+-- Хранилище зашифрованных секретов (v1.9, Фаза 56)
+CREATE TABLE IF NOT EXISTS secrets (
+    name TEXT PRIMARY KEY,
+    ciphertext BLOB NOT NULL,
+    hint TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_accessed TEXT,
+    access_count INTEGER NOT NULL DEFAULT 0
+);
+"#;
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;"
@@ -355,6 +369,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V6)?;
         conn.execute_batch(MIGRATION_V7)?;
         conn.execute_batch(MIGRATION_V8)?;
+        conn.execute_batch(MIGRATION_V9)?;
     } else {
         if current_version < 2 {
             conn.execute_batch(MIGRATION_V2)?;
@@ -376,6 +391,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         }
         if current_version < 8 {
             conn.execute_batch(MIGRATION_V8)?;
+        }
+        if current_version < 9 {
+            conn.execute_batch(MIGRATION_V9)?;
         }
     }
 
