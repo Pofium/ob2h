@@ -121,6 +121,73 @@ pub struct ImportStats {
     pub already_applied: bool,
 }
 
+// -- Ф62.3: E2EE-обёртка бандлов ------------------------------------------------
+
+/// Магия зашифрованного контейнера (первые 8 байт файла).
+const ENC_MAGIC: &[u8; 8] = b"ob2henc1";
+/// Переменная окружения с парольной фразой синка (включает E2EE бандлов).
+const SYNC_KEY_ENV: &str = "OB2H_SYNC_KEY";
+
+/// Парольная фраза E2EE синка из окружения (пустая = шифрование выключено).
+fn sync_passphrase() -> Option<String> {
+    std::env::var(SYNC_KEY_ENV)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// Зашифровать gzip-полезную нагрузку бандла ключом из парольной фразы.
+/// Формат: `OB2HENC1 | u32BE(header_len) | header_json | ciphertext`.
+/// AAD = bytes header_json (заголовок нельзя подменить без провала проверки).
+fn encrypt_bundle(passphrase: &str, bundle_id: &str, gz: &[u8]) -> anyhow::Result<Vec<u8>> {
+    use crate::secrets::crypto::{derive_key, encrypt_value, generate_salt, KdfParams};
+    let salt = generate_salt()?;
+    let params = KdfParams::default();
+    let key = derive_key(passphrase, &salt, &params)?;
+    let header = json!({
+        "v": 1,
+        "kdf": "argon2id",
+        "m": params.m_cost,
+        "t": params.t_cost,
+        "p": params.p_cost,
+        "salt": hex::encode(salt),
+        "id": bundle_id,
+    })
+    .to_string();
+    let ct = encrypt_value(&key, &header, gz)?;
+    let mut out = Vec::with_capacity(8 + 4 + header.len() + ct.len());
+    out.extend_from_slice(ENC_MAGIC);
+    out.extend_from_slice(&(header.len() as u32).to_be_bytes());
+    out.extend_from_slice(header.as_bytes());
+    out.extend_from_slice(&ct);
+    Ok(out)
+}
+
+/// Расшифровать контейнер `OB2HENC1 …` в исходный gzip. Возвращает (заголовок, gzip).
+fn decrypt_bundle(passphrase: &str, raw: &[u8]) -> anyhow::Result<(serde_json::Value, Vec<u8>)> {
+    use crate::secrets::crypto::{decrypt_value, derive_key, KdfParams};
+    let rest = raw
+        .get(ENC_MAGIC.len()..)
+        .context("усечённый зашифрованный бандл")?;
+    let (hlen_bytes, body) = rest.split_at_checked(4).context("усечённый заголовок бандла")?;
+    let hlen = u32::from_be_bytes(hlen_bytes.try_into().unwrap()) as usize;
+    let (header_bytes, ct) = body
+        .split_at_checked(hlen)
+        .context("усечённый заголовок бандла (len)")?;
+    let header_str = std::str::from_utf8(header_bytes).context("заголовок не UTF-8")?;
+    let header: serde_json::Value =
+        serde_json::from_str(header_str).context("битый заголовок зашифрованного бандла")?;
+    let salt = hex::decode(header["salt"].as_str().unwrap_or_default())
+        .context("соль KDF отсутствует/битая")?;
+    let params = KdfParams {
+        m_cost: header["m"].as_u64().unwrap_or(65536) as u32,
+        t_cost: header["t"].as_u64().unwrap_or(3) as u32,
+        p_cost: header["p"].as_u64().unwrap_or(1) as u32,
+    };
+    let key = derive_key(passphrase, &salt, &params)?;
+    let plain = decrypt_value(&key, header_str, ct)?;
+    Ok((header, plain.to_vec()))
+}
+
 // -- SyncManager ----------------------------------------------------------------
 
 pub struct SyncManager {
@@ -325,18 +392,30 @@ impl SyncManager {
             },
         });
 
-        let path = self.outbox().join(format!("{bundle_id}.jsonl.gz"));
-        let enc = GzEncoder::new(
-            std::fs::File::create(&path)?,
-            Compression::default(),
-        );
-        let mut w = std::io::BufWriter::new(enc);
-        writeln!(w, "{}", header)?;
-        for r in &rows {
-            writeln!(w, "{}", r)?;
+        // Собираем gzip в память: при включённом E2EE payload шифруется целиком.
+        let mut gz: Vec<u8> = Vec::new();
+        {
+            let mut enc = GzEncoder::new(&mut gz, Compression::default());
+            {
+                let mut w = std::io::BufWriter::new(&mut enc);
+                writeln!(w, "{}", header)?;
+                for r in &rows {
+                    writeln!(w, "{}", r)?;
+                }
+                w.flush()?;
+            }
+            enc.finish()?;
         }
-        w.flush()?;
-        drop(w);
+        let path = self.outbox().join(format!("{bundle_id}.jsonl.gz"));
+        let payload: Vec<u8> = match sync_passphrase() {
+            Some(pass) => {
+                let encrypted = encrypt_bundle(&pass, &bundle_id, &gz)?;
+                info!("sync export: бандл зашифрован (E2EE, OB2H_SYNC_KEY)");
+                encrypted
+            }
+            None => gz,
+        };
+        std::fs::write(&path, &payload)?;
 
         // Watermark двигаем только после успешной записи файла.
         self.db.with_conn(|conn| {
@@ -398,7 +477,18 @@ impl SyncManager {
     pub async fn import_file(&self, path: &Path) -> anyhow::Result<ImportStats> {
         let raw = std::fs::read(path)
             .with_context(|| format!("чтение {}", path.display()))?;
-        let decoder = GzDecoder::new(&raw[..]);
+        // Ф62.3: контейнер E2EE детектируется по магии, иначе — обычный gzip.
+        let gz_bytes: Vec<u8> = if raw.starts_with(ENC_MAGIC) {
+            let pass = sync_passphrase().context(
+                "бандл зашифрован (E2EE), но OB2H_SYNC_KEY не задан — расшифровка невозможна",
+            )?;
+            decrypt_bundle(&pass, &raw)
+                .with_context(|| format!("расшифровка {}", path.display()))?
+                .1
+        } else {
+            raw
+        };
+        let decoder = GzDecoder::new(&gz_bytes[..]);
         let mut text = String::new();
         let mut reader = std::io::BufReader::new(decoder);
         reader
