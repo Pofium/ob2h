@@ -6,6 +6,7 @@ use clap::Subcommand;
 use crate::db::Database;
 use crate::secrets::crypto::{derive_key, KdfParams};
 use crate::secrets::ipc::IpcClient;
+use crate::secrets::pin_input::{is_valid_pin, PinPurpose, NEW_PIN_FORMAT_ERROR, PIN_FORMAT_ERROR};
 use crate::secrets::service::SecretsService;
 
 #[derive(Subcommand, Debug)]
@@ -29,6 +30,107 @@ pub enum SecretsCommands {
     },
 }
 
+/// Итог попытки графического ввода PIN.
+///
+/// Без feature `gui` окно недоступно, поэтому варианты `Pin`/`Cancelled`
+/// не конструируются — это ожидаемо.
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+enum GuiPrompt {
+    /// Окно недоступно (нет GUI, headless, `OB2H_PIN_GUI=0`) — нужен терминал.
+    Unavailable,
+    /// Пользователь ввёл PIN (ровно 4 цифры).
+    Pin(String),
+    /// Пользователь отменил ввод.
+    Cancelled,
+}
+
+/// Запрашивает одиночный PIN через локальное окно (feature `gui`).
+///
+/// Вызывается до первого `.await` команды: окну eframe нужен главный поток процесса.
+fn gui_prompt(purpose: PinPurpose) -> GuiPrompt {
+    #[cfg(feature = "gui")]
+    {
+        if !crate::secrets::pin_input::gui_disabled_by_env() {
+            match crate::secrets::pin_gui::ask_pin(purpose) {
+                Ok(Some(pin)) => return GuiPrompt::Pin(pin),
+                Ok(None) => return GuiPrompt::Cancelled,
+                Err(err) => {
+                    eprintln!("⚠️ Окно ввода PIN недоступно ({err}); ввод в терминале.");
+                    return GuiPrompt::Unavailable;
+                }
+            }
+        }
+    }
+    #[cfg(not(feature = "gui"))]
+    let _ = purpose;
+    GuiPrompt::Unavailable
+}
+
+/// Запрашивает новый PIN с подтверждением через локальное окно (feature `gui`).
+fn gui_prompt_new() -> GuiPrompt {
+    #[cfg(feature = "gui")]
+    {
+        if !crate::secrets::pin_input::gui_disabled_by_env() {
+            match crate::secrets::pin_gui::ask_pin_twice(PinPurpose::New, PinPurpose::Confirm) {
+                Ok(Some(pin)) => return GuiPrompt::Pin(pin),
+                Ok(None) => return GuiPrompt::Cancelled,
+                Err(err) => {
+                    eprintln!("⚠️ Окно ввода PIN недоступно ({err}); ввод в терминале.");
+                    return GuiPrompt::Unavailable;
+                }
+            }
+        }
+    }
+    GuiPrompt::Unavailable
+}
+
+/// Возвращает PIN: сначала окно GUI, иначе — терминал.
+///
+/// `None` означает отмену ввода (окно закрыто/Esc).
+fn resolve_pin(purpose: PinPurpose, terminal_prompt: &str) -> anyhow::Result<Option<String>> {
+    match gui_prompt(purpose) {
+        GuiPrompt::Pin(pin) => Ok(Some(pin)),
+        GuiPrompt::Cancelled => {
+            eprintln!("⚠️ Ввод PIN-кода отменён.");
+            Ok(None)
+        }
+        GuiPrompt::Unavailable => {
+            let pin = rpassword::prompt_password(terminal_prompt)?.trim().to_string();
+            Ok(Some(pin))
+        }
+    }
+}
+
+/// Возвращает новый PIN с подтверждением: окно GUI, иначе — терминал.
+///
+/// `None` — отмена либо ошибка валидации (сообщение уже выведено).
+fn resolve_new_pin(invalid_msg: &str, mismatch_msg: &str) -> anyhow::Result<Option<String>> {
+    match gui_prompt_new() {
+        GuiPrompt::Pin(pin) => Ok(Some(pin)),
+        GuiPrompt::Cancelled => {
+            eprintln!("⚠️ Ввод PIN-кода отменён.");
+            Ok(None)
+        }
+        GuiPrompt::Unavailable => {
+            let pin = rpassword::prompt_password("Введите новый PIN (ровно 4 цифры): ")?
+                .trim()
+                .to_string();
+            if !is_valid_pin(&pin) {
+                eprintln!("{invalid_msg}");
+                return Ok(None);
+            }
+            let confirm = rpassword::prompt_password("Повторите новый PIN: ")?
+                .trim()
+                .to_string();
+            if pin != confirm {
+                eprintln!("{mismatch_msg}");
+                return Ok(None);
+            }
+            Ok(Some(pin))
+        }
+    }
+}
+
 pub struct SecretsCli;
 
 impl SecretsCli {
@@ -46,17 +148,12 @@ impl SecretsCli {
                     println!("⚠️ Хранилище секретов уже инициализировано.");
                     return Ok(());
                 }
-                let pin = rpassword::prompt_password("Введите новый PIN (мин. 4 символа): ")?;
-                let pin = pin.trim().to_string();
-                if pin.len() < 4 {
-                    eprintln!("❌ Ошибка: PIN-код должен содержать как минимум 4 символа.");
+                let Some(pin) = resolve_new_pin(
+                    &format!("❌ Ошибка: {PIN_FORMAT_ERROR}."),
+                    "❌ Ошибка: введённые PIN-коды не совпадают.",
+                )? else {
                     return Ok(());
-                }
-                let confirm = rpassword::prompt_password("Повторите новый PIN: ")?;
-                if pin != confirm.trim() {
-                    eprintln!("❌ Ошибка: введённые PIN-коды не совпадают.");
-                    return Ok(());
-                }
+                };
 
                 service.init(&pin, None)?;
                 println!("✓ Хранилище секретов успешно инициализировано (Argon2id + XChaCha20-Poly1305).");
@@ -67,8 +164,9 @@ impl SecretsCli {
                     eprintln!("⚠️ Хранилище секретов не инициализировано: выполните 'ob2h secrets init'.");
                     return Ok(());
                 }
-                let pin = rpassword::prompt_password("Введите PIN: ")?;
-                let pin = pin.trim().to_string();
+                let Some(pin) = resolve_pin(PinPurpose::Unlock, "Введите PIN: ")? else {
+                    return Ok(());
+                };
 
                 if let Err(e) = service.unlock(&pin) {
                     eprintln!("❌ {e}");
@@ -127,24 +225,21 @@ impl SecretsCli {
                     eprintln!("⚠️ Хранилище секретов не инициализировано: выполните 'ob2h secrets init'.");
                     return Ok(());
                 }
-                let old_pin = rpassword::prompt_password("Введите текущий PIN: ")?;
-                let old_pin = old_pin.trim().to_string();
+                let Some(old_pin) = resolve_pin(PinPurpose::Current, "Введите текущий PIN: ")?
+                else {
+                    return Ok(());
+                };
                 if let Err(e) = service.unlock(&old_pin) {
                     eprintln!("❌ {e}");
                     return Ok(());
                 }
 
-                let new_pin = rpassword::prompt_password("Введите новый PIN (мин. 4 символа): ")?;
-                let new_pin = new_pin.trim().to_string();
-                if new_pin.len() < 4 {
-                    eprintln!("❌ Ошибка: новый PIN-код должен содержать как минимум 4 символа.");
+                let Some(new_pin) = resolve_new_pin(
+                    &format!("❌ Ошибка: {NEW_PIN_FORMAT_ERROR}."),
+                    "❌ Ошибка: введённые PIN-коды не совпадают.",
+                )? else {
                     return Ok(());
-                }
-                let confirm = rpassword::prompt_password("Повторите новый PIN: ")?;
-                if new_pin != confirm.trim() {
-                    eprintln!("❌ Ошибка: введённые PIN-коды не совпадают.");
-                    return Ok(());
-                }
+                };
 
                 service.rekey(&new_pin)?;
 
@@ -166,8 +261,11 @@ impl SecretsCli {
                     eprintln!("⚠️ Хранилище секретов не инициализировано.");
                     return Ok(());
                 }
-                let pin = rpassword::prompt_password("Введите PIN для просмотра списка: ")?;
-                service.unlock(pin.trim())?;
+                let Some(pin) = resolve_pin(PinPurpose::Unlock, "Введите PIN для просмотра списка: ")?
+                else {
+                    return Ok(());
+                };
+                service.unlock(&pin)?;
                 let list = service.list()?;
                 if list.is_empty() {
                     println!("В хранилище нет сохраненных секретов.");
@@ -191,8 +289,11 @@ impl SecretsCli {
                     eprintln!("⚠️ Хранилище секретов не инициализировано.");
                     return Ok(());
                 }
-                let pin = rpassword::prompt_password("Введите PIN для расшифровки: ")?;
-                service.unlock(pin.trim())?;
+                let Some(pin) = resolve_pin(PinPurpose::Unlock, "Введите PIN для расшифровки: ")?
+                else {
+                    return Ok(());
+                };
+                service.unlock(&pin)?;
                 match service.get(&name) {
                     Ok(val) => {
                         println!("{}", val.as_str());

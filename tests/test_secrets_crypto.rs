@@ -12,7 +12,7 @@ fn test_crypto_roundtrip_and_errors() {
         t_cost: 1,
         p_cost: 1,
     };
-    let key = derive_key("master_pin_9876", &salt, &params).expect("derive");
+    let key = derive_key("9876", &salt, &params).expect("derive");
 
     let val = "SECRET_PROD_DATABASE_PASSWORD_$$12345";
     let ct = encrypt_value(&key, "db_pass", val.as_bytes()).expect("encrypt");
@@ -26,7 +26,7 @@ fn test_crypto_roundtrip_and_errors() {
     assert!(bad_aad.is_err());
 
     // 3. Неверный ключ
-    let wrong_key = derive_key("wrong_pin", &salt, &params).expect("derive");
+    let wrong_key = derive_key("1111", &salt, &params).expect("derive");
     let bad_key = decrypt_value(&wrong_key, "db_pass", &ct);
     assert!(bad_key.is_err());
 
@@ -44,7 +44,7 @@ fn test_secrets_migration_m9_idempotence() -> anyhow::Result<()> {
     let v: String = db.with_conn(|conn| {
         conn.query_row("SELECT value FROM kv WHERE key = 'schema_version'", [], |r| r.get(0))
     })?;
-    assert_eq!(v, "9");
+    assert_eq!(v, ob2h::db::schema::SCHEMA_VERSION.to_string());
 
     // Проверяем наличие таблицы secrets
     let count: i64 = db.with_conn(|conn| {
@@ -71,19 +71,23 @@ fn test_secrets_service_lifecycle() -> anyhow::Result<()> {
     assert!(service.get("any").is_err());
 
     // 2. Init
-    service.init("user_pin_4321", Some(KdfParams { m_cost: 1024, t_cost: 1, p_cost: 1 }))?;
+    service.init("4321", Some(KdfParams { m_cost: 1024, t_cost: 1, p_cost: 1 }))?;
     assert!(service.is_initialized()?);
 
+    // Формат PIN: ровно 4 цифры
+    assert!(service.init("12345", None).is_err());
+    assert!(service.init("12ab", None).is_err());
+
     // Повторный init запрещен
-    assert!(service.init("another", None).is_err());
+    assert!(service.init("9999", None).is_err());
 
     // 3. Unlock неверным PIN
-    assert!(service.unlock("wrong").is_err());
+    assert!(service.unlock("0000").is_err());
     let status_locked = service.status()?;
     assert!(status_locked.locked);
 
     // 4. Unlock верным PIN
-    service.unlock("user_pin_4321")?;
+    service.unlock("4321")?;
     let status_unlocked = service.status()?;
     assert!(!status_unlocked.locked);
     assert!(status_unlocked.ttl_left_sec.unwrap() > 0);
@@ -100,7 +104,7 @@ fn test_secrets_service_lifecycle() -> anyhow::Result<()> {
     assert_eq!(list[0].hint.as_deref(), Some("OpenAI prod key"));
 
     // 7. Rekey
-    service.rekey("new_strong_pin_7777")?;
+    service.rekey("7777")?;
     // После rekey значение по-прежнему доступно в текущей сессии
     let secret_after = service.get("api_key")?;
     assert_eq!(secret_after.as_str(), "sk-1234567890abcdef");
@@ -111,10 +115,10 @@ fn test_secrets_service_lifecycle() -> anyhow::Result<()> {
     assert!(service.get("api_key").is_err());
 
     // Старый PIN не работает
-    assert!(service.unlock("user_pin_4321").is_err());
+    assert!(service.unlock("4321").is_err());
 
     // Новый PIN работает
-    service.unlock("new_strong_pin_7777")?;
+    service.unlock("7777")?;
     assert_eq!(service.get("api_key")?.as_str(), "sk-1234567890abcdef");
 
     // 9. Delete

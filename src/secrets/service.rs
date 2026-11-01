@@ -13,6 +13,7 @@ use super::crypto::{
     check_verifier, create_verifier, decrypt_value, derive_key, encrypt_value, generate_salt,
     KdfParams,
 };
+use super::pin_input::{is_valid_pin, NEW_PIN_FORMAT_ERROR, PIN_FORMAT_ERROR};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SecretsStatus {
@@ -69,8 +70,8 @@ impl SecretsService {
 
     /// Инициализация нового сейфа (CLI `ob2h secrets init`).
     pub fn init(&self, pin: &str, params: Option<KdfParams>) -> anyhow::Result<()> {
-        if pin.len() < 4 {
-            anyhow::bail!("[Error] PIN-код должен содержать как минимум 4 символа");
+        if !is_valid_pin(pin) {
+            anyhow::bail!("[Error] {PIN_FORMAT_ERROR}");
         }
         if self.is_initialized()? {
             anyhow::bail!("[Error] хранилище секретов уже инициализировано");
@@ -110,6 +111,10 @@ impl SecretsService {
     }
 
     /// Разблокировка хранилища мастер-ключом на основе введённого PIN (CLI `ob2h secrets unlock`).
+    ///
+    /// Формат PIN здесь намеренно не проверяется: так сейф, созданный по старым правилам
+    /// (пин длиннее/не только цифры), можно открыть и перевести на новый формат через `rekey`.
+    /// Неверный пин отсекается проверкой verifier.
     pub fn unlock(&self, pin: &str) -> anyhow::Result<()> {
         if !self.is_initialized()? {
             anyhow::bail!("[Error] хранилище секретов не инициализировано: выполните 'ob2h secrets init'");
@@ -354,8 +359,8 @@ impl SecretsService {
 
     /// Смена PIN-кода с перешифровкой всех существующих записей (только Unlocked).
     pub fn rekey(&self, new_pin: &str) -> anyhow::Result<()> {
-        if new_pin.len() < 4 {
-            anyhow::bail!("[Error] новый PIN-код должен содержать как минимум 4 символа");
+        if !is_valid_pin(new_pin) {
+            anyhow::bail!("[Error] {NEW_PIN_FORMAT_ERROR}");
         }
         let old_key = self.get_active_key()?;
 

@@ -122,7 +122,7 @@ mod tests {
             t_cost: 1,
             p_cost: 1,
         };
-        let key = derive_key("secret_pin_123", &salt, &params).expect("derive key");
+        let key = derive_key("0123", &salt, &params).expect("derive key");
 
         let plaintext = b"super_secret_api_key_value_999";
         let encrypted = encrypt_value(&key, "openai_api_key", plaintext).expect("encrypt");
@@ -137,7 +137,7 @@ mod tests {
         assert!(aad_err.is_err());
 
         // 3. Ошибка при неверном ключе K
-        let wrong_key = derive_key("wrong_pin", &salt, &params).expect("wrong key");
+        let wrong_key = derive_key("0000", &salt, &params).expect("wrong key");
         let wrong_key_err = decrypt_value(&wrong_key, "openai_api_key", &encrypted);
         assert!(wrong_key_err.is_err());
 
@@ -156,12 +156,12 @@ mod tests {
             t_cost: 1,
             p_cost: 1,
         };
-        let key = derive_key("correct_pin", &salt, &params).expect("key");
+        let key = derive_key("4321", &salt, &params).expect("key");
         let verifier = create_verifier(&key).expect("verifier");
 
         assert!(check_verifier(&key, &verifier));
 
-        let wrong_key = derive_key("bad_pin", &salt, &params).expect("wrong key");
+        let wrong_key = derive_key("0000", &salt, &params).expect("wrong key");
         assert!(!check_verifier(&wrong_key, &verifier));
     }
 }

@@ -22,8 +22,8 @@ async fn test_secrets_isolation_from_sync_and_search() -> anyhow::Result<()> {
     let server = McpServer::new(ctx.clone());
 
     // 1. Инициализируем и сохраняем секрет
-    ctx.secrets.init("master_pin_5555", Some(ob2h::secrets::KdfParams { m_cost: 1024, t_cost: 1, p_cost: 1 }))?;
-    ctx.secrets.unlock("master_pin_5555")?;
+    ctx.secrets.init("5555", Some(ob2h::secrets::KdfParams { m_cost: 1024, t_cost: 1, p_cost: 1 }))?;
+    ctx.secrets.unlock("5555")?;
     ctx.secrets.set("SUPER_SECRET_TOKEN", "ghp_my_ultra_private_github_token_999", Some("GitHub Personal Token"))?;
 
     // 2. Проверяем, что memory_search не находит секрет

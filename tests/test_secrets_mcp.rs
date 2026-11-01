@@ -30,7 +30,7 @@ async fn test_secrets_mcp_flow() -> anyhow::Result<()> {
     assert!(res.contains("[Error] secrets not initialized"));
 
     // 3. Инициализируем хранилище через SecretsService
-    ctx.secrets.init("master_pin_1234", None)?;
+    ctx.secrets.init("1234", None)?;
 
     // 4. Попытка get/set после init, но до unlock -> [Error] secrets locked
     let res = server.call_tool("secrets_get", json!({ "name": "api_key" })).await;
@@ -40,7 +40,7 @@ async fn test_secrets_mcp_flow() -> anyhow::Result<()> {
     assert!(res.contains("[Error] secrets locked"));
 
     // 5. Разблокируем сейф (имитация ввода PIN пользователем)
-    ctx.secrets.unlock("master_pin_1234")?;
+    ctx.secrets.unlock("1234")?;
 
     // 6. Проверяем secrets_status в разблокированном виде
     let res = server.call_tool("secrets_status", json!({})).await;
@@ -73,7 +73,7 @@ async fn test_secrets_mcp_flow() -> anyhow::Result<()> {
     assert!(res.contains("[Error] secrets locked"));
 
     // 11. Повторный unlock и удаление
-    ctx.secrets.unlock("master_pin_1234")?;
+    ctx.secrets.unlock("1234")?;
     let res = server.call_tool("secrets_delete", json!({ "name": "prod_db_pass" })).await;
     assert!(res.contains("✓"));
 
