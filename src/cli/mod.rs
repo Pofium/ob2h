@@ -138,6 +138,15 @@ pub enum RalphCommands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Выгрузить debt-леджер проекта: осознанные упрощения и отложенный долг (Ф60.3)
+    Debt {
+        /// Идентификатор проекта (без флага — по всем проектам)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Гейт: ошибка, если есть маркеры без upgrade_trigger
+        #[arg(long)]
+        strict_triggers: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

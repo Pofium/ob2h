@@ -64,6 +64,37 @@ fn symbols_of(json: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(json).unwrap_or_default()
 }
 
+/// 60.2: отпечаток результата тестов — нормализованный JSON `tests_summary`.
+/// Одинаковые отпечатки у подряд идущих итераций одной задачи = «зацикливание».
+fn tests_fingerprint(summary: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(summary).ok()?;
+    // serde_json::Map — BTreeMap: ключи сериализуются детерминированно (отсортированы).
+    let normalized = serde_json::to_string(&value).ok()?;
+    let mut h = Sha256::new();
+    h.update(normalized.as_bytes());
+    Some(hex::encode(h.finalize())[..16].to_string())
+}
+
+/// 60.2: (кол-во повторов, кол-во последовательных пар) по (run, task).
+fn repeat_failure_stats(iters: &[(String, String, i64, Option<String>)]) -> (i64, i64) {
+    let mut pairs = 0i64;
+    let mut repeats = 0i64;
+    let mut prev: Option<(&str, &str, Option<String>)> = None;
+    for (run, task, _n, summary) in iters {
+        let fp = summary.as_deref().and_then(tests_fingerprint);
+        if let Some((p_run, p_task, p_fp)) = prev {
+            if p_run == run.as_str() && p_task == task.as_str() {
+                pairs += 1;
+                if fp.is_some() && fp == p_fp {
+                    repeats += 1;
+                }
+            }
+        }
+        prev = Some((run.as_str(), task.as_str(), fp));
+    }
+    (repeats, pairs)
+}
+
 impl RalphService {
     pub fn new(db: Database, project: Arc<ProjectService>, data_dir: std::path::PathBuf) -> Self {
         Self { db, project, data_dir }
@@ -314,8 +345,42 @@ impl RalphService {
         })?;
 
         // FR-K5: staleness-pass — модифицированные/удалённые символы инвалидируют findings.
+        // 60.4: расширяем набор «затронутых» символов — если изменённый символ вызывался
+        // из других файлов (ast_refs, kind=call), то findings, привязанные к вызывающим
+        // функциям этих файлов, тоже помечаются stale.
+        let mut affected_labels: HashSet<String> = changed_labels.clone();
+        if !changed_labels.is_empty() {
+            let labels_vec: Vec<String> = changed_labels.iter().cloned().collect();
+            self.db.with_conn(|conn| {
+                for label in &labels_vec {
+                    let mut paths_stmt = conn.prepare(
+                        "SELECT DISTINCT rel_path FROM ast_refs \
+                         WHERE project_id = ?1 AND kind = 'call' AND name = ?2",
+                    )?;
+                    let paths: Vec<String> = paths_stmt
+                        .query_map(params![project_id, label], |r| r.get::<_, String>(0))?
+                        .flatten()
+                        .collect();
+                    for rel_path in paths {
+                        let mut def_stmt = conn.prepare(
+                            "SELECT DISTINCT label FROM graph_nodes \
+                             WHERE project_id = ?1 AND file_path = ?2 AND deleted_at IS NULL",
+                        )?;
+                        let defs: Vec<String> = def_stmt
+                            .query_map(params![project_id, rel_path], |r| r.get::<_, String>(0))?
+                            .flatten()
+                            .collect();
+                        for d in defs {
+                            affected_labels.insert(d);
+                        }
+                    }
+                }
+                Ok(())
+            })?;
+        }
+
         let mut stale_marked = 0;
-        for label in &changed_labels {
+        for label in &affected_labels {
             let like = format!("%{label}%");
             let rows: Vec<(String, String)> = self.db.with_conn(|conn| {
                 let mut stmt = conn.prepare(
@@ -659,13 +724,15 @@ impl RalphService {
         Ok(out)
     }
 
-    /// ralph_report: сводка по run (или по всем) + debt-леджер + gain-метрики.
+    /// ralph_report: сводка по run (или по всем) + debt-леджер + gain-метрики
+    /// (reuse-hit rate, repeat-failure rate — Ф60.2).
     pub fn report(&self, run_id: Option<&str>) -> anyhow::Result<String> {
-        let (runs, iterations, findings, deferred, reuse_hits, total_iters): (
+        let (runs, iterations, findings, deferred, reuse_hits, repeat_pairs, pair_total): (
             i64,
             i64,
             i64,
             Vec<(String, Option<String>, String)>,
+            i64,
             i64,
             i64,
         ) = self.db.with_conn(|conn| {
@@ -677,18 +744,14 @@ impl RalphService {
                 )?,
                 None => conn.query_row("SELECT count(*) FROM ralph_runs", [], |r| r.get(0))?,
             };
-            let iter_where = match run_id {
-                Some(_) => "WHERE run_id = ?1".to_string(),
-                None => "WHERE ladder_rung LIKE 'reuse:%'".to_string(),
+            let iterations: i64 = match run_id {
+                Some(id) => conn.query_row(
+                    "SELECT count(*) FROM ralph_iterations WHERE run_id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )?,
+                None => conn.query_row("SELECT count(*) FROM ralph_iterations", [], |r| r.get(0))?,
             };
-            let iterations: i64 = conn.query_row(
-                &match run_id {
-                    Some(_) => "SELECT count(*) FROM ralph_iterations WHERE run_id = ?1".to_string(),
-                    None => "SELECT count(*) FROM ralph_iterations".to_string(),
-                },
-                params![run_id],
-                |r| r.get(0),
-            )?;
             let reuse_hits: i64 = if run_id.is_some() {
                 conn.query_row(
                     "SELECT count(*) FROM ralph_iterations WHERE run_id = ?1 AND ladder_rung LIKE 'reuse:%'",
@@ -702,23 +765,46 @@ impl RalphService {
                     |r| r.get(0),
                 )?
             };
-            let _ = iter_where;
             let findings: i64 = conn.query_row("SELECT count(*) FROM ralph_findings", [], |r| r.get(0))?;
             let mut stmt = conn.prepare(
                 "SELECT content, meta, kind FROM ralph_findings WHERE kind = 'deferred' LIMIT 20",
             )?;
             let deferred = rows_to_vec(&mut stmt)?;
-            let total_iters = iterations;
-            Ok((runs, iterations, findings, deferred, reuse_hits, total_iters))
+
+            // 60.2: подряд идущие итерации одной задачи (run, task) по возрастанию n.
+            let mut iters_stmt = conn.prepare(
+                "SELECT run_id, task_id, n, tests_summary FROM ralph_iterations \
+                 WHERE (?1 IS NULL OR run_id = ?1) ORDER BY run_id, task_id, n",
+            )?;
+            let iters: Vec<(String, String, i64, Option<String>)> = iters_stmt
+                .query_map(params![run_id], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                })?
+                .flatten()
+                .collect();
+            let (repeat_pairs, pair_total) = repeat_failure_stats(&iters);
+
+            Ok((runs, iterations, findings, deferred, reuse_hits, repeat_pairs, pair_total))
         })?;
 
-        let reuse_rate = if total_iters > 0 {
-            format!("{:.0}%", reuse_hits * 100 / total_iters.max(1))
+        let reuse_rate = if iterations > 0 {
+            format!("{:.0}%", reuse_hits * 100 / iterations.max(1))
+        } else {
+            "n/a".into()
+        };
+        let repeat_rate = if pair_total > 0 {
+            format!("{:.0}%", repeat_pairs * 100 / pair_total)
         } else {
             "n/a".into()
         };
         let mut out = format!(
-            "ralph_report: runs={runs} iterations={iterations} findings={findings} reuse-hit={reuse_rate}"
+            "ralph_report: runs={runs} iterations={iterations} findings={findings} \
+             reuse-hit={reuse_rate} repeat-fail={repeat_rate}"
         );
         if !deferred.is_empty() {
             out.push_str("\ndebt-леджер (deferred):");
@@ -729,6 +815,75 @@ impl RalphService {
                     "\n- [{kind}]{} {head}",
                     if no_trigger { " [no-trigger!]" } else { "" }
                 ));
+            }
+        }
+        Ok(out)
+    }
+
+    /// 60.3: debt-леджер проекта — осознанные упрощения и отложенный долг с
+    /// подсветкой `[no-trigger!]` (маркер `deferred` без upgrade_trigger).
+    /// `strict_triggers=true` — ошибка при наличии маркеров без триггера (гейт).
+    pub fn debt(&self, project_id: Option<&str>, strict_triggers: bool) -> anyhow::Result<String> {
+        let rows: Vec<(String, Option<String>)> = self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT content, meta FROM ralph_findings \
+                 WHERE kind = 'deferred' AND (?1 IS NULL OR project_id = ?1) \
+                 ORDER BY created_at DESC",
+            )?;
+            let rows = stmt
+                .query_map(params![project_id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                })?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })?;
+
+        let mut out = format!(
+            "ralph debt ({}): {} записей",
+            project_id.unwrap_or("все проекты"),
+            rows.len()
+        );
+        let mut no_trigger_count = 0usize;
+        for (content, meta) in &rows {
+            let meta_v: Option<serde_json::Value> =
+                meta.as_deref().and_then(|m| serde_json::from_str(m).ok());
+            let ceiling = meta_v
+                .as_ref()
+                .and_then(|v| v.get("ceiling"))
+                .and_then(|x| x.as_str());
+            let trigger = meta_v
+                .as_ref()
+                .and_then(|v| v.get("upgrade_trigger"))
+                .and_then(|x| x.as_str());
+            let explicit = meta.as_deref().map(|m| m.contains("no_trigger")).unwrap_or(false);
+            let no_trigger = explicit || trigger.is_none();
+            if no_trigger {
+                no_trigger_count += 1;
+            }
+            let head: String = content.chars().take(160).collect();
+            out.push_str(&format!(
+                "\n- {}{}",
+                if no_trigger { "[no-trigger!] " } else { "" },
+                head
+            ));
+            if let Some(c) = ceiling {
+                out.push_str(&format!("\n    ceiling: {c}"));
+            }
+            out.push_str(&format!(
+                "\n    trigger: {}",
+                trigger.unwrap_or("отсутствует — маркер безусловный")
+            ));
+        }
+        if no_trigger_count > 0 {
+            out.push_str(&format!(
+                "\n[no-trigger!] {no_trigger_count} из {} маркеров без upgrade_trigger",
+                rows.len()
+            ));
+            if strict_triggers {
+                anyhow::bail!(
+                    "strict-triggers: {no_trigger_count} deferred-маркеров без upgrade_trigger"
+                );
             }
         }
         Ok(out)

@@ -159,6 +159,16 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Some(Commands::Ralph { command }) => match command {
+            ob2h::cli::RalphCommands::Debt {
+                project,
+                strict_triggers,
+            } => {
+                // Ф60.3: debt-леджер (осознанные упрощения + отложенный долг)
+                println!(
+                    "{}",
+                    ctx.ralph.debt(project.as_deref(), strict_triggers)?
+                );
+            }
             ob2h::cli::RalphCommands::FindingsToMemory { project, dry_run } => {
                 // FR-K12: verified-findings циклов → долговременная память
                 let findings = ctx.ralph.verified_findings(&project)?;
