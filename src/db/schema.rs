@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -347,6 +347,32 @@ CREATE TABLE IF NOT EXISTS secrets (
 );
 "#;
 
+/// M10 (v1.9, Фаза 62.1): FTS5-индекс `graph_nodes(label, description)` для
+/// быстрого лексического поиска графа (BM25) вместо Full Scan `LIKE %query%`.
+/// Внешний контент (content='graph_nodes') — дублирования данных нет; триггеры
+/// синхронизируют индекс с таблицей; backfill проставляет существующие узлы.
+pub const MIGRATION_V10: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS graph_nodes_fts USING fts5(
+  label, description, content='graph_nodes', content_rowid='id', tokenize='trigram'
+);
+CREATE TRIGGER IF NOT EXISTS graph_nodes_fts_ai AFTER INSERT ON graph_nodes BEGIN
+  INSERT INTO graph_nodes_fts (rowid, label, description)
+    VALUES (new.id, new.label, new.description);
+END;
+CREATE TRIGGER IF NOT EXISTS graph_nodes_fts_ad AFTER DELETE ON graph_nodes BEGIN
+  INSERT INTO graph_nodes_fts (graph_nodes_fts, rowid, label, description)
+    VALUES ('delete', old.id, old.label, old.description);
+END;
+CREATE TRIGGER IF NOT EXISTS graph_nodes_fts_au AFTER UPDATE ON graph_nodes BEGIN
+  INSERT INTO graph_nodes_fts (graph_nodes_fts, rowid, label, description)
+    VALUES ('delete', old.id, old.label, old.description);
+  INSERT INTO graph_nodes_fts (rowid, label, description)
+    VALUES (new.id, new.label, new.description);
+END;
+INSERT INTO graph_nodes_fts (rowid, label, description)
+  SELECT id, label, description FROM graph_nodes;
+"#;
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;"
@@ -370,6 +396,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V7)?;
         conn.execute_batch(MIGRATION_V8)?;
         conn.execute_batch(MIGRATION_V9)?;
+        conn.execute_batch(MIGRATION_V10)?;
     } else {
         if current_version < 2 {
             conn.execute_batch(MIGRATION_V2)?;
@@ -394,6 +421,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         }
         if current_version < 9 {
             conn.execute_batch(MIGRATION_V9)?;
+        }
+        if current_version < 10 {
+            conn.execute_batch(MIGRATION_V10)?;
         }
     }
 

@@ -239,6 +239,43 @@ async fn forget_soft_deletes_links() {
     assert!(!related.contains(&"t-new".to_string()), "soft-deleted ребро в 1-hop: {related:?}");
 }
 
+/// 62.4: устаревший факт (ребро supersedes, замена в пуле) подавляется в
+/// `build_context`; новая запись остаётся, знание не теряется.
+#[tokio::test]
+async fn superseded_fact_suppressed_in_context() {
+    let tmp = tempdir().expect("tempdir");
+    let mut settings = Settings::from_env();
+    settings.data_dir = tmp.path().to_path_buf();
+    settings.embed_provider = "fake".to_string();
+    let ctx = init_app(settings).expect("init app");
+    let memory = ctx.memory.clone();
+
+    memory
+        .save("Бэкенд проекта работает на PHP 5 без очередей", Some("s-old"), "facts", 0.5, "chat", None)
+        .await
+        .expect("save old");
+    memory
+        .save("Бэкенд проекта переехал на Laravel 12 с очередями", Some("s-new"), "facts", 0.5, "chat", None)
+        .await
+        .expect("save new");
+    let old = memory.get("s-old").expect("get").expect("rec");
+    let new = memory.get("s-new").expect("get").expect("rec");
+    memory.upsert_link(new.id, old.id, "supersedes", 1.0).expect("link");
+
+    assert_eq!(
+        memory.superseded_among(&[old.id, new.id]).expect("superseded"),
+        std::collections::HashSet::from([old.id]),
+        "старая запись помечена как устаревшая"
+    );
+
+    let block = memory
+        .build_context(10, Some("бэкенд проекта"), &ob2h::memory::ContextOptions::default())
+        .await
+        .expect("build_context");
+    assert!(block.contains("Laravel"), "новая запись должна остаться: {block}");
+    assert!(!block.contains("PHP 5"), "устаревшая запись подавлена: {block}");
+}
+
 /// 32.2: conflict-разметка в memory_search — обе стороны спора с trust.
 #[tokio::test]
 async fn conflict_markup_shows_both_sides() {

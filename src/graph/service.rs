@@ -242,35 +242,66 @@ impl GraphService {
 
         let mut scored: HashMap<i64, f64> = HashMap::new();
 
-        // 1. Полнотекстовый / лексический скоринг
-        let all_nodes = self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT id, label, description FROM graph_nodes WHERE deleted_at IS NULL")?;
-            let rows = stmt.query_map([], |row| {
-                let id: i64 = row.get(0)?;
-                let label: String = row.get(1)?;
-                let desc: Option<String> = row.get(2)?;
-                Ok((id, label, desc))
-            })?;
-            let mut list = Vec::new();
-            for r in rows.flatten() {
-                list.push(r);
-            }
-            Ok(list)
-        })?;
+        // 1. Лексический скоринг. Ф62.1: кандидаты берём из FTS5 (BM25-совместимый
+        //    поиск по подстроке через trigram-токенайзер), а не полным перебором
+        //    `SELECT … FROM graph_nodes` + `LIKE`. Ранжирование (label/desc) прежнее.
+        if !words.is_empty() {
+            let match_expr = words
+                .iter()
+                .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let fetch_all = |conn: &mut rusqlite::Connection| -> rusqlite::Result<Vec<(i64, String, Option<String>)>> {
+                let mut stmt = conn.prepare(
+                    "SELECT id, label, description FROM graph_nodes WHERE deleted_at IS NULL",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })?;
+                Ok(rows.flatten().collect())
+            };
 
-        for (id, label, desc_opt) in all_nodes {
-            let label_lower = label.to_lowercase();
-            let desc_lower = desc_opt.unwrap_or_default().to_lowercase();
-            let mut score = 0.0;
-            for w in &words {
-                if label_lower.contains(w) {
-                    score += 10.0;
-                } else if desc_lower.contains(w) {
-                    score += 1.0;
+            let candidates = match self.db.with_conn(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT n.id, n.label, n.description FROM graph_nodes n \
+                     WHERE n.deleted_at IS NULL \
+                       AND n.id IN (SELECT rowid FROM graph_nodes_fts WHERE graph_nodes_fts MATCH ?1)",
+                )?;
+                let rows = stmt.query_map(params![match_expr], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })?;
+                Ok(rows.flatten().collect::<Vec<_>>())
+            }) {
+                Ok(list) => list,
+                Err(e) => {
+                    // FTS5 недоступен/индекс битый — прежний полный перебор (без регресса).
+                    warn!("graph FTS5 недоступен, fallback на полный перебор: {e}");
+                    self.db.with_conn(fetch_all)?
                 }
-            }
-            if score > 0.0 {
-                scored.insert(id, score);
+            };
+
+            for (id, label, desc_opt) in candidates {
+                let label_lower = label.to_lowercase();
+                let desc_lower = desc_opt.unwrap_or_default().to_lowercase();
+                let mut score = 0.0;
+                for w in &words {
+                    if label_lower.contains(w) {
+                        score += 10.0;
+                    } else if desc_lower.contains(w) {
+                        score += 1.0;
+                    }
+                }
+                if score > 0.0 {
+                    scored.insert(id, score);
+                }
             }
         }
 
