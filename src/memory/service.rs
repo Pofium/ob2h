@@ -981,6 +981,37 @@ impl MemoryService {
         })
     }
 
+    /// Ф62.4: id записей, подавленных как устаревшие. Считаются только живые
+    /// рёбра `supersedes` (from — новее, to — старее), у которых НОВАЯ запись тоже
+    /// присутствует в выборке `ids`: подавляем, лишь когда замена доступна здесь же
+    /// (иначе знание было бы потеряно, а не обновлено).
+    pub fn superseded_among(&self, ids: &[i64]) -> anyhow::Result<HashSet<i64>> {
+        if ids.len() < 2 {
+            return Ok(HashSet::new());
+        }
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "SELECT l.to_id FROM memory_links l \
+             JOIN memories nf ON nf.id = l.from_id AND nf.deleted_at IS NULL \
+             JOIN memories nt ON nt.id = l.to_id AND nt.deleted_at IS NULL \
+             WHERE l.kind = 'supersedes' AND l.deleted_at IS NULL \
+               AND l.from_id IN ({ph}) AND l.to_id IN ({ph})",
+            ph = placeholders
+        );
+        self.db.with_conn(|conn| {
+            let mut stmt = conn.prepare(&sql)?;
+            let mut all: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(ids.len() * 2);
+            for id in ids {
+                all.push(Box::new(*id));
+            }
+            for id in ids {
+                all.push(Box::new(*id));
+            }
+            let rows = stmt.query_map(rusqlite::params_from_iter(all.iter()), |r| r.get::<_, i64>(0))?;
+            Ok(rows.flatten().collect())
+        })
+    }
+
     /// Свежие живые записи (для dual-side вердиктов Ф32.1: LLM выбирает
     /// «новую» сторону из списка кандидатов).
     pub fn recent_records(&self, limit: usize) -> anyhow::Result<Vec<MemoryRecord>> {
@@ -1220,6 +1251,15 @@ impl MemoryService {
             }
         }
 
+        // Ф62.4: устаревшие факты (живое ребро supersedes, замена — здесь же)
+        // не попадают в контекст PPR; замена остаётся, знание не теряется.
+        let rec_ids: Vec<i64> = records.iter().map(|(r, _)| r.id).collect();
+        let superseded = self.superseded_among(&rec_ids).unwrap_or_default();
+        let suppressed_superseded = superseded.len();
+        if !superseded.is_empty() && superseded.len() < records.len() {
+            records.retain(|(r, _)| !superseded.contains(&r.id));
+        }
+
         let elapsed_ms = started.elapsed().as_millis();
         let mut truncated = nodes_total as usize > max_nodes || elapsed_ms as u64 > timeout_ms;
         if elapsed_ms as u64 > timeout_ms && records.len() > 3 {
@@ -1239,6 +1279,12 @@ impl MemoryService {
         let confidence = if mass > 0.0 { weighted / mass } else { 0.0 };
 
         let mut facts = vec!["Память (PPR-подграф):".to_string()];
+        if suppressed_superseded > 0 {
+            facts.push(format!(
+                "- …[подавлено {} устаревших записей (supersedes)]",
+                suppressed_superseded
+            ));
+        }
         for (rec, score) in &records {
             let preview: String = rec.content.chars().take(200).collect();
             facts.push(format!(
@@ -1359,6 +1405,15 @@ impl MemoryService {
             .collect();
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Ф62.4: устаревшие факты (живое ребро supersedes с заменой в выборке)
+        // не попадают в fallback-контекст.
+        let fb_ids: Vec<i64> = scored.iter().map(|(r, _)| r.id).collect();
+        let fb_superseded = self.superseded_among(&fb_ids).unwrap_or_default();
+        if !fb_superseded.is_empty() && fb_superseded.len() < scored.len() {
+            scored.retain(|(r, _)| !fb_superseded.contains(&r.id));
+        }
+
         if scored.len() > limit {
             scored.truncate(limit);
         }
@@ -1430,6 +1485,14 @@ impl MemoryService {
             })
             .collect();
         cands.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Ф62.4: подавляем устаревшие факты (есть живое ребро supersedes и замена
+        // в том же пуле). Не трогаем пул, если это убрало бы все кандидаты.
+        let pool_ids: Vec<i64> = cands.iter().map(|c| c.record.id).collect();
+        let superseded = self.superseded_among(&pool_ids).unwrap_or_default();
+        if !superseded.is_empty() && superseded.len() < cands.len() {
+            cands.retain(|c| !superseded.contains(&c.record.id));
+        }
 
         // MMR-диверсификация (§22.3): λ — вес релевантности, остаток — разнообразие.
         let max_score = cands.iter().map(|c| c.score).fold(0.0_f64, f64::max).max(1e-9);
