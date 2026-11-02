@@ -1,7 +1,9 @@
 //! Конфигурация OB2H (переменные окружения с префиксом OB2H_).
 
 use std::env;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -101,6 +103,72 @@ pub struct Settings {
     pub max_tool_output_chars: usize,
 }
 
+/// Резолв значения OB2H_LLM_API_KEY: ИМЯ переменной окружения (с фолбэком
+/// на `<data_dir>/.env` и `./.env` — cwd процесса serve у Hermes не проектный)
+/// либо литеральный ключ. Если значение похоже на имя переменной, но нигде
+/// не найдено — громкий warn: иначе имя уедет в API как bearer-ключ и все
+/// LLM-вызовы будут падать с 401 молча (симптом: entities=0).
+fn resolve_llm_api_key(key_ref: &str, data_dir: &Path) -> String {
+    if key_ref.is_empty() {
+        return String::new();
+    }
+    if let Ok(v) = env::var(key_ref) {
+        if !v.trim().is_empty() {
+            return v;
+        }
+    }
+    if looks_like_env_name(key_ref) {
+        for candidate in [data_dir.join(".env"), PathBuf::from(".env")] {
+            if let Some(v) = read_env_file_value(&candidate, key_ref) {
+                warn!(
+                    "OB2H_LLM_API_KEY: переменная {key_ref} не в окружении, взята из {}",
+                    candidate.display()
+                );
+                return v;
+            }
+        }
+        warn!(
+            "OB2H_LLM_API_KEY=\"{key_ref}\" похоже на имя переменной, но она не найдена \
+             ни в окружении, ни в .env — LLM-вызовы будут падать (401). Положите ключ \
+             в окружение процесса или укажите сам ключ в OB2H_LLM_API_KEY."
+        );
+    }
+    key_ref.to_string()
+}
+
+/// Похоже ли значение на ИМЯ переменной окружения (ВАР_ИМЯ), а не на ключ API.
+fn looks_like_env_name(value: &str) -> bool {
+    value.len() >= 3
+        && value
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_uppercase() || c == '_')
+        && value
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Достать `ИМЯ=значение` из .env-файла, не трогая окружение процесса.
+fn read_env_file_value(path: &Path, name: &str) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    for line in content.lines() {
+        let line = line.trim_start();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        if k.trim() == name {
+            let v = v.trim().trim_matches('"').trim_matches('\'');
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
 impl Settings {
     pub fn from_env() -> Self {
         let _ = dotenvy::dotenv();
@@ -112,14 +180,9 @@ impl Settings {
         let llm_base_url = env::var("OB2H_LLM_BASE_URL")
             .unwrap_or_else(|_| "https://api.deepseek.com/v1".to_string());
         // OB2H_LLM_API_KEY может содержать ИМЯ переменной окружения с ключом
-        // (конвенция из README, так настраивает install.bat/Hermes),
-        // либо сам ключ. Разворачиваем индирекцию, с фолбэком на литерал.
+        // (конвенция Hermes: OB2H_LLM_API_KEY="DEEPSEEK_API_KEY"), либо сам ключ.
         let key_ref = env::var("OB2H_LLM_API_KEY").unwrap_or_default();
-        let llm_api_key = if key_ref.is_empty() {
-            String::new()
-        } else {
-            env::var(&key_ref).unwrap_or_else(|_| key_ref.clone())
-        };
+        let llm_api_key = resolve_llm_api_key(&key_ref, &data_dir);
         let llm_model = env::var("OB2H_LLM_MODEL")
             .unwrap_or_else(|_| "deepseek-v4-flash".to_string());
         let llm_timeout_secs = env::var("OB2H_LLM_TIMEOUT")
@@ -389,5 +452,62 @@ impl Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self::from_env()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn looks_like_env_name_detects_names() {
+        assert!(looks_like_env_name("DEEPSEEK_API_KEY"));
+        assert!(looks_like_env_name("_PRIVATE_KEY"));
+        assert!(!looks_like_env_name("sk-b38f8542037"));
+        assert!(!looks_like_env_name("k2-key"));
+        assert!(!looks_like_env_name(""));
+        assert!(!looks_like_env_name("ab"));
+    }
+
+    #[test]
+    fn resolve_key_literal_passthrough() {
+        // Литеральный ключ (не похож на имя переменной) — проходит как есть.
+        let dir = std::env::temp_dir();
+        assert_eq!(resolve_llm_api_key("sk-test-literal-key", &dir), "sk-test-literal-key");
+        assert_eq!(resolve_llm_api_key("", &dir), "");
+    }
+
+    #[test]
+    fn resolve_key_env_var_takes_priority() {
+        env::set_var("OB2H_TEST_RESOLVE_KEY", "sk-from-env");
+        let key = resolve_llm_api_key("OB2H_TEST_RESOLVE_KEY", &std::env::temp_dir());
+        env::remove_var("OB2H_TEST_RESOLVE_KEY");
+        assert_eq!(key, "sk-from-env");
+    }
+
+    #[test]
+    fn resolve_key_falls_back_to_data_dir_env_file() {
+        // Имени нет в окружении, но есть в <data_dir>/.env (случай Hermes: cwd ≠ проект).
+        let name = "OB2H_TEST_FILE_KEY";
+        env::remove_var(name);
+        let dir = std::env::temp_dir().join(format!("ob2h_cfg_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(".env"),
+            "# comment\nOB2H_UNRELATED=1\nOB2H_TEST_FILE_KEY=\"sk-from-file\"\n",
+        )
+        .unwrap();
+        let key = resolve_llm_api_key(name, &dir);
+        fs::remove_dir_all(&dir).ok();
+        assert_eq!(key, "sk-from-file");
+    }
+
+    #[test]
+    fn resolve_key_missing_name_warns_and_returns_literal() {
+        // Имя нигде не найдено — фолбэк на литерал (401 при вызове, но с warn на старте).
+        let dir = std::env::temp_dir().join("ob2h_cfg_test_no_env_file");
+        let name = "OB2H_TEST_MISSING_KEY_XYZ";
+        env::remove_var(name);
+        assert_eq!(resolve_llm_api_key(name, &dir), name);
     }
 }

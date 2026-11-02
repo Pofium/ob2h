@@ -32,6 +32,8 @@ async fn test_graph_upsert_search_and_reason() {
         }],
         chunks_processed: 1,
         chunks_skipped: 0,
+        llm_failed: 0,
+        last_error: None,
     };
 
     let (new_e, up_e, new_r) = service.upsert_extraction(&extracted).await.expect("upsert");

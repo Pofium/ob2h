@@ -163,6 +163,8 @@ async fn test_roundtrip_pc_to_vps() {
         }],
         chunks_processed: 1,
         chunks_skipped: 0,
+        llm_failed: 0,
+        last_error: None,
     };
     pc.graph.upsert_extraction(&extraction).await.unwrap();
 

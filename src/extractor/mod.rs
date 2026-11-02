@@ -45,6 +45,12 @@ pub struct ExtractionResult {
     pub relations: Vec<Relation>,
     pub chunks_processed: usize,
     pub chunks_skipped: usize,
+    /// Чанков, на которых LLM-вызов упал (иначе entities=0 выглядит как «сущностей нет»).
+    #[serde(default)]
+    pub llm_failed: usize,
+    /// Последняя ошибка LLM (обрезана) — для диагностики в выводе инструмента.
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -191,6 +197,8 @@ impl Extractor {
             Ok(data) => data,
             Err(e) => {
                 warn!("Chunk extraction failed: {e}");
+                result.llm_failed += 1;
+                result.last_error = Some(e.to_string().chars().take(300).collect());
                 return;
             }
         };

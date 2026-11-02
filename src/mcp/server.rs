@@ -1241,10 +1241,22 @@ impl McpServer {
                             .upsert_extraction(&result)
                             .await
                             .unwrap_or_default();
-                        format!(
+                        let mut out = format!(
                             "doc_id={doc_id} chunks={}(+{} пропущено) entities={}новых+{}дублей relations={}новых",
                             result.chunks_processed, result.chunks_skipped, new_nodes, updated_nodes, new_edges
-                        )
+                        );
+                        // Упавшие LLM-вызовы не тихие: entities=0 должен объясняться.
+                        if result.llm_failed > 0 {
+                            let err = result.last_error.unwrap_or_default();
+                            out.push_str(&format!(
+                                "\n[Error] LLM-экстракция не удалась для {}/{} чанков: {err}\n\
+                                 [Подсказка] Чанки проиндексированы без графа. Проверьте OB2H_LLM_API_KEY \
+                                 (имя env-переменной с ключом или сам ключ) и OB2H_LLM_BASE_URL, \
+                                 затем повторите knowledge_extract.",
+                                result.llm_failed, result.chunks_processed
+                            ));
+                        }
+                        out
                     }
                     Err(e) => format!("[Error] {e}"),
                 }
