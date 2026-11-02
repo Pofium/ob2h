@@ -5,14 +5,16 @@
 
 ## [Unreleased]
 
-### Fixed
-- **Диагностика упавших LLM-вызовов при экстракции (симптом entities=0).**
-  `knowledge_extract` при неудачных LLM-вызовах по чанкам теперь явно сообщает
-  `[Error] LLM-экстракция не удалась для N/M чанков: …` с подсказкой (чанки
-  остаются проиндексированными). Резолв `OB2H_LLM_API_KEY` надёжнее: имя
-  переменной окружения (конвенция Hermes) ищется в окружении процесса, затем
-  в `<data_dir>/.env` и `./.env`; если имя нигде не найдено — громкий warn на
-  старте вместо молчаливой отправки литерала как bearer-ключа (401).
+### Added
+- **Три эшелона снабжения LLM — ob2h больше не остаётся без модели:**
+  1. Явный ключ `OB2H_LLM_*` (литерал или имя найденной env-переменной, фолбэк `<data_dir>/.env`).
+  2. **Автоподхват основной LLM harness-системы** (`src/llm/harness.rs`): при MCP `initialize` по `clientInfo.name` ob2h читает конфиг подключённой системы и подменяет LLM-клиент (`SwappableLLM`): hermes → `%LOCALAPPDATA%/hermes/config.yaml` (активный provider: `api`/`base_url`, ключ `api_key`/`key_env`); zcode/omnesagent → `~/.omnesagent/config.toml` (deepseek/openrouter; anthropic-провайдер пропускается — другой протокол); codex → `~/.codex/auth.json` (API-key mode); claude/trae/qoder/dsh — account-auth → локальная модель. Форс: `OB2H_LLM_HARNESS=<имя>`; гейт: `OB2H_LLM_HARNESS_DETECT=0`.
+  3. **Локальная мини-модель для дриминга** (`src/llm/local.rs`): `LocalMiniLLM` на Candle (Qwen3), дефолт `Qwen/Qwen3-0.6B`, автоскачивание ~1.4 GB через `hf-hub` при первом вызове (лениво, старт serve не блокирует). `OB2H_LOCAL_LLM=0` — выключить; `OB2H_LOCAL_LLM_MODEL` — другая qwen3-совместимая модель.
+- Бамп `candle-core`/`candle-nn`/`candle-transformers` 0.8 → 0.9.x (поддержка архитектуры Qwen3; эмбеддинги совместимы без правок).
+- `knowledge_extract` при неудачных LLM-вызовах явно сообщает `[Error] LLM-экстракция не удалась для N/M чанков: …` с подсказкой (чанки остаются проиндексированными); резолв `OB2H_LLM_API_KEY` надёжнее (имя переменной → окружение → `<data_dir>/.env` → `./.env`, громкий warn если имя нигде не найдено).
+
+### Changed
+- `make_llm` без явного ключа строит `LocalMiniLLM` вместо `OpenAIClient` с пустым ключом (молчаливые 401). CLI-процессы (`ob2h dream` без serve) harness-детект не получают — работают эшелоны 1/3.
 
 ## [1.9.0] - 2026-11-01
 

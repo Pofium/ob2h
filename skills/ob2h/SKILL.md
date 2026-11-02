@@ -105,13 +105,17 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
 
 ## Критичные питфоллы
 1. **OB2H_LLM_API_KEY = ИМЯ env-переменной** с ключом (напр. `DEEPSEEK_API_KEY`), не сам
-   ключ (развязка в коде, коммит 82d7e3f; фолбэк на литерал). Симптом обратного:
-   401 `Your api key: ****_KEY is invalid`.
-2. **«chunks записались, entities=0»** в knowledge_extract — почти всегда упал LLM-вызов
-   (см. п.1). Смотреть лог, не чинить экстрактор.
-3. **Логи**: `{{DATA_DIR}}/logs/ob2h.log` (cwd сервера от Hermes = домашняя папка — до фикса
+   ключ (развязка в коде, коммит 82d7e3f; фолбэк на литерал и на `<data_dir>/.env`).
+   Симптом обратного: 401 `Your api key: ****_KEY is invalid`.
+2. **«chunks записались, entities=0»** в knowledge_extract — упавший LLM-вызов (см. п.1);
+   теперь инструмент сам возвращает `[Error]/[Подсказка]` с числом упавших чанков.
+3. **Снабжение LLM — три эшелона** (2026-11): явный `OB2H_LLM_*` → основная LLM
+   harness-системы (автодетект по `clientInfo` при `initialize`: hermes/zcode/codex
+   читают свой конфиг; форс — `OB2H_LLM_HARNESS`) → локальная мини-модель
+   `Qwen/Qwen3-0.6B` (~1.4 GB, качается при первом вызове; `OB2H_LOCAL_LLM=0` — выкл).
+4. **Логи**: `{{DATA_DIR}}/logs/ob2h.log` (cwd сервера от Hermes = домашняя папка — до фикса
    82d7e3f логи могут лежать в `~/logs`, искать оба места).
-4. **Пересборка (Windows)**: exe блокируется, пока процесс жив (Hermes/плагин держит).
+5. **Пересборка (Windows)**: exe блокируется, пока процесс жив (Hermes/плагин держит).
    `cargo build --release` падает `os error 5` → сначала `Get-Process ob2h | Stop-Process
    -Force` (убьёт MCP в текущей сессии Hermes — спросить пользователя).
    **Пересборка (Linux/VPS)**: `cd <репо> && git pull && cargo build --release &&

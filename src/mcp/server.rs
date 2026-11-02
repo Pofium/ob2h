@@ -18,7 +18,7 @@ use crate::embedding::EmbeddingProvider;
 use crate::extractor::{split_into_chunks, Extractor};
 use crate::graph::GraphService;
 use crate::ingest::read_document;
-use crate::llm::LLMClient;
+use crate::llm::SwappableLLM;
 use crate::memory::MemoryService;
 use crate::project::ProjectService;
 use crate::vector::serialize_q;
@@ -31,7 +31,7 @@ pub struct AppContext {
     pub memory: Arc<MemoryService>,
     pub workspace: Arc<Workspace>,
     pub gitstore: Arc<GitStore>,
-    pub llm: Arc<dyn LLMClient>,
+    pub llm: Arc<SwappableLLM>,
     pub consolidator: Arc<Consolidator>,
     pub pending_session: Arc<Mutex<PendingSession>>,
     pub graph: Arc<GraphService>,
@@ -183,6 +183,38 @@ impl McpServer {
                 let mut detected_path: Option<std::path::PathBuf> = None;
 
                 if let Some(params) = &req.params {
+                    // 0. Кто подключился: автоподхват основной LLM harness-системы
+                    //    (приоритет снабжения: явный OB2H_LLM_* > harness > локальная).
+                    if let Some(info) = params.get("clientInfo") {
+                        let cname = info
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let cver = info.get("version").and_then(|v| v.as_str()).unwrap_or("");
+                        info!("MCP client connected: {cname} {cver}");
+                        let detect_enabled = std::env::var("OB2H_LLM_HARNESS_DETECT")
+                            .map(|v| v != "0" && v.to_lowercase() != "false")
+                            .unwrap_or(true);
+                        if detect_enabled && !self.ctx.settings.llm_key_explicit {
+                            if let Some(h) =
+                                crate::llm::harness::detect(cname, &self.ctx.settings.data_dir)
+                            {
+                                info!(
+                                    "LLM переключён на основную модель harness '{cname}': \
+                                     model={}, base_url={} ({})",
+                                    h.model, h.base_url, h.source
+                                );
+                                self.ctx.llm.swap(Arc::new(crate::llm::OpenAIClient::new(
+                                    &h.base_url,
+                                    &h.api_key,
+                                    &h.model,
+                                    self.ctx.settings.llm_timeout_secs,
+                                    self.ctx.settings.llm_max_retries,
+                                )));
+                            }
+                        }
+                    }
+
                     // 1. Проверяем workspaceFolders
                     if let Some(folders) = params.get("workspaceFolders").and_then(|v| v.as_array())
                     {

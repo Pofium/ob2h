@@ -13,6 +13,8 @@ pub struct Settings {
     // --- LLM (dream / extract / reason / consolidate) ---
     pub llm_base_url: String,
     pub llm_api_key: String,
+    /// Ключ задан явно (литерал/имя найденной переменной) — harness-подмена не нужна.
+    pub llm_key_explicit: bool,
     pub llm_model: String,
     pub llm_timeout_secs: f64,
     pub llm_max_retries: u32,
@@ -108,13 +110,15 @@ pub struct Settings {
 /// либо литеральный ключ. Если значение похоже на имя переменной, но нигде
 /// не найдено — громкий warn: иначе имя уедет в API как bearer-ключ и все
 /// LLM-вызовы будут падать с 401 молча (симптом: entities=0).
-fn resolve_llm_api_key(key_ref: &str, data_dir: &Path) -> String {
+/// Возвращает (ключ, явный ли он). Явный = литерал или имя реально найденной
+/// переменной; в этом случае harness-подмена LLM при initialize не производится.
+fn resolve_llm_api_key(key_ref: &str, data_dir: &Path) -> (String, bool) {
     if key_ref.is_empty() {
-        return String::new();
+        return (String::new(), false);
     }
     if let Ok(v) = env::var(key_ref) {
         if !v.trim().is_empty() {
-            return v;
+            return (v, true);
         }
     }
     if looks_like_env_name(key_ref) {
@@ -124,16 +128,16 @@ fn resolve_llm_api_key(key_ref: &str, data_dir: &Path) -> String {
                     "OB2H_LLM_API_KEY: переменная {key_ref} не в окружении, взята из {}",
                     candidate.display()
                 );
-                return v;
+                return (v, true);
             }
         }
         warn!(
             "OB2H_LLM_API_KEY=\"{key_ref}\" похоже на имя переменной, но она не найдена \
-             ни в окружении, ни в .env — LLM-вызовы будут падать (401). Положите ключ \
-             в окружение процесса или укажите сам ключ в OB2H_LLM_API_KEY."
+             ни в окружении, ни в .env — будет попытка взять LLM от harness-системы \
+             или локальная мини-модель."
         );
     }
-    key_ref.to_string()
+    (key_ref.to_string(), !looks_like_env_name(key_ref))
 }
 
 /// Похоже ли значение на ИМЯ переменной окружения (ВАР_ИМЯ), а не на ключ API.
@@ -149,7 +153,7 @@ fn looks_like_env_name(value: &str) -> bool {
 }
 
 /// Достать `ИМЯ=значение` из .env-файла, не трогая окружение процесса.
-fn read_env_file_value(path: &Path, name: &str) -> Option<String> {
+pub(crate) fn read_env_file_value(path: &Path, name: &str) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
     for line in content.lines() {
         let line = line.trim_start();
@@ -182,7 +186,7 @@ impl Settings {
         // OB2H_LLM_API_KEY может содержать ИМЯ переменной окружения с ключом
         // (конвенция Hermes: OB2H_LLM_API_KEY="DEEPSEEK_API_KEY"), либо сам ключ.
         let key_ref = env::var("OB2H_LLM_API_KEY").unwrap_or_default();
-        let llm_api_key = resolve_llm_api_key(&key_ref, &data_dir);
+        let (llm_api_key, llm_key_explicit) = resolve_llm_api_key(&key_ref, &data_dir);
         let llm_model = env::var("OB2H_LLM_MODEL")
             .unwrap_or_else(|_| "deepseek-v4-flash".to_string());
         let llm_timeout_secs = env::var("OB2H_LLM_TIMEOUT")
@@ -362,6 +366,7 @@ impl Settings {
             data_dir,
             llm_base_url,
             llm_api_key,
+            llm_key_explicit,
             llm_model,
             llm_timeout_secs,
             llm_max_retries,
@@ -471,18 +476,21 @@ mod tests {
 
     #[test]
     fn resolve_key_literal_passthrough() {
-        // Литеральный ключ (не похож на имя переменной) — проходит как есть.
+        // Литеральный ключ (не похож на имя переменной) — проходит как есть, явный.
         let dir = std::env::temp_dir();
-        assert_eq!(resolve_llm_api_key("sk-test-literal-key", &dir), "sk-test-literal-key");
-        assert_eq!(resolve_llm_api_key("", &dir), "");
+        let (key, explicit) = resolve_llm_api_key("sk-test-literal-key", &dir);
+        assert_eq!(key, "sk-test-literal-key");
+        assert!(explicit);
+        assert_eq!(resolve_llm_api_key("", &dir), (String::new(), false));
     }
 
     #[test]
     fn resolve_key_env_var_takes_priority() {
         env::set_var("OB2H_TEST_RESOLVE_KEY", "sk-from-env");
-        let key = resolve_llm_api_key("OB2H_TEST_RESOLVE_KEY", &std::env::temp_dir());
+        let (key, explicit) = resolve_llm_api_key("OB2H_TEST_RESOLVE_KEY", &std::env::temp_dir());
         env::remove_var("OB2H_TEST_RESOLVE_KEY");
         assert_eq!(key, "sk-from-env");
+        assert!(explicit);
     }
 
     #[test]
@@ -497,17 +505,18 @@ mod tests {
             "# comment\nOB2H_UNRELATED=1\nOB2H_TEST_FILE_KEY=\"sk-from-file\"\n",
         )
         .unwrap();
-        let key = resolve_llm_api_key(name, &dir);
+        let (key, explicit) = resolve_llm_api_key(name, &dir);
         fs::remove_dir_all(&dir).ok();
         assert_eq!(key, "sk-from-file");
+        assert!(explicit);
     }
 
     #[test]
     fn resolve_key_missing_name_warns_and_returns_literal() {
-        // Имя нигде не найдено — фолбэк на литерал (401 при вызове, но с warn на старте).
+        // Имя нигде не найдено — фолбэк на литерал, ключ НЕ явный (разрешена harness-подмена).
         let dir = std::env::temp_dir().join("ob2h_cfg_test_no_env_file");
         let name = "OB2H_TEST_MISSING_KEY_XYZ";
         env::remove_var(name);
-        assert_eq!(resolve_llm_api_key(name, &dir), name);
+        assert_eq!(resolve_llm_api_key(name, &dir), (name.to_string(), false));
     }
 }

@@ -253,8 +253,12 @@ ob2h ralph findings-to-memory --project <id>
 |---|---|---|
 | `OB2H_DATA_DIR` | `./data` | Папка для базы данных SQLite, файлов памяти и логов |
 | `OB2H_LLM_BASE_URL` | `https://api.deepseek.com/v1` | URL OpenAI-совместимого API для рассуждений |
-| `OB2H_LLM_API_KEY` | `DEEPSEEK_API_KEY` | Имя переменной с API ключом |
+| `OB2H_LLM_API_KEY` | `DEEPSEEK_API_KEY` | Имя переменной с API ключом (или сам ключ) |
 | `OB2H_LLM_MODEL` | `deepseek-v4-flash` | Модель для экстракции и дриминга |
+| `OB2H_LLM_HARNESS_DETECT` | `1` | Автоподхват основной LLM от harness-системы при `initialize` (`0` — выкл) |
+| `OB2H_LLM_HARNESS` | — | Форс ридера harness (`hermes`, `zcode`, `codex`) независимо от clientInfo |
+| `OB2H_LOCAL_LLM` | `1` | Локальная мини-модель для дриминга, когда ключей нет (`0` — выкл) |
+| `OB2H_LOCAL_LLM_MODEL` | `Qwen/Qwen3-0.6B` | Репозиторий локальной модели (qwen3-совместимый, ~1.4 GB, качается при первом вызове) |
 | `OB2H_EMBED_PROVIDER` | `local` | `local` (встроенный Candle) или `api` (внешний эндпоинт) |
 | `OB2H_AUTODREAM_ENABLED` | `true` | Фоновый авто-дриминг при работе Hermes |
 | `OB2H_PREFETCH_MAX_CHARS` | `8000` | Бюджет блока памяти в промпте (рез по границам записей) |
