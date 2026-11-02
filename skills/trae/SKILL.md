@@ -19,8 +19,7 @@ IDE от ByteDance. Присутствует на этом компе (конф�
 - и др. (context7, puppeteer и т.п. — все через mcp-compressor)
 
 ## Интеграция OB2H
-- ⚠️ **НЕ подключён**: ob2h в mcp.json отсутствует.
-  Для подключения добавить в `mcpServers`:
+- ✅ **Подключён** (2026-11-02):
   ```json
   "ob2h": {
     "command": "C:\\Projects\\ob2h\\target\\release\\ob2h.exe",
@@ -28,4 +27,5 @@ IDE от ByteDance. Присутствует на этом компе (конф�
     "env": { "OB2H_DATA_DIR": "C:/Projects/ob2h/data" }
   }
   ```
+- Smoke-тест (initialize → tools/list): OK, 36 tools.
 - После правки — перезапустить Trae.

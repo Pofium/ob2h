@@ -15,8 +15,7 @@ IDE + CLI лекарство от Tempo (присутствует на комп�
 - Текущие MCP здесь: context7, ddg-search, Puppeteer и др.
 
 ## Интеграция OB2H
-- ⚠️ **НЕ подключён**: ob2h в mcp.json отсутствует.
-  Для подключения добавить в `mcpServers`:
+- ✅ **Подключён** (2026-11-01):
   ```json
   "ob2h": {
     "command": "C:\\Projects\\ob2h\\target\\release\\ob2h.exe",
@@ -24,5 +23,6 @@ IDE + CLI лекарство от Tempo (присутствует на комп�
     "env": { "OB2H_DATA_DIR": "C:/Projects/ob2h/data" }
   }
   ```
-- Qoder — полноценный агентный IDE: после подключения OB2H даст память,
+- Smoke-тест (initialize → tools/list): OK, 36 tools.
+- Qoder — полноценный агентный IDE: OB2H даёт память,
   AST-граф кода и дриминг прямо в IDE.
