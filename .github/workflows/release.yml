@@ -137,7 +137,7 @@ jobs:
       - name: Create Release + upload assets
         uses: softprops/action-gh-release@v2
         with:
-          name: ob2h v${GITHUB_REF_NAME#v}
+          name: ob2h ${{ github.ref_name }}
           generate_release_notes: true
           files: release-assets/*
         env:
