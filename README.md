@@ -8,7 +8,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.4.0-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
+[![Release](https://img.shields.io/badge/Release-v1.9.2-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](https://github.com/Pofium/ob2h)
 [![CloudTips](https://img.shields.io/badge/%F0%9F%92%B0%20%D0%A7%D0%B0%D0%B5%D0%B2%D1%8B%20%D0%B0%D0%B2%D1%82%D0%BE%D1%80%D1%83-CloudTips%20(РФ)-ff69b4.svg)](https://pay.cloudtips.ru/p/4e7f8019)
 
@@ -16,6 +16,7 @@
 [**Мультиагентное подключение**](#-мультиагентная-поддержка-1-клик) •
 [**Проектная память и AST-граф**](#-проектная-память-и-детерминированный-ast-граф-кода) •
 [**Синхронизация машин**](#-синхронизация-двух-машин-pc--vps) •
+[**Секреты и работа без API-ключа**](#-хранилище-секретов-и-работа-без-api-ключа) •
 [**Команды CLI**](#-управление-через-консоль-cli) •
 [**Поддержать автора**](#-поддержать-разработку)
 
@@ -38,12 +39,15 @@
 6. 📁 **Работать с нулевой настройкой (Zero-Config)**: автоматически определяет корень репозитория, уважает правила `.gitignore` и привязывает сессию.
 7. ⚡ **Реагировать на изменения на лету (File Watcher + Git hooks)**: автоматически обновляет граф при сохранении файлов в IDE.
 8. 🌙 **«Видеть сны» (Дриминг)**: пока вы отдыхаете, агент ночью в фоне анализирует историю дня, удаляет устаревшие данные, обновляет файлы памяти (`SOUL.md`, `USER.md`, `MEMORY.md`) и сохраняет версии в Git.
-9. 🔄 **Помнить одно и то же на нескольких машинах**: домашний ПК и агент на VPS синхронизируют память и граф знаний между собой через защищенный SSH.
+9. 🔄 **Помнить одно и то же на нескольких машинах**: домашний ПК и агент на VPS синхронизируют память и граф знаний между собой через защищенный SSH, а бандлы обмена можно шифровать end-to-end (AES-GCM, `OB2H_SYNC_KEY`).
 10. 🤖 **Подключаться к любому AI-агенту в 1 клик**: `ob2h agent install --all` и диагностика `ob2h doctor --fix`.
 11. 🎓 **Обучаемая память**: каждая запись имеет машинный `trust` — использование, feedback агента и ночная ревизия дримом поднимают или гасят его; устаревшее уходит из выдачи управляемо, без автоудалений.
 12. 🕸️ **Multi-hop поиск (PPR)**: Personalized PageRank по памяти и графу знаний находит связанные факты, до которых линейный поиск не доходит.
 13. 🔁 **Ralph Knowledge Layer**: знание о циклах разработки (вердикты по тестам, AST-дельты, reuse-кандидаты, debt-леджер) — для автономных agentic-циклов.
 14. 🌙 **Ночной bench-гейт**: дрим, ухудшивший качество поиска (recall/MRR), автоматически откатывается той же ночью.
+15. 🔐 **Хранилище секретов (Secrets Vault)**: агент сохраняет и читает пароли/токены инструментами `secrets_*` — шифрование XChaCha20-Poly1305, мастер-ключ Argon2id живёт только в памяти и стирается по TTL; PIN вводится в графическом окне и никогда не проходит через MCP/LLM/чат. Секреты изолированы от памяти, графа, дрима и бандлов синхронизации.
+16. 🤖 **Работает без настроенного API-ключа (три эшелона LLM)**: явный ключ `OB2H_LLM_*` → автоподхват основной модели подключённого harness (Hermes, ZCode, Codex) → локальная мини-модель **Qwen3-0.6B** (~1.4 GB, Candle, качается лениво) для дриминга. Дриминг никогда не остаётся без модели.
+17. ⬆️ **Самообновление**: `ob2h update check/apply` скачивает релиз с GitHub, самозаменяет бинарник и переустанавливает плагин/скилл; раз в сутки `serve` проверяет новую версию (только уведомление, без автоприменения).
 
 **Кому подходит:** у кого Hermes живёт на двух машинах (ПК + VPS/сервер, работа + дом)
 и кому нужна **приватная** память — все данные остаются на ваших машинах, наружу уходит
@@ -150,7 +154,8 @@ ob2h agent status                  # строка «DSH (DeepSeek Harness)»
 поле-уровневый merge без молчаливого LWW (журнал `conflicts.jsonl`, проигравшие версии —
 в `meta.conflict_versions` за флагом), в бандле — память, trust, `memory_links` и удаления.
 Идемпотентность, авто-бэкап перед импортом, `ob2h sync verify` — сверка дрейфа без переноса.
-Живая БД никогда не передаётся.
+Живая БД никогда не передаётся. Бандлы можно шифровать end-to-end (AES-GCM): задайте общий
+`OB2H_SYNC_KEY` на обеих машинах — и SSH-сервер, и промежуточные папки видят только шифротекст.
 
 **Кому это надо:**
 - ПК + VPS: общий мозг у десктопного и Telegram/gateway-агента;
@@ -174,6 +179,38 @@ ob2h sync push --peer vps && ob2h sync pull --peer vps   # обмен вручн
 
 Диагностика: `ob2h sync status` на обеих машинах. Без прямого SSH между машинами —
 режим `manual` (Syncthing/приватный git, только папка бандлов — **никогда** саму БД).
+
+---
+
+## 🔐 Хранилище секретов и работа без API-ключа
+
+### Secrets Vault
+Локальный сейф для паролей и токенов, доступный агенту как MCP-инструменты
+(`secrets_status`, `secrets_set`, `secrets_get`, `secrets_delete`, `secrets_lock`):
+
+- шифрование **XChaCha20-Poly1305**, мастер-ключ на базе **Argon2id** — только в ОЗУ
+  (zeroize), стирается по TTL (30 мин) или командой `lock`;
+- разблокировка — **4-значный PIN** в компактном графическом окне (RU/EN); на headless
+  (SSH/CI) — откат в терминал; PIN **никогда** не проходит через MCP, LLM и чат;
+- полная изоляция: секреты не попадают в контекст LLM-поисков, дрима и в бандлы
+  синхронизации между машинами.
+
+```bash
+ob2h secrets init          # создать сейф (новый PIN запрашивается дважды)
+ob2h secrets unlock        # разблокировать на 30 минут (TTL настраивается)
+ob2h secrets list          # имена секретов без значений
+ob2h secrets lock          # немедленно затереть мастер-ключ
+```
+
+### Три эшелона снабжения LLM
+Для дриминга и экстракции знаний ob2h никогда не остаётся без модели:
+
+1. **Явный ключ** — `OB2H_LLM_API_KEY` (литерал или имя env-переменной, фолбэк `<data_dir>/.env`).
+2. **Автоподхват от harness** — при подключении MCP-клиента ob2h читает конфиг системы
+   (Hermes → `config.yaml`, ZCode/Omnesagent → `~/.omnesagent/config.toml`, Codex →
+   `auth.json`) и использует её основную LLM.
+3. **Локальная мини-модель** — `LocalMiniLLM` на Candle (Qwen3-0.6B, ~1.4 GB) для
+   дриминга; скачивается лениво при первом вызове, старт `serve` не блокирует.
 
 ---
 
@@ -230,6 +267,7 @@ ob2h project repo-map --id <project_id>    # карта репо под token bu
 # Регрессионный контур поиска: golden set, recall@k/MRR, история прогонов
 ob2h bench                                 # прогон на живой БД (data/bench/golden.jsonl)
 ob2h bench --mode history                  # тренд ночных прогонов + вердикты
+ob2h bench --mode code --project <id>      # bench по кодовому графу (PPR от сидов)
 
 # Лёгкая база и бэкапы
 ob2h db quantize-embeddings --dry-run      # int8-квантование эмбеддингов (оценка)
@@ -239,8 +277,19 @@ ob2h backup verify data/backups/<копия>    # проверка целост�
 # Гигиена памяти
 ob2h memory dedup --dry-run                # кандидаты на слияние (без LLM)
 
+# Хранилище секретов (PIN, TTL, изоляция от LLM-контекста)
+ob2h secrets init && ob2h secrets unlock
+ob2h secrets list                          # имена без значений
+ob2h secrets lock                          # затереть мастер-ключ немедленно
+
+# Самообновление из GitHub Releases
+ob2h update check                          # есть ли новая версия
+ob2h update apply --yes                    # скачать, самозаменить бинарник, переустановить плагин/скилл
+ob2h update status                         # текущая версия и время последней проверки
+
 # Ralph-циклы разработки
 ob2h ralph findings-to-memory --project <id>
+ob2h ralph debt --project <id>             # debt-леджер: отложенный долг и upgrade-триггеры
 ```
 
 ---
@@ -268,6 +317,12 @@ ob2h ralph findings-to-memory --project <id>
 | `OB2H_BACKUP_KEEP_FULL` / `OB2H_BACKUP_KEEP_QUICK` | `3` / `14` | Ротация бэкапов |
 | `OB2H_DREAM_MEMORY_REVISION` | `true` | Ночная ревизия слабых записей дримом (trust ±) |
 | `OB2H_VEC0` | `0` | Эксперимент sqlite-vec rescore (ADR-35.1, дефолт off) |
+| `OB2H_SYNC_KEY` | — | Общий ключ E2EE-шифрования бандлов синка (AES-GCM); без него бандлы в открытом виде |
+| `OB2H_SECRETS_TTL_MIN` | `30` | TTL разблокированного сейфа секретов (минуты) |
+| `OB2H_PIN_GUI` | `1` | Графическое окно ввода PIN (`0` — только терминал) |
+| `OB2H_UI_LANG` | авто | Язык окна PIN: `ru` \| `en` (по умолчанию — язык системы) |
+| `OB2H_UPDATE_ENABLED` / `OB2H_UPDATE_INTERVAL_HOURS` | `true` / `24` | Авто-проверка новой версии при старте `serve` (только уведомление) |
+| `OB2H_OFFLINE` | `0` | Полный офлайн (`1` — запретить загрузку локальной модели из HF Hub) |
 
 ---
 
@@ -276,9 +331,10 @@ ob2h ralph findings-to-memory --project <id>
 Проект поставляет готовые навыки (SKILL.md) для всех поддерживаемых агентов/IDE/harness —
 файлы лежат в `skills/<агент>/SKILL.md` и описывают: как подключён OB2H в этом агенте на
 конкретной машине (путь MCP-конфига, версия, команда `ob2h agent install`), ключевые команды
-и питфоллы. Покрыты: `claude-code`, `codegraph`, `codex`, `cursor`, `deepx`, `gemini-cli`,
-`hermes-agent`, `kilo-code`, `kimi-code`, `mimo-code`, `opencode`, `qoder`, `qwen-code`,
-`trae`, `windsurf`, `zcode` (плюс каноничный `ob2h`).
+и питфоллы. Покрыты: `claude-code`, `codegraph`, `codex`, `cursor`, `deepx`, `dsh`,
+`gemini-cli`, `hermes-agent`, `kilo-code`, `kimi-code`, `mimo-code`, `opencode`, `qoder`,
+`qwen-code`, `trae`, `windsurf`, `zcode` (плюс каноничные `ob2h`, `ob2h-zcode` и
+`ralph-loop` для автономных циклов).
 
 Канал установки скилла в Hermes: `ob2h skill install`; мультиагентное подключение —
 `ob2h agent install --agent all` и `ob2h doctor --fix`.
