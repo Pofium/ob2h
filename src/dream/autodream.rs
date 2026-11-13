@@ -21,6 +21,8 @@ pub struct AutoDreamWorker {
     dream: Arc<Dream>,
     workspace: Arc<Workspace>,
     memory: Arc<MemoryService>,
+    /// Ф64: недельный decay-sweep уроков (без удалений, курсор kv).
+    lessons: Arc<crate::lifecycle::LessonsService>,
     settings: Settings,
     sync: Option<Arc<SyncManager>>,
     /// Ф30: gitstore — фиксация HEAD до дрима и dream_restore при деградации.
@@ -37,6 +39,7 @@ impl AutoDreamWorker {
         dream: Arc<Dream>,
         workspace: Arc<Workspace>,
         memory: Arc<MemoryService>,
+        lessons: Arc<crate::lifecycle::LessonsService>,
         settings: Settings,
         sync: Option<Arc<SyncManager>>,
         gitstore: Arc<GitStore>,
@@ -46,6 +49,7 @@ impl AutoDreamWorker {
             dream,
             workspace,
             memory,
+            lessons,
             settings,
             sync,
             gitstore,
@@ -111,6 +115,10 @@ impl AutoDreamWorker {
                 let _ = self.memory.decay_importance(0.01);
                 let _ = self.memory.purge_weak(0.05, 2);
                 let _ = self.memory.purge_tombstones(self.settings.retention_days * 2);
+
+                // Ф64: недельный decay-sweep уроков (курсор kv; candidate_for_forget
+                // в отчёте, БЕЗ удалений — ADR-11)
+                let _ = self.lessons.decay_sweep("dream");
 
                 self.prune_daily();
                 self.release_lock();

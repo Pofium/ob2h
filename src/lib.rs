@@ -137,6 +137,7 @@ pub fn start_background_workers(ctx: Arc<AppContext>) {
             ctx.dream.clone(),
             ctx.workspace.clone(),
             ctx.memory.clone(),
+            ctx.lessons.clone(),
             ctx.settings.clone(),
             Some(ctx.sync.clone()),
             ctx.gitstore.clone(),
