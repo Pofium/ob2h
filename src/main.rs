@@ -158,6 +158,33 @@ async fn main() -> anyhow::Result<()> {
                 ob2h::cli::dedup::print_report(&pairs, dry_run);
             }
         },
+        Some(Commands::Lessons { command }) => match command {
+            ob2h::cli::LessonsCommands::List {
+                project,
+                source,
+                min_confidence,
+                limit,
+            } => {
+                let output = McpServer::new(ctx.clone())
+                    .call_tool(
+                        "lesson_list",
+                        serde_json::json!({
+                            "project": project,
+                            "source": source,
+                            "min_confidence": min_confidence,
+                            "limit": limit
+                        }),
+                    )
+                    .await;
+                println!("{output}");
+            }
+            ob2h::cli::LessonsCommands::Decay => {
+                match ctx.lessons.decay_sweep("user") {
+                    Ok(report) => println!("{}", serde_json::to_string_pretty(&report)?),
+                    Err(e) => println!("{e}"),
+                }
+            }
+        },
         Some(Commands::Ralph { command }) => match command {
             ob2h::cli::RalphCommands::Debt {
                 project,

@@ -4,8 +4,8 @@ use ob2h::mcp::McpServer;
 use ob2h::mcp::tools::list_tools;
 use tempfile::tempdir;
 
-/// Снапшот контракта: 41 инструмент (v1.9: +5 secrets_*) (26 базовых v1.3 + 7 Ralph + memory_merge
-/// + project_scan_status).
+/// Снапшот контракта: 45 инструментов (v1.9.9: +4 lesson_* Ф64) (41 v1.9: 26 базовых
+/// v1.3 + 7 Ralph + memory_merge + project_scan_status + 5 secrets_*).
 #[test]
 fn test_tools_list_contract_snapshot() {
     let names: Vec<String> = list_tools().into_iter().map(|t| t.name).collect();
@@ -58,8 +58,13 @@ fn test_tools_list_contract_snapshot() {
         "secrets_get",
         "secrets_delete",
         "secrets_lock",
+        // v1.9.9: уроки (Фаза 64)
+        "lesson_save",
+        "lesson_recall",
+        "lesson_list",
+        "lesson_delete",
     ];
-    assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.4.md");
+    assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.9.9.md");
 }
 
 #[tokio::test]

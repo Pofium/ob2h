@@ -4,7 +4,9 @@ pub mod bench_history;
 pub mod db;
 pub mod dedup;
 pub mod doctor;
+pub mod lessons;
 pub mod secrets;
+pub use lessons::LessonsCommands;
 pub use secrets::{SecretsCli, SecretsCommands};
 
 pub use agent::{AgentManager, AgentTarget};
@@ -51,6 +53,11 @@ pub enum Commands {
     Memory {
         #[command(subcommand)]
         command: MemoryCommands,
+    },
+    /// Уроки: список и недельный decay-sweep (v1.9.9, Фаза 64)
+    Lessons {
+        #[command(subcommand)]
+        command: LessonsCommands,
     },
     /// Вывести статистику хранилища
     Stats,
