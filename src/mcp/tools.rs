@@ -1,4 +1,5 @@
-//! 36 инструментов MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты, Ralph).
+//! 45 инструментов MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
+//! Ralph, секреты, уроки).
 
 use super::protocol::McpToolDef;
 
@@ -26,8 +27,15 @@ pub fn annotations_for(name: &str) -> Option<serde_json::Value> {
         "workspace_read",
         "secrets_status",
         "secrets_get",
+        "lesson_recall",
+        "lesson_list",
     ];
-    const DESTRUCTIVE: &[&str] = &["memory_forget", "dream_restore", "secrets_delete"];
+    const DESTRUCTIVE: &[&str] = &[
+        "memory_forget",
+        "dream_restore",
+        "secrets_delete",
+        "lesson_delete",
+    ];
 
     if READ_ONLY.contains(&name) {
         return Some(serde_json::json!({ "readOnlyHint": true, "destructiveHint": false }));
@@ -601,6 +609,61 @@ pub fn list_tools() -> Vec<McpToolDef> {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {}
+            }),
+        },
+        // v1.9.9: уроки (Фаза 64) — процедурный опыт с confidence/reinforce/decay
+        McpToolDef {
+            name: "lesson_save".to_string(),
+            description: "Сохранить урок (что сработало, чего избегать, когда применимо). Повторное сохранение того же контента укрепляет существующий урок: confidence растёт, дубль не создаётся.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "content": { "type": "string", "description": "Текст урока (что делать / чего избегать / когда применимо)" },
+                    "context": { "type": "string", "description": "Когда/где урок применим (опционально)" },
+                    "confidence": { "type": "number", "description": "Начальная уверенность 0.0–1.0 (дефолт 0.5)" },
+                    "project": { "type": "string", "description": "Проект урока (опционально)" },
+                    "tags": { "type": "array", "items": { "type": "string" }, "description": "Метки (опционально)" },
+                    "source": { "type": "string", "enum": ["manual", "consolidation", "recap", "dream"], "description": "Источник урока (дефолт manual)" }
+                },
+                "required": ["content"]
+            }),
+        },
+        McpToolDef {
+            name: "lesson_recall".to_string(),
+            description: "Поиск уроков: FTS × confidence × recency. Вызывать перед решениями, чтобы не повторять известные ошибки и не изобретать заново.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Поисковый запрос" },
+                    "project": { "type": "string", "description": "Фильтр по проекту (опционально)" },
+                    "min_confidence": { "type": "number", "description": "Минимальная уверенность (дефолт 0.1)" },
+                    "limit": { "type": "integer", "description": "Максимум результатов (дефолт 10, макс 100)" }
+                },
+                "required": ["query"]
+            }),
+        },
+        McpToolDef {
+            name: "lesson_list".to_string(),
+            description: "Список уроков, отсортированный по уверенности (tombstones скрыты). Для обзора процедурного опыта по проекту или источнику.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "Фильтр по проекту (опционально)" },
+                    "source": { "type": "string", "description": "Фильтр по источнику: manual|consolidation|recap|dream (опционально)" },
+                    "min_confidence": { "type": "number", "description": "Минимальная уверенность (дефолт 0)" },
+                    "limit": { "type": "integer", "description": "Максимум результатов (дефолт 50, макс 200)" }
+                }
+            }),
+        },
+        McpToolDef {
+            name: "lesson_delete".to_string(),
+            description: "Мягко удалить урок (tombstone, ADR-11: только по явной команде; запись остаётся в БД до maintenance). Используйте lesson_save того же контента, чтобы укрепить, а не удалять.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "lesson_id": { "type": "string", "description": "ID урока (lsn_…)" }
+                },
+                "required": ["lesson_id"]
             }),
         },
     ]

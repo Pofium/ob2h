@@ -3,6 +3,23 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [Unreleased] (v1.9.9-dev, план: PLAN_v1.9.9.md)
+
+### Added
+- **Уроки (lessons, Фаза 64):** процедурный опыт «что делать / чего избегать / когда
+  применимо» с показателем уверенности. Дедуп по fingerprint контента — повторное
+  сохранение того же текста **укрепляет** существующий урок (`conf' = conf +
+  0.1·(1−conf)`, мержатся source_ids, кап 50), дубль не создаётся. Recall =
+  FTS5-trigram × confidence × recency-буст, фильтры проект/min_confidence,
+  детерминированный тай-брейк. Недельный decay-sweep в дриме (курсор kv
+  `lessons_decay_last_ts`, пол 0.05) — **без автоудалений** (ADR-11): conf ≤ 0.10
+  при reinforcements == 0 → кандидат на забывание в отчёте; удаление — tombstone
+  по явной команде. Миграция M11 (schema v10→11): таблицы `lessons` + `lessons_fts`
+  (external content, триггеры как в M10), `slots` (под Ф65), `audit_log`.
+- 4 новых MCP-инструмента (**контракт 41 → 45**): `lesson_save`, `lesson_recall`,
+  `lesson_list`, `lesson_delete`; аннотации: lesson_recall/lesson_list readOnlyHint,
+  lesson_delete destructiveHint.
+
 ## [1.9.2] - 2026-11-03
 
 ### Added

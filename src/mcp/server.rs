@@ -41,6 +41,7 @@ pub struct AppContext {
     pub sync: Arc<crate::sync::SyncManager>,
     pub ralph: Arc<crate::ralph::RalphService>,
     pub secrets: Arc<crate::secrets::SecretsService>,
+    pub lessons: Arc<crate::lifecycle::LessonsService>,
     pub dream_lock: Arc<Mutex<()>>,
     pub active_workspace: Arc<tokio::sync::RwLock<Option<std::path::PathBuf>>>,
     pub active_project_id: Arc<tokio::sync::RwLock<Option<String>>>,
@@ -2014,6 +2015,85 @@ impl McpServer {
             "secrets_lock" => {
                 self.ctx.secrets.lock();
                 "✓ Хранилище секретов заблокировано".to_string()
+            }
+            // v1.9.9 Ф64: уроки (lessons) — контракт 41 → 45
+            "lesson_save" => {
+                let content = match args.get("content").and_then(|v| v.as_str()) {
+                    Some(c) if !c.trim().is_empty() => c,
+                    _ => {
+                        return "[Error] content обязателен [Подсказка: текст урока — что делать, чего избегать, когда применимо]"
+                            .to_string()
+                    }
+                };
+                let req = crate::lifecycle::LessonSaveRequest {
+                    content: content.to_string(),
+                    context: args.get("context").and_then(|v| v.as_str()).map(String::from),
+                    confidence: args.get("confidence").and_then(|v| v.as_f64()),
+                    project: args.get("project").and_then(|v| v.as_str()).map(String::from),
+                    tags: args
+                        .get("tags")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    source: args.get("source").and_then(|v| v.as_str()).map(String::from),
+                    source_ids: Vec::new(),
+                    actor: "agent".to_string(),
+                    tool: "lesson_save".to_string(),
+                };
+                match self.ctx.lessons.save(req) {
+                    Ok(out) => serde_json::to_string(&out)
+                        .unwrap_or_else(|e| format!("[Error] {e}")),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "lesson_recall" => {
+                let query = match args.get("query").and_then(|v| v.as_str()) {
+                    Some(q) if !q.trim().is_empty() => q,
+                    _ => {
+                        return "[Error] query обязателен [Подсказка: опишите ситуацию/решение — найдутся подходящие уроки]"
+                            .to_string()
+                    }
+                };
+                let project = args.get("project").and_then(|v| v.as_str());
+                let min_confidence =
+                    args.get("min_confidence").and_then(|v| v.as_f64()).unwrap_or(0.1);
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(10) as usize;
+                match self.ctx.lessons.recall(query, project, min_confidence, limit, "agent", "lesson_recall") {
+                    Ok(lessons) => serde_json::json!({ "lessons": lessons }).to_string(),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "lesson_list" => {
+                let project = args.get("project").and_then(|v| v.as_str());
+                let source = args.get("source").and_then(|v| v.as_str());
+                let min_confidence =
+                    args.get("min_confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50) as usize;
+                match self.ctx.lessons.list(project, source, min_confidence, limit) {
+                    Ok(lessons) => serde_json::json!({ "lessons": lessons }).to_string(),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "lesson_delete" => {
+                let lesson_id = match args.get("lesson_id").and_then(|v| v.as_str()) {
+                    Some(id) => id,
+                    None => return "[Error] lesson_id обязателен [Подсказка: ID из lesson_recall/lesson_list, формат lsn_…]".to_string(),
+                };
+                match self.ctx.lessons.delete(lesson_id, "agent", "lesson_delete") {
+                    Ok(true) => format!("✓ Урок {lesson_id} помечен удалённым (tombstone, ADR-11)"),
+                    Ok(false) => "[Error] урок не найден или уже удалён".to_string(),
+                    Err(e) => format!("{e}"),
+                }
             }
             other => format!("[Error] Unknown tool {other}"),
         }

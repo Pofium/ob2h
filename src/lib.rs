@@ -11,6 +11,7 @@ pub mod embedding;
 pub mod extractor;
 pub mod graph;
 pub mod ingest;
+pub mod lifecycle;
 pub mod llm;
 pub mod mcp;
 pub mod memory;
@@ -96,6 +97,8 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         project.clone(),
         settings.watcher_debounce_ms,
     ));
+    // v1.9.9 Ф64: уроки (lessons) — процедурный опыт с confidence/decay
+    let lessons = Arc::new(crate::lifecycle::LessonsService::new(db.clone()));
     let scan_jobs = Arc::new(crate::project::ScanJobManager::new(
         project.clone(),
         db.conn_arc(),
@@ -118,6 +121,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         sync,
         ralph,
         secrets,
+        lessons,
         dream_lock,
         active_workspace,
         active_project_id,
