@@ -274,12 +274,12 @@ Seed-дефолты слотов OB2H (создаются лениво при п
 
 ### Фаза 64 — Уроки (lessons): таблица, сервис, MCP, дрим-decay (оценка 1–1.5 дня)
 
-- [ ] **64.1** M11: `lessons` + `lessons_fts` (trigram, external content, триггеры как M10) + `slots` + `audit_log` (все три таблицы одной миграцией, чтобы не гонять M11/M12/M13); `schema_version` 10 → 11; тест схемы.
-- [ ] **64.2** `src/lifecycle/mod.rs` + `lessons.rs`: save с fingerprint-дедупом и reinforce, recall (FTS5 × confidence × recency, min_confidence, project-фильтр, детерминированный тай-брейк), list (по source/confidence/project), delete (tombstone). Все операции пишут в audit_log.
-- [ ] **64.3** MCP: `lesson_save` (content, context?, confidence?, project?, tags?, source?) → `{action: created|strengthened}`; `lesson_recall` (query, project?, min_confidence=0.1, limit=10); `lesson_list` (project?, source?, min_confidence?, limit=50); `lesson_delete` (lesson_id). Ошибки — `[Error] … [Подсказка]`.
-- [ ] **64.4** Дрим: недельный decay-sweep (курсор в kv: `lessons_decay_last_ts`), отчёт decayed/candidates в результате дрима; conf ≤ 0.10 && reinforcements == 0 → пометка candidate_for_forget, без удаления.
-- [ ] **64.5** CLI `ob2h lessons list/decay`; тесты (без сети): дедуп/reinforce-математика, decay-пороги, recall-скоринг, tombstone.
-- **DoD:** 4 инструмента в контракте; повторный save того же контента возвращает `strengthened` и не создаёт дубль; decay не удаляет ничего; `cargo test`/`clippy` зелёные.
+- [x] **64.1** M11: `lessons` + `lessons_fts` (trigram, external content, триггеры как M10) + `slots` + `audit_log` (все три таблицы одной миграцией, чтобы не гонять M11/M12/M13); `schema_version` 10 → 11; тест схемы.
+- [x] **64.2** `src/lifecycle/mod.rs` + `lessons.rs`: save с fingerprint-дедупом и reinforce, recall = FTS5 × confidence × recency (min_confidence, project-фильтр, детерминированный тай-брейк, LIKE-фолбэк), list (по source/confidence/project), delete (tombstone). Все операции пишут в audit_log.
+- [x] **64.3** MCP: `lesson_save` (content, context?, confidence?, project?, tags?, source?) → `{action: created|strengthened}`; `lesson_recall` (query, project?, min_confidence=0.1, limit=10); `lesson_list` (project?, source?, min_confidence=0, limit=50); `lesson_delete` (lesson_id). Ошибки — `[Error] … [Подсказка]`; аннотации: recall/list readOnly, delete destructive.
+- [x] **64.4** Дрим: недельный decay-sweep в autodream-регламенте после purge (курсор kv `lessons_decay_last_ts`), conf ≤ 0.10 && reinforcements == 0 → кандидат в отчёте, без удаления.
+- [x] **64.5** CLI `ob2h lessons list/decay`; тесты (без сети): дедуп/reinforce-математика, decay-пороги, recall-скоринг, tombstone (6 тестов в `tests/test_lifecycle_lessons.rs`).
+- **DoD:** 4 инструмента в контракте; повторный save того же контента возвращает `strengthened` и не создаёт дубль; decay не удаляет ничего; `cargo test`/`clippy` зелёные (52 набора тестов, 0 провалов).
 
 ### Фаза 65 — Слоты (slots): сервис, MCP, инъекция в контекст, синк (оценка 1–1.5 дня)
 
