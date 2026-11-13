@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -373,6 +373,79 @@ INSERT INTO graph_nodes_fts (rowid, label, description)
   SELECT id, label, description FROM graph_nodes;
 "#;
 
+/// M11 (v1.9.9, Фаза 64): жизненный цикл памяти — уроки (lessons) с FTS5-индексом,
+/// слоты рабочего контекста (slots) и аудит-леджер (audit_log). Только CREATE
+/// (без изменения существующих таблиц), по образцу M9/M10.
+/// Отступление от эскиза PLAN_v1.9.9 §5.1: у lessons PK — `seq INTEGER` (rowid-алиас,
+/// нужен для content_rowid FTS5 external content) + `id TEXT UNIQUE` как дедуп-ключ;
+/// у slots PK — `(label, project)` (project='' = global), чтобы одноимённые слоты
+/// разных проектов не коллидировали.
+pub const MIGRATION_V11: &str = r#"
+CREATE TABLE IF NOT EXISTS lessons (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    content TEXT NOT NULL,
+    context TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 0.5,
+    reinforcements INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'manual',
+    source_ids TEXT NOT NULL DEFAULT '[]',
+    project TEXT,
+    tags TEXT NOT NULL DEFAULT '[]',
+    decay_rate REAL NOT NULL DEFAULT 0.05,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_reinforced_at TEXT,
+    last_decayed_at TEXT,
+    deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS lessons_project_idx ON lessons(project, deleted_at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS lessons_fts USING fts5(
+  content, context, content='lessons', content_rowid='seq', tokenize='trigram'
+);
+CREATE TRIGGER IF NOT EXISTS lessons_fts_ai AFTER INSERT ON lessons BEGIN
+  INSERT INTO lessons_fts (rowid, content, context)
+    VALUES (new.seq, new.content, new.context);
+END;
+CREATE TRIGGER IF NOT EXISTS lessons_fts_ad AFTER DELETE ON lessons BEGIN
+  INSERT INTO lessons_fts (lessons_fts, rowid, content, context)
+    VALUES ('delete', old.seq, old.content, old.context);
+END;
+CREATE TRIGGER IF NOT EXISTS lessons_fts_au AFTER UPDATE ON lessons BEGIN
+  INSERT INTO lessons_fts (lessons_fts, rowid, content, context)
+    VALUES ('delete', old.seq, old.content, old.context);
+  INSERT INTO lessons_fts (rowid, content, context)
+    VALUES (new.seq, new.content, new.context);
+END;
+INSERT INTO lessons_fts (rowid, content, context)
+  SELECT seq, content, context FROM lessons;
+
+CREATE TABLE IF NOT EXISTS slots (
+    label TEXT NOT NULL,
+    project TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    size_limit INTEGER NOT NULL DEFAULT 2000,
+    description TEXT NOT NULL DEFAULT '',
+    pinned INTEGER NOT NULL DEFAULT 1,
+    read_only INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (label, project)
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_ids TEXT NOT NULL DEFAULT '[]',
+    details TEXT NOT NULL DEFAULT '{}',
+    source_tool TEXT
+);
+CREATE INDEX IF NOT EXISTS audit_log_action_idx ON audit_log(action, id);
+"#;
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;"
@@ -397,6 +470,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V8)?;
         conn.execute_batch(MIGRATION_V9)?;
         conn.execute_batch(MIGRATION_V10)?;
+        conn.execute_batch(MIGRATION_V11)?;
     } else {
         if current_version < 2 {
             conn.execute_batch(MIGRATION_V2)?;
@@ -424,6 +498,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         }
         if current_version < 10 {
             conn.execute_batch(MIGRATION_V10)?;
+        }
+        if current_version < 11 {
+            conn.execute_batch(MIGRATION_V11)?;
         }
     }
 
