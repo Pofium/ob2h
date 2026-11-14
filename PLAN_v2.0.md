@@ -171,7 +171,7 @@
 
 #### Фаза 69 — Стабилизация базы и Quality Harness (оценка: 2.5 дня)
 - [x] **69.1** Фиксация базового состояния репозитория: сверка опубликованного **v1.9.9** с ветками `v1.9`/`main`, исправление дефолтного репозитория обновления (`Pofium/ob2h`), стабилизация release-workflow в GitHub Actions. *(Выполнено: теги v1.9.9/v1.9.10 на месте, main = v1.9.10; ветки `v1.9` не существует, слитая `feat/ast-incremental-fix` удалена; дефолт `update_repo` в `src/config.rs` уже совпадает с remote; release.yml — guard «тег == Cargo.toml» и dispatch-дефолт 1.8.0 → 1.9.10.)*
-- [ ] **69.2** Устранение противоречий в документации: унификация политики разрешения конфликтов синхронизации (LWW vs field-merge) между `README.md` и `docs/SYNC.md`.
+- [x] **69.2** Устранение противоречий в документации: унификация политики разрешения конфликтов синхронизации (LWW vs field-merge) между `README.md` и `docs/SYNC.md`. *(Выполнено: README, `skills/ob2h/SKILL.md` и `docs/HERMES_INTEGRATION.md` выровнены с источником истины `docs/SYNC.md` — LWW по `updated_at` для `content` (tie-break по `priority`, журнал `conflicts.jsonl`, losers за флагом) + поле-уровневый merge метаданных (deep merge `meta`, `access_count` = max, trust/feedback — суммирование).)*
 - [ ] **69.3** Формирование Golden-наборов для автоматической валидации:
   - `memory_golden` (вопрос $\to$ релевантные факты);
   - `graph_golden` (многошаговые запросы multi-hop);

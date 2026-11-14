@@ -153,9 +153,12 @@ ob2h agent status                  # строка «DSH (DeepSeek Harness)»
 
 У вас Hermes дома на Windows и Telegram-агент на Linux-VPS? С v0.9 их **память и граф
 знаний — общие**: рассказали дома о новом проекте — серверный агент уже в курсе.
-Обмен — инкрементальные дельта-бандлы v2 поверх SSH: только изменённое (курсор по `updated_at`),
-поле-уровневый merge без молчаливого LWW (журнал `conflicts.jsonl`, проигравшие версии —
-в `meta.conflict_versions` за флагом), в бандле — память, trust, `memory_links` и удаления.
+Обмен — инкрементальные дельта-бандлы v2 поверх SSH: только изменённое (курсор по `updated_at`).
+Конфликты — как в [`docs/SYNC.md`](docs/SYNC.md): **LWW по `updated_at` для `content`** (tie-break
+по `priority` origin'а; не молчаливый — журнал `conflicts.jsonl`, проигравшие версии — в
+`meta.conflict_versions` за флагом `OB2H_SYNC_KEEP_LOSERS=1`) **+ поле-уровневый merge метаданных**
+(`meta` — deep merge, `access_count` — max, trust/feedback — суммирование). В бандле — память,
+trust, `memory_links` и удаления.
 Идемпотентность, авто-бэкап перед импортом, `ob2h sync verify` — сверка дрейфа без переноса.
 Живая БД никогда не передаётся. Бандлы можно шифровать end-to-end (AES-GCM): задайте общий
 `OB2H_SYNC_KEY` на обеих машинах — и SSH-сервер, и промежуточные папки видят только шифротекст.

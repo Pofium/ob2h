@@ -53,8 +53,9 @@ ob2h skill install   # деплой skills/ob2h/SKILL.md в $HERMES_HOME/skills/
 > Полный гайд (сценарии, режим manual, конфликты, безопасность, troubleshooting) —
 > [`docs/SYNC.md`](SYNC.md). Ниже — краткая настройка.
 
-Обмен — инкрементальные gzip-бандлы (memories + граф) поверх SSH; LWW по `updated_at`,
-удаления — tombstones; идемпотентно; авто-бэкап перед каждым новым бандлом.
+Обмен — инкрементальные дельта-бандлы v2 поверх SSH; LWW по `updated_at` для `content` (не
+молчаливый, журнал `conflicts.jsonl`) + поле-уровневый merge метаданных; удаления — tombstones;
+идемпотентно; авто-бэкап перед каждым новым бандлом.
 **Инициатива всегда на PC** (VPS за ним не может ходить — PC за NAT).
 
 1. **PC**: `data/sync/peers.json` (образец `scripts/pc/peers.example.json`):

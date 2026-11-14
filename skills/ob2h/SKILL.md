@@ -98,7 +98,7 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
 - Обмен — gzip-дельта-бандлы v2 JSONL поверх SSH (`{{DATA_DIR}}/sync/peers.json`:
   origin=pc|vps, приоритеты, пути; инициатива на PC — push/pull, VPS — apply-inbox+export).
   Только изменённое (курсор по updated_at); в бандле память+trust+memory_links+удаления;
-  поле-уровневый merge с журналом `sync/conflicts.jsonl` (не молчаливый LWW);
+  конфликты — LWW по updated_at для content (не молчаливый: журнал `sync/conflicts.jsonl`) + поле-уровневый merge метаданных;
   `ralph_*` вне бандлов (ADR-K6). Идемпотентно; сверка дрейфа — `ob2h sync verify`.
 - Живую БД `{{DATA_DIR}}/ob2h.db` НИКОГДА не синкать файловой синхронизацией (WAL = порча),
   только папку бандлов. Диагностика обмена: `ob2h sync status`.
