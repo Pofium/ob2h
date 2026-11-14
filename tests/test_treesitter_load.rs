@@ -901,3 +901,60 @@ fn dispatcher_routes_ts_and_tsx() {
         assert!(out.nodes.iter().any(|n| n.label == "demo"));
     }
 }
+
+// ——— Ф70.15: Generated File Stubbing ———
+
+#[test]
+fn generated_stub_masks() {
+    for hit in ["lib/api.g.dart", "model.freezed.dart", "gen/user.pb.dart", "src/x.pb.rs", "a.generated.ts"] {
+        assert!(
+            ob2h::project::ast_backend::is_generated_stub(hit),
+            "{hit} должен считаться генерированным"
+        );
+    }
+    for miss in ["lib/api.dart", "src/store.rs", "app.ts"] {
+        assert!(
+            !ob2h::project::ast_backend::is_generated_stub(miss),
+            "{miss} не должен считаться генерированным"
+        );
+    }
+}
+
+#[test]
+fn generated_stub_symbol_only() {
+    // Плотный генерированный файл: класс с методами + вызовы + импорты —
+    // в stub-режиме только символы, НОЛЬ call-сайт/мостов/ROUTE
+    let src = r#"// GENERATED CODE - DO NOT MODIFY
+import 'package:json_annotation/json_annotation.dart';
+
+part 'user.g.dart';
+
+@JsonSerializable()
+class User {
+  final String id;
+  final String email;
+  User(this.id, this.email);
+  factory User.fromJson(Map<String, dynamic> json) => _$UserFromJson(json);
+  Map<String, dynamic> toJson() => _$UserToJson(this);
+}
+
+Future<User> fetchUser(api) => api.get('/users/1');
+"#;
+    let disp = AstParserDispatcher::new();
+    let mut out = AstScanResult::default();
+    let backend = disp.parse_source("user.g.dart", src, &mut out);
+    assert_eq!(backend, "treesitter:stub:dart", "stub-режим должен активироваться по маске");
+
+    // Символы верхнего уровня есть
+    assert!(out.nodes.iter().any(|n| n.label == "User" && n.node_type == "Class"));
+    assert!(out.nodes.iter().any(|n| n.label == "fetchUser" && n.node_type == "Function"));
+    // Ноль рёбер вызовов (символы без тел) — главное свойство stub-режима
+    assert!(
+        !out.edges.iter().any(|e| e.label == "CALLS"),
+        "stub-режим не должен строить CALLS-рёбра"
+    );
+    assert!(
+        !out.edges.iter().any(|e| e.label == "ROUTE"),
+        "stub-режим не должен строить ROUTE"
+    );
+}

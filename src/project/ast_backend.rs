@@ -10,7 +10,8 @@
 
 use std::sync::Arc;
 
-use crate::project::ast::{AstCodeExtractor, AstScanResult};
+#[cfg_attr(not(feature = "treesitter"), allow(unused_imports))]
+use crate::project::ast::{AstCodeExtractor, AstEdge, AstNode, AstScanResult};
 
 /// Унифицированный интерфейс бэкенда разбора одного файла.
 pub trait AstParserBackend: Send + Sync {
@@ -130,7 +131,7 @@ pub mod ts {
     }
 
     /// Общий узел File (зеркало parse_file) — возвращает `file:{rel}`.
-    fn push_file_node(out: &mut AstScanResult, rel_path: &str, content: &str) -> String {
+    pub fn push_file_node(out: &mut AstScanResult, rel_path: &str, content: &str) -> String {
         let file_node_id = format!("file:{rel_path}");
         out.nodes.push(AstNode {
             node_id: file_node_id.clone(),
@@ -1703,6 +1704,18 @@ fn ts_enabled_from_env(v: Option<String>) -> bool {
     }
 }
 
+/// Ф70.15 (PLAN_v2.0): маски генерированного кода для stubbing —
+/// файлы, для которых извлекаются только верхнеуровневые символы
+/// (вывод build_runner/protobuf раздувает граф в 3–4 раза).
+pub fn is_generated_stub(rel_path: &str) -> bool {
+    let lower = rel_path.to_ascii_lowercase();
+    lower.ends_with(".g.dart")
+        || lower.ends_with(".freezed.dart")
+        || lower.ends_with(".pb.dart")
+        || lower.ends_with(".pb.rs")
+        || lower.ends_with(".generated.ts")
+}
+
 impl AstParserDispatcher {
     pub fn new() -> Self {
         Self {
@@ -1724,6 +1737,13 @@ impl AstParserDispatcher {
     /// kill-switch не запрещает, маппер реализован), иначе regex (70.9).
     /// Возвращает имя использованного бэкенда — телеметрия.
     pub fn parse_source(&self, rel_path: &str, content: &str, out: &mut AstScanResult) -> String {
+        // 70.15: генерированный код — только символы верхнего уровня (через
+        // .scm-запросы 70.7), без тел/вызовов/мостов/ROUTE — иначе вывод
+        // build_runner/protobuf раздувает граф и поиск.
+        #[cfg(feature = "treesitter")]
+        if is_generated_stub(rel_path) {
+            return self.parse_stub(rel_path, content, out);
+        }
         #[cfg(feature = "treesitter")]
         if self.ts_enabled {
             if let Some(lang) = lang_for_path(rel_path) {
@@ -1734,6 +1754,53 @@ impl AstParserDispatcher {
                         ts::map_tree(lang, rel_path, content, tree.root_node(), out);
                         return format!("treesitter:{lang}");
                     }
+                }
+            }
+        }
+        self.regex.parse_source(rel_path, content, out);
+        "regex".to_string()
+    }
+
+    /// Ф70.15: stub-режим генерированного кода — символы из .scm-запроса
+    /// (все 5 языков одним механизмом), без call_sites/мостов/ROUTE.
+    /// Ошибка tree-sitter → regex (v1.9-поведение, деградации нет).
+    #[cfg(feature = "treesitter")]
+    fn parse_stub(&self, rel_path: &str, content: &str, out: &mut AstScanResult) -> String {
+        if let Some(lang) = lang_for_path(rel_path) {
+            if has_mapper(lang) {
+                if let Ok(tree) = self.incremental.parse_tree(rel_path, content, lang) {
+                    let file_node_id = ts::push_file_node(out, rel_path, content);
+                    let src = content.as_bytes();
+                    for (name, kind) in ts::query_symbols(tree.root_node(), src, lang) {
+                        let prefix = match kind.as_str() {
+                            "Function" => "fn",
+                            "Struct" => "struct",
+                            "Trait" => "trait",
+                            "Class" => "class",
+                            _ => "interface",
+                        };
+                        let node_id = format!("{prefix}:{rel_path}:{name}");
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: name.clone(),
+                            node_type: kind,
+                            description: format!(
+                                "Символ генерированного кода `{name}` в {rel_path}"
+                            ),
+                            file_path: rel_path.to_string(),
+                            line_start: 1,
+                            line_end: 1,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.clone(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: String::new(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                    return format!("treesitter:stub:{lang}");
                 }
             }
         }
