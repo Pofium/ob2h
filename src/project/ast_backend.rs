@@ -1799,3 +1799,80 @@ mod tests {
         assert_eq!(ids, ids_direct, "node_id должны совпадать с regex-бэкендом");
     }
 }
+
+/// Ф70.14 (PLAN_v2.0): канонический SCIP-подобный дескриптор символа —
+/// целевая схема node_id для миграции M12 (71.3): `{lang}:crate/{module}#{owner}#{name}{suffix}`,
+/// suffix — `()` для вызываемых, `.` для типов (формат примера плана:
+/// `rust:crate/module/Struct#method().`). package — плейсхолдер `crate` до
+/// чтения manifest'ов проектов (71.x). Переключение node_id на эту схему
+/// рвёт привязку памяти/edges без переиндексации — только в составе M12 (71.3).
+pub fn scip_descriptor(
+    lang: &str,
+    rel_path: &str,
+    owner: Option<&str>,
+    name: &str,
+    callable: bool,
+) -> String {
+    // module path: rel_path без расширения ("src/api.rs" → "src/api")
+    let module = rel_path
+        .rsplit_once('.')
+        .filter(|(_, ext)| ext.len() <= 4)
+        .map(|(base, _)| base)
+        .unwrap_or(rel_path);
+    let suffix = if callable { "()" } else { "." };
+    match owner {
+        Some(owner) => format!("{lang}:crate/{module}/{owner}#{name}{suffix}"),
+        None => format!("{lang}:crate/{module}#{name}{suffix}"),
+    }
+}
+
+#[cfg(test)]
+mod scip_tests {
+    use super::scip_descriptor;
+
+    #[test]
+    fn scip_descriptor_formats() {
+        // Пример из плана: rust:crate/module/Struct#method().
+        assert_eq!(
+            scip_descriptor("rust", "src/module.rs", Some("Struct"), "method", true),
+            "rust:crate/src/module/Struct#method()"
+        );
+        // Тип (не вызываемый)
+        assert_eq!(
+            scip_descriptor("rust", "src/api.rs", None, "CacheConfig", false),
+            "rust:crate/src/api#CacheConfig."
+        );
+        // Остальные языки
+        assert_eq!(
+            scip_descriptor("python", "src/views.py", None, "run_pipeline", true),
+            "python:crate/src/views#run_pipeline()"
+        );
+        assert_eq!(
+            scip_descriptor("go", "src/store.go", Some("Store"), "Get", true),
+            "go:crate/src/store/Store#Get()"
+        );
+        assert_eq!(
+            scip_descriptor("dart", "lib/model.dart", None, "TokenCache", false),
+            "dart:crate/lib/model#TokenCache."
+        );
+        assert_eq!(
+            scip_descriptor("ts", "src/api.ts", None, "runPipeline", true),
+            "ts:crate/src/api#runPipeline()"
+        );
+    }
+
+    #[test]
+    fn scip_descriptor_deterministic() {
+        let a = scip_descriptor("rust", "src/a.rs", Some("S"), "m", true);
+        let b = scip_descriptor("rust", "src/a.rs", Some("S"), "m", true);
+        assert_eq!(a, b);
+        assert_ne!(
+            scip_descriptor("rust", "src/a.rs", None, "m", true),
+            scip_descriptor("rust", "src/b.rs", None, "m", true)
+        );
+        assert_ne!(
+            scip_descriptor("rust", "src/a.rs", None, "m", true),
+            scip_descriptor("rust", "src/a.rs", None, "n", true)
+        );
+    }
+}
