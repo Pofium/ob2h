@@ -155,7 +155,7 @@ impl ProjectService {
             r#"
             SELECT COUNT(*) FROM graph_nodes
             WHERE project_id = ?1
-              AND provenance = 'ast'
+              AND provenance = 'SYNTAX'
               AND embedding IS NULL
               AND (deleted_at IS NULL OR deleted_at = '')
             "#,
@@ -500,7 +500,7 @@ impl ProjectService {
             let conn = self.conn.lock().unwrap();
             // Подгружаем символы неизменённых файлов
             let mut stmt = conn.prepare(
-                "SELECT node_id, label, node_type, description, file_path, line_start, line_end                  FROM graph_nodes WHERE project_id = ?1 AND provenance = 'ast'"
+                "SELECT node_id, label, node_type, description, file_path, line_start, line_end                  FROM graph_nodes WHERE project_id = ?1 AND provenance = 'SYNTAX'"
             )?;
             let rows = stmt.query_map(params![project_id], |r| {
                 Ok(crate::project::ast::AstNode {
@@ -597,11 +597,11 @@ impl ProjectService {
         // Если не инкрементальный скан - очищаем старые ast-данные проекта
         if !incremental {
             tx.execute(
-                "DELETE FROM graph_nodes WHERE project_id = ?1 AND provenance = 'ast'",
+                "DELETE FROM graph_nodes WHERE project_id = ?1 AND provenance = 'SYNTAX'",
                 params![project_id],
             )?;
             tx.execute(
-                "DELETE FROM graph_edges WHERE project_id = ?1 AND provenance = 'ast'",
+                "DELETE FROM graph_edges WHERE project_id = ?1 AND provenance = 'SYNTAX'",
                 params![project_id],
             )?;
             tx.execute(
@@ -633,16 +633,25 @@ impl ProjectService {
         // Сохраняем узлы графа
         let mut node_id_to_pk: std::collections::HashMap<String, i64> =
             std::collections::HashMap::new();
+        // 71.2: тестовые узлы получают graph_nodes.kind_detail = 'test'
+        let test_ids: std::collections::HashSet<&str> =
+            scan_res.test_node_ids.iter().map(|s| s.as_str()).collect();
 
         for node in &scan_res.nodes {
+            let kind_detail: Option<&str> = if test_ids.contains(node.node_id.as_str()) {
+                Some("test")
+            } else {
+                None
+            };
             let pk: i64 = {
                 let mut stmt = tx.prepare_cached(
                     r#"
                     INSERT INTO graph_nodes (
                         node_id, label, node_type, description, val, created_at, updated_at,
-                        project_id, file_path, line_start, line_end, provenance, is_god_node
+                        project_id, file_path, line_start, line_end, provenance, is_god_node,
+                        kind_detail
                     )
-                    VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?9, 'ast', 0)
+                    VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?9, 'SYNTAX', 0, ?10)
                     ON CONFLICT(node_id) DO UPDATE SET
                         label = excluded.label,
                         node_type = excluded.node_type,
@@ -652,7 +661,8 @@ impl ProjectService {
                         file_path = excluded.file_path,
                         line_start = excluded.line_start,
                         line_end = excluded.line_end,
-                        provenance = 'ast'
+                        provenance = 'SYNTAX',
+                        kind_detail = excluded.kind_detail
                     RETURNING id
                     "#
                 )?;
@@ -667,6 +677,7 @@ impl ProjectService {
                         node.file_path,
                         node.line_start as i64,
                         node.line_end as i64,
+                        kind_detail,
                     ],
                     |r| r.get(0),
                 )?
@@ -703,7 +714,7 @@ impl ProjectService {
                         node_id, label, node_type, description, val, created_at, updated_at,
                         project_id, provenance
                     )
-                    VALUES (?1, ?5, ?6, ?2, 1, ?3, ?3, ?4, 'ast')
+                    VALUES (?1, ?5, ?6, ?2, 1, ?3, ?3, ?4, 'SYNTAX')
                     ON CONFLICT(node_id) DO NOTHING
                     "#,
                     params![
@@ -731,14 +742,14 @@ impl ProjectService {
                         source_id, target_id, label, weight, contexts, created_at,
                         project_id, provenance, confidence, updated_at
                     )
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1.0, ?6)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?6)
                     ON CONFLICT(source_id, target_id, label) DO UPDATE SET
                         weight = excluded.weight,
                         contexts = excluded.contexts,
                         updated_at = excluded.updated_at,
                         project_id = excluded.project_id,
                         provenance = excluded.provenance,
-                        confidence = 1.0
+                        confidence = excluded.confidence
                     "#,
                     params![
                         src_pk,
@@ -749,6 +760,11 @@ impl ProjectService {
                         now,
                         project_id,
                         edge.provenance,
+                        match edge.provenance.as_str() {
+                            "HEURISTIC" | "INFERRED" => 0.5,
+                            "RESOLVED" => 0.7,
+                            _ => 1.0,
+                        },
                     ],
                 )?;
             }
@@ -973,7 +989,7 @@ impl ProjectService {
         ).unwrap_or(0);
 
         let ast_nodes: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM graph_nodes WHERE project_id = ?1 AND provenance = 'ast' AND (deleted_at IS NULL OR deleted_at = '')",
+            "SELECT COUNT(*) FROM graph_nodes WHERE project_id = ?1 AND provenance = 'SYNTAX' AND (deleted_at IS NULL OR deleted_at = '')",
             params![project_id],
             |r| r.get(0),
         ).unwrap_or(0);
