@@ -67,6 +67,12 @@ pub enum Commands {
     },
     /// Вывести статистику хранилища
     Stats,
+    /// Локальное окно просмотра хранилища (read-only, feature gui; Ф70)
+    Viewer {
+        /// Каталог данных (дефолт: OB2H_DATA_DIR)
+        #[arg(long)]
+        data_dir: Option<String>,
+    },
     /// Установить и зарегистрировать OB2H в Hermes (config.yaml)
     Install,
     /// Удалить OB2H из Hermes (config.yaml)

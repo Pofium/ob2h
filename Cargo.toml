@@ -1,6 +1,6 @@
 [package]
 name = "ob2h"
-version = "1.9.2"
+version = "1.9.9"
 edition = "2021"
 description = "Автономное MCP-хранилище знаний и долговременной памяти для AI-агентов на Rust"
 
@@ -51,6 +51,14 @@ sys-locale = { version = "0.3.2", optional = true }
 
 [dev-dependencies]
 tempfile = "3.17"
+
+# Ф70.1: проверка живости pid для lockfile viewer. Оба крейта уже в дереве
+# как транзитивные (Cargo.lock) — новых скачиваний не добавляют.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [features]
 # Локальное окно ввода PIN (egui/eframe). Опционально: в headless/CI-сборках

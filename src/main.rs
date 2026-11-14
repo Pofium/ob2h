@@ -17,9 +17,24 @@ use ob2h::{init_app, start_background_workers};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let settings = Settings::from_env();
+    let cli = Cli::parse();
+
+    // Ф70/Ф72: viewer — отдельный read-only процесс. Перехватываем ДО ensure_dirs /
+    // init_app / логирования: ни миграций, ни создания каталогов, ни записей в БД.
+    if let Some(Commands::Viewer { ref data_dir }) = cli.command {
+        let dir = data_dir
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| settings.data_dir.clone());
+        if let Err(e) = ob2h::viewer::run(&dir, settings.secrets_ttl_min * 60) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     settings.ensure_dirs()?;
 
-    let cli = Cli::parse();
     let is_stdio = matches!(cli.command, None | Some(Commands::Serve));
 
     // Настройка логирования: в файл всегда, в stderr только если НЕ stdio MCP режим
@@ -237,6 +252,8 @@ async fn main() -> anyhow::Result<()> {
                 .await;
             println!("{output}");
         }
+        // Viewer перехвачен до init_app (read-only процесс без миграций).
+        Some(Commands::Viewer { .. }) => unreachable!("viewer обработан до init_app"),
         Some(Commands::Install) => {
             install_to_hermes()?;
         }

@@ -21,6 +21,7 @@ pub mod ralph;
 pub mod sync;
 pub mod update;
 pub mod vector;
+pub mod viewer;
 pub mod workspace;
 
 use std::sync::Arc;

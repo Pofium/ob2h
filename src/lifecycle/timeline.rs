@@ -55,7 +55,13 @@ fn trim_chars(s: &str, n: usize) -> String {
 /// Прочитать daily-логи (файлы YYYY-MM-DD.jsonl по возрастанию дат).
 /// Битые строки пропускаются; source_ref — для провенанса.
 pub fn load_entries(ws: &Workspace) -> anyhow::Result<Vec<SessionEntry>> {
-    let dir = ws.daily_dir();
+    load_entries_from_dir(&ws.daily_dir())
+}
+
+/// Как [`load_entries`], но по пути каталога daily — для read-only viewer (Ф70.4):
+/// `Workspace::new` создаёт каталоги, а просмотр не должен ничего писать.
+pub fn load_entries_from_dir(dir: &std::path::Path) -> anyhow::Result<Vec<SessionEntry>> {
+    let dir = dir.to_path_buf();
     let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)?
         .flatten()
         .map(|e| e.path())
