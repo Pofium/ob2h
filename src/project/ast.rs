@@ -1445,11 +1445,27 @@ fn push_html_route(
 }
 
 /// Ключевые слова, которые не считаются вызовами (Rust).
-const RUST_CALL_SKIP: &[&str] = &[
+pub(crate) const RUST_CALL_SKIP: &[&str] = &[
     "if", "for", "while", "match", "loop", "return", "unsafe", "fn", "let", "struct", "impl",
     "mod", "use", "pub", "crate", "self", "super", "as", "in", "else", "await", "move", "box",
     "where", "type", "dyn", "ref", "const", "static", "enum", "trait",
 ];
+
+/// Ф70.3: единый шаблон мест вызовов (extractor::call_re и TS-маппер tree-sitter).
+pub(crate) const CALL_RE_PATTERN: &str = r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\(";
+
+/// Ф70.3: самостоятельный проход мест вызовов для tree-sitter-маппера —
+/// тот же контракт, что у regex-пути parse_rust/parse_python (type-pass Ф39.1).
+pub(crate) fn collect_call_sites_standalone(
+    rel_path: &str,
+    content: &str,
+    out: &mut AstScanResult,
+) {
+    static CALL_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let call_re = CALL_RE.get_or_init(|| Regex::new(CALL_RE_PATTERN).unwrap());
+    let lines: Vec<&str> = content.lines().collect();
+    collect_call_sites(rel_path, &lines, RUST_CALL_SKIP, call_re, 0, out);
+}
 
 /// Ключевые слова, которые не считаются вызовами (Python).
 const PY_CALL_SKIP: &[&str] = &[
@@ -7153,7 +7169,7 @@ fn py_signature_end(lines: &[&str], def_line: usize) -> usize {
 /// ponytail: не полноценный парсер — template-литералы `${}` и inline-типы
 /// возврата (`: { ok: boolean }`) могут дать пару строк погрешности; для графа и
 /// impact этого достаточно, точность — только через tree-sitter.
-fn ts_body_end(lines: &[&str], start: usize) -> usize {
+pub(crate) fn ts_body_end(lines: &[&str], start: usize) -> usize {
     let joined = lines.get(start..).map(|s| s.join("\n")).unwrap_or_default();
     let ch: Vec<char> = joined.chars().collect();
     let mut line = start;
@@ -7291,7 +7307,7 @@ fn strip_paren_groups(s: &str) -> String {
 
 /// Ф39.1: разобрать use-строку Rust → (module_path, item, alias).
 /// `crate::a::b::Name as Alias` → ("crate::a::b", Some("Name"), Some("Alias")).
-fn split_rust_use(s: &str) -> Option<(String, Option<String>, Option<String>)> {
+pub(crate) fn split_rust_use(s: &str) -> Option<(String, Option<String>, Option<String>)> {
     let s = s.trim();
     if s.is_empty() || s.contains('{') || s.contains('*') {
         return None; // group/glob imports не резолвим lite-проходом
@@ -7602,7 +7618,7 @@ fn first_existing(base: &str, exts: &[&str], files: &HashSet<String>) -> Option<
 
 /// Ф39.1: собрать места вызовов `name(` — без `.`-методов (receiver-типы
 /// неизвестны) и макросов `name!(`; ключевые слова скипаются.
-fn collect_call_sites(
+pub(crate) fn collect_call_sites(
     rel_path: &str,
     lines: &[&str],
     skip: &[&str],
