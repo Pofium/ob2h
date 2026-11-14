@@ -1459,16 +1459,17 @@ pub(crate) const CALL_RE_PATTERN: &str = r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\(";
 pub(crate) fn collect_call_sites_standalone(
     rel_path: &str,
     content: &str,
+    skip: &[&str],
     out: &mut AstScanResult,
 ) {
     static CALL_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     let call_re = CALL_RE.get_or_init(|| Regex::new(CALL_RE_PATTERN).unwrap());
     let lines: Vec<&str> = content.lines().collect();
-    collect_call_sites(rel_path, &lines, RUST_CALL_SKIP, call_re, 0, out);
+    collect_call_sites(rel_path, &lines, skip, call_re, 0, out);
 }
 
 /// Ключевые слова, которые не считаются вызовами (Python).
-const PY_CALL_SKIP: &[&str] = &[
+pub(crate) const PY_CALL_SKIP: &[&str] = &[
     "if", "for", "while", "return", "def", "class", "import", "from", "with", "elif", "else",
     "except", "lambda", "yield", "assert", "del", "in", "is", "not", "and", "or", "await", "async",
     "raise", "global", "nonlocal",

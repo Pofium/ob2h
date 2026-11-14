@@ -58,7 +58,7 @@ impl AstParserBackend for RegexBackend {
 /// Ф70.3 — rust; Ф70.4/70.5/70.6/70.12 добавят ts/python/go/dart.
 #[cfg(feature = "treesitter")]
 pub fn has_mapper(lang: &str) -> bool {
-    matches!(lang, "rust")
+    matches!(lang, "rust" | "python")
 }
 
 /// Язык tree-sitter для пути по расширению: rust | python | ts | go | dart.
@@ -150,6 +150,10 @@ pub mod ts {
                 map_rust(rel_path, content, root, out);
                 Ok(())
             }
+            "python" => {
+                map_python(rel_path, content, root, out);
+                Ok(())
+            }
             _ => Err(anyhow::anyhow!(
                 "маппинг `{lang}` ещё не реализован (Ф70.4+)"
             )),
@@ -184,7 +188,7 @@ pub mod ts {
         walk_rust(root, src, rel_path, &file_node_id, &route_by_line, out);
 
         // 3. Места вызовов для type-pass (тот же контракт, что у regex-пути).
-        collect_call_sites_standalone(rel_path, content, out);
+        collect_call_sites_standalone(rel_path, content, crate::project::ast::RUST_CALL_SKIP, out);
     }
 
     /// Собрать карту «строка → (метод, путь)» из маршрутных атрибутов.
@@ -403,6 +407,413 @@ pub mod ts {
                 }
             }
             cursor.goto_parent();
+        }
+    }
+
+    /// Ф70.5 (PLAN_v2.0): CST→AST маппинг Python (tree-sitter-python).
+    /// Зеркало regex-бэкенда: классы (+Pydantic/dataclass пометка, INHERITS),
+    /// функции/методы (с декораторами в описании), FastAPI/Flask ROUTE,
+    /// `__tablename__` (QUERIES_TABLE — поиск внутри тела класса, точнее
+    /// построчной эвристики regex), импорты + ImportRef, call_sites (PY_CALL_SKIP).
+    pub fn map_python(rel_path: &str, content: &str, root: Node, out: &mut AstScanResult) {
+        let file_node_id = format!("file:{rel_path}");
+        out.nodes.push(AstNode {
+            node_id: file_node_id.clone(),
+            label: rel_path.to_string(),
+            node_type: "File".to_string(),
+            description: format!("Исходный файл проекта: {rel_path}"),
+            file_path: rel_path.to_string(),
+            line_start: 1,
+            line_end: content.lines().count().max(1),
+        });
+
+        let src = content.as_bytes();
+        // Маршруты FastAPI/Flask: ключ — последняя строка блока декораторов
+        // (зеркало regex-эвристики route_by_line с ключом end).
+        let mut route_by_line: HashMap<usize, (String, String)> = HashMap::new();
+        collect_py_routes(root, src, &mut route_by_line);
+
+        walk_python(root, src, rel_path, &file_node_id, &route_by_line, out);
+
+        // Места вызовов для type-pass (словарь python).
+        collect_call_sites_standalone(rel_path, content, crate::project::ast::PY_CALL_SKIP, out);
+    }
+
+    /// Собрать карту «строка → (метод, путь)» из декораторов `@app.get("/x")`
+    /// (регулярка regex-бэкенда: объекты app|router|api, методы get|post|...).
+    fn collect_py_routes(root: Node, src: &[u8], out: &mut HashMap<usize, (String, String)>) {
+        visit_py_routes(root, src, out);
+    }
+
+    fn visit_py_routes(node: Node, src: &[u8], out: &mut HashMap<usize, (String, String)>) {
+        if node.kind() == "decorator" {
+            if let Ok(text) = node.utf8_text(src) {
+                if let Some((method, path)) = parse_py_route_attr(text) {
+                    // Ключ — конец блока декоратора (последняя его строка),
+                    // как в regex-пути (decorator_block_end).
+                    out.insert(node.end_position().row, (method, path));
+                }
+            }
+        }
+        let mut c = node.walk();
+        if c.goto_first_child() {
+            loop {
+                let child = c.node();
+                visit_py_routes(child, src, out);
+                if !c.goto_next_sibling() {
+                    break;
+                }
+            }
+            c.goto_parent();
+        }
+    }
+
+    /// `@app.get("/path")` → (GET, /path) — зеркало py_route_re
+    /// (объекты app|router|api; методы get|post|put|delete|patch).
+    fn parse_py_route_attr(text: &str) -> Option<(String, String)> {
+        let t = text.trim().trim_start_matches('@');
+        let open = t.find('(')?;
+        let head = t[..open].trim(); // app.get
+        let args = &t[open..]; // ("/path") — путь берём из аргументов
+        let (obj, method) = head.split_once('.')?;
+        if !matches!(obj, "app" | "router" | "api") {
+            return None;
+        }
+        if !matches!(
+            method.to_ascii_lowercase().as_str(),
+            "get" | "post" | "put" | "delete" | "patch"
+        ) {
+            return None;
+        }
+        let start = args.find('"').or_else(|| args.find('\''))? + 1;
+        let end = args[start..].find('"').or_else(|| args[start..].find('\''))? + start;
+        Some((method.to_ascii_uppercase(), args[start..end].to_string()))
+    }
+
+    /// Декораторы родительского decorated_definition (для описания узла).
+    fn decorators_of(node: Node, src: &[u8]) -> Vec<String> {
+        let mut decos = Vec::new();
+        if let Some(parent) = node.parent() {
+            if parent.kind() == "decorated_definition" {
+                let mut c = parent.walk();
+                for child in parent.children(&mut c) {
+                    if child.kind() == "decorator" {
+                        if let Ok(t) = child.utf8_text(src) {
+                            decos.push(t.trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        decos
+    }
+
+    /// Рекурсивный обход Python CST.
+    fn walk_python(
+        node: Node,
+        src: &[u8],
+        rel_path: &str,
+        file_node_id: &str,
+        route_by_line: &HashMap<usize, (String, String)>,
+        out: &mut AstScanResult,
+    ) {
+        let text_of = |n: Node| n.utf8_text(src).unwrap_or("").to_string();
+        match node.kind() {
+            "import_statement" => {
+                // import x.y, z as w — dotted_name / aliased_import дети
+                let mut c = node.walk();
+                for child in node.children(&mut c) {
+                    match child.kind() {
+                        "dotted_name" => {
+                            let module = text_of(child);
+                            push_py_import_edge(out, file_node_id, &module);
+                            out.imports.push(crate::project::ast::ImportRef {
+                                rel_path: rel_path.to_string(),
+                                module: module.clone(),
+                                item: None,
+                                alias: None,
+                            });
+                        }
+                        "aliased_import" => {
+                            // поле name = импортируемый путь, поле alias
+                            let module = child
+                                .child_by_field_name("name")
+                                .map(text_of)
+                                .unwrap_or_default();
+                            let alias = child
+                                .child_by_field_name("alias")
+                                .map(text_of)
+                                .unwrap_or_default();
+                            if !module.is_empty() {
+                                push_py_import_edge(out, file_node_id, &module);
+                                out.imports.push(crate::project::ast::ImportRef {
+                                    rel_path: rel_path.to_string(),
+                                    module,
+                                    item: None,
+                                    alias: if alias.is_empty() { None } else { Some(alias) },
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                    // Вложенные dotted_name внутри aliased_import — повторный
+                    // обход не нужен: дети не эмитятся отдельно.
+                }
+            }
+            "import_from_statement" => {
+                let module = node
+                    .child_by_field_name("module_name")
+                    .map(text_of)
+                    .unwrap_or_default();
+                if !module.is_empty() {
+                    push_py_import_edge(out, file_node_id, &module);
+                    // элементы: dotted_name / aliased_import (кроме module_name)
+                    let mut c = node.walk();
+                    for child in node.children(&mut c) {
+                        let item_node = match child.kind() {
+                            "dotted_name" => child,
+                            "aliased_import" => match child.child_by_field_name("name") {
+                                Some(n) => n,
+                                None => continue,
+                            },
+                            _ => continue,
+                        };
+                        if item_node.id() == node
+                            .child_by_field_name("module_name")
+                            .map(|m| m.id())
+                            .unwrap_or(0)
+                        {
+                            continue;
+                        }
+                        let item = text_of(item_node);
+                        if item.is_empty() {
+                            continue;
+                        }
+                        let alias = if child.kind() == "aliased_import" {
+                            child
+                                .child_by_field_name("alias")
+                                .map(text_of)
+                                .filter(|s| !s.is_empty())
+                        } else {
+                            None
+                        };
+                        out.imports.push(crate::project::ast::ImportRef {
+                            rel_path: rel_path.to_string(),
+                            module: module.clone(),
+                            item: Some(item),
+                            alias,
+                        });
+                        break; // первый элемент достаточно для type-pass зеркала
+                    }
+                }
+            }
+            "class_definition" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let class_name = text_of(name_node);
+                    if !class_name.is_empty() {
+                        let node_id = format!("class:{rel_path}:{class_name}");
+                        let line = node.start_position().row + 1;
+                        // Базы — argument_list (superclasses) child
+                        let mut base_cursor = node.walk();
+                        let bases_text = node
+                            .children(&mut base_cursor)
+                            .find(|c| c.kind() == "argument_list")
+                            .map(|b| b.utf8_text(src).unwrap_or("").to_string())
+                            .unwrap_or_default();
+                        let inner = bases_text
+                            .trim_start_matches('(')
+                            .trim_end_matches(')')
+                            .trim();
+                        let decos = decorators_of(node, src);
+                        let kind_suffix = if inner.contains("BaseModel") || inner.contains("BaseSettings") {
+                            " (Pydantic-модель)"
+                        } else if decos.iter().any(|d| d.contains("dataclass")) {
+                            " (dataclass)"
+                        } else {
+                            ""
+                        };
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: class_name.clone(),
+                            node_type: "Class".to_string(),
+                            description: format!("Класс `{class_name}` в {rel_path}{kind_suffix}"),
+                            file_path: rel_path.to_string(),
+                            line_start: line,
+                            line_end: line,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id.clone(),
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: node
+                                .utf8_text(src)
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                        // INHERITS: базы из argument_list (голые имена — как regex)
+                        if !inner.is_empty() {
+                            for base in inner.split(',') {
+                                let base_clean = base.trim();
+                                if !base_clean.is_empty() {
+                                    out.edges.push(AstEdge {
+                                        source_node_id: node_id.clone(),
+                                        target_node_id: format!("class:{base_clean}"),
+                                        label: "INHERITS".to_string(),
+                                        weight: 1.0,
+                                        context: format!("extends {base_clean}"),
+                                        provenance: "EXTRACTED".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        // QUERIES_TABLE: __tablename__ внутри тела класса (Ф40.2)
+                        collect_py_tablename(node, src, &node_id, out);
+                    }
+                }
+            }
+            "function_definition" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let fn_name = text_of(name_node);
+                    if !fn_name.is_empty() {
+                        let node_id = format!("fn:{rel_path}:{fn_name}");
+                        let decos = decorators_of(node, src);
+                        let description = if decos.is_empty() {
+                            format!("Функция/метод `{fn_name}` в {rel_path}")
+                        } else {
+                            format!(
+                                "Функция/метод `{fn_name}` в {rel_path}. Декораторы: {}",
+                                decos.join(" ")
+                            )
+                        };
+                        let line = node.start_position().row + 1;
+                        let line_end = node
+                            .child_by_field_name("body")
+                            .map(|b| b.end_position().row + 1)
+                            .unwrap_or(line);
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: fn_name.clone(),
+                            node_type: "Function".to_string(),
+                            description,
+                            file_path: rel_path.to_string(),
+                            line_start: line,
+                            line_end: line_end.max(line),
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id.clone(),
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: node
+                                .utf8_text(src)
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                        // ROUTE: декораторный блок перед def (окно i-2..i)
+                        let row0 = name_node.start_position().row;
+                        let route = [row0.checked_sub(2), row0.checked_sub(1), Some(row0)]
+                            .into_iter()
+                            .flatten()
+                            .find_map(|k| route_by_line.get(&k).cloned());
+                        if let Some((method, path)) = route {
+                            out.edges.push(AstEdge {
+                                source_node_id: node_id,
+                                target_node_id: format!("route:{method} {path}"),
+                                label: "ROUTE".to_string(),
+                                weight: 1.0,
+                                context: format!("{method} {path}"),
+                                provenance: "INFERRED".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let mut cursor = node.walk();
+        if cursor.goto_first_child() {
+            loop {
+                let child = cursor.node();
+                walk_python(child, src, rel_path, file_node_id, route_by_line, out);
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            cursor.goto_parent();
+        }
+    }
+
+    /// IMPORTS-ребро file → module:{name} (формат regex-бэкенда).
+    fn push_py_import_edge(out: &mut AstScanResult, file_node_id: &str, module: &str) {
+        out.edges.push(AstEdge {
+            source_node_id: file_node_id.to_string(),
+            target_node_id: format!("module:{module}"),
+            label: "IMPORTS".to_string(),
+            weight: 1.0,
+            context: format!("import {module}"),
+            provenance: "EXTRACTED".to_string(),
+        });
+    }
+
+    /// QUERIES_TABLE: `__tablename__ = "x"` в теле класса (Ф40.2, INFERRED).
+    /// Присваивание лежит внутри block-внука — обход поддерево рекурсивно.
+    fn collect_py_tablename(
+        class_node: Node,
+        src: &[u8],
+        class_node_id: &str,
+        out: &mut AstScanResult,
+    ) {
+        visit_py_tablename(class_node, src, class_node_id, out);
+    }
+
+    fn visit_py_tablename(
+        node: Node,
+        src: &[u8],
+        class_node_id: &str,
+        out: &mut AstScanResult,
+    ) {
+        if node.kind() == "assignment"
+            && node
+                .child_by_field_name("left")
+                .map(|l| l.utf8_text(src).unwrap_or("") == "__tablename__")
+                .unwrap_or(false)
+        {
+            if let Some(right) = node.child_by_field_name("right") {
+                let text = right.utf8_text(src).unwrap_or("");
+                let tbl = text.trim_matches(|c| c == '"' || c == '\'');
+                if !tbl.is_empty() {
+                    out.edges.push(AstEdge {
+                        source_node_id: class_node_id.to_string(),
+                        target_node_id: format!("table:{tbl}"),
+                        label: "QUERIES_TABLE".to_string(),
+                        weight: 1.0,
+                        context: format!("__tablename__ = \"{tbl}\""),
+                        provenance: "INFERRED".to_string(),
+                    });
+                }
+            }
+        }
+        let mut c = node.walk();
+        if c.goto_first_child() {
+            loop {
+                let child = c.node();
+                visit_py_tablename(child, src, class_node_id, out);
+                if !c.goto_next_sibling() {
+                    break;
+                }
+            }
+            c.goto_parent();
         }
     }
 }

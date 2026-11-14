@@ -247,3 +247,172 @@ fn dispatcher_routes_rust_to_treesitter() {
         "эталонный fn не найден через диспетчер"
     );
 }
+
+// ——— Ф70.5: Python mapper (CST → AstScanResult) ———
+
+fn map_py_golden() -> AstScanResult {
+    let golden = ob2h::project::ast_golden::load_embedded()
+        .expect("вшитые эталоны")
+        .into_iter()
+        .find(|g| g.spec.language == "python")
+        .expect("эталон python");
+    let mut out = AstScanResult::default();
+    ts::parse_source("source.py", &golden.source, "python", &mut out)
+        .expect("python mapper не должен отказывать на эталоне");
+    out
+}
+
+/// Эталонные символы и вызовы Python найдены mapper'ом.
+#[test]
+fn python_mapper_meets_golden() {
+    let res = map_py_golden();
+    for (name, kind) in [
+        ("TokenCache", "Class"),
+        ("load_settings", "Function"),
+        ("run_pipeline", "Function"),
+    ] {
+        assert!(
+            res.nodes
+                .iter()
+                .any(|n| n.label == name && n.node_type == kind),
+            "символ {name} ({kind}) не найден; узлы: {:?}",
+            res.nodes
+                .iter()
+                .map(|n| format!("{}:{}", n.node_type, n.label))
+                .collect::<Vec<_>>()
+        );
+    }
+    // Метод refresh (внутри класса) — regex-бэкенд его тоже эмитит
+    assert!(
+        res.nodes.iter().any(|n| n.label == "refresh" && n.node_type == "Function"),
+        "метод класса не найден"
+    );
+    // CALLS run_pipeline → load_settings (type-pass)
+    let mut res = res;
+    ob2h::project::ast::resolve_calls(&mut res);
+    let from = res.nodes.iter().find(|n| n.label == "run_pipeline").map(|n| n.node_id.clone()).unwrap();
+    let to = res.nodes.iter().find(|n| n.label == "load_settings").map(|n| n.node_id.clone()).unwrap();
+    assert!(
+        res.edges
+            .iter()
+            .any(|e| e.source_node_id == from && e.target_node_id == to && e.label == "CALLS"),
+        "нет CALLS run_pipeline → load_settings; рёбра: {:?}",
+        res.edges.iter().map(|e| format!("{}:{}->{}", e.label, e.source_node_id, e.target_node_id)).collect::<Vec<_>>()
+    );
+}
+
+/// Паритет node_id с regex-бэкендом на эталоне Python.
+#[test]
+fn python_mapper_node_ids_match_regex() {
+    let golden = ob2h::project::ast_golden::load_embedded()
+        .unwrap()
+        .into_iter()
+        .find(|g| g.spec.language == "python")
+        .unwrap();
+    let mut regex_res = AstScanResult::default();
+    AstCodeExtractor::new().parse_file("source.py", &golden.source, &mut regex_res);
+    let ts_res = map_py_golden();
+    let ids_regex: HashSet<&str> = regex_res.nodes.iter().map(|n| n.node_id.as_str()).collect();
+    let ids_ts: HashSet<&str> = ts_res.nodes.iter().map(|n| n.node_id.as_str()).collect();
+    assert_eq!(
+        ids_regex, ids_ts,
+        "ts-нет: {:?}, regex-нет: {:?}",
+        ids_ts.difference(&ids_regex).collect::<Vec<_>>(),
+        ids_regex.difference(&ids_ts).collect::<Vec<_>>(),
+    );
+}
+
+/// FastAPI-роут через декоратор, __tablename__ (QUERIES_TABLE),
+/// INHERITS и пометка Pydantic-модели.
+#[test]
+fn python_mapper_fastapi_route_and_tablename() {
+    let src = r#"from fastapi import FastAPI
+from sqlalchemy import Model
+
+app = FastAPI()
+
+
+class User(Model):
+    __tablename__ = "users"
+    id: int
+
+
+class UserOut(BaseModel):
+    name: str
+
+
+@app.get("/users/{user_id}")
+async def get_user(user_id: int):
+    return User(id=user_id)
+
+
+@router.post("/users", status_code=201)
+def create_user(payload: dict):
+    return payload
+"#;
+    let mut out = AstScanResult::default();
+    ts::parse_source("routes.py", src, "python", &mut out).expect("разбор");
+
+    // ROUTE от @app.get и @router.post (второй — многострочный декоратор не нужен)
+    let get_user = "fn:routes.py:get_user";
+    let create_user = "fn:routes.py:create_user";
+    assert!(
+        out.edges.iter().any(|e| e.source_node_id == get_user
+            && e.label == "ROUTE"
+            && e.target_node_id.contains("/users/{user_id}")),
+        "ROUTE @app.get не найден; рёбра: {:?}",
+        out.edges.iter().map(|e| format!("{}:{}->{}", e.label, e.source_node_id, e.target_node_id)).collect::<Vec<_>>()
+    );
+    assert!(
+        out.edges.iter().any(|e| e.source_node_id == create_user
+            && e.label == "ROUTE"
+            && e.target_node_id.contains("/users")),
+        "ROUTE @router.post не найден"
+    );
+    // QUERIES_TABLE: class User → table:users
+    assert!(
+        out.edges.iter().any(|e| e.source_node_id == "class:routes.py:User"
+            && e.label == "QUERIES_TABLE"
+            && e.target_node_id == "table:users"),
+        "QUERIES_TABLE не найден"
+    );
+    // INHERITS: UserOut → class:BaseModel (голое имя)
+    assert!(
+        out.edges.iter().any(|e| e.source_node_id == "class:routes.py:UserOut"
+            && e.label == "INHERITS"
+            && e.target_node_id == "class:BaseModel"),
+        "INHERITS не найден"
+    );
+    // Пометка Pydantic в описании UserOut
+    let user_out = out
+        .nodes
+        .iter()
+        .find(|n| n.label == "UserOut")
+        .expect("UserOut");
+    assert!(user_out.description.contains("Pydantic"), "пометка Pydantic отсутствует");
+}
+
+/// Детерминизм python mapper'а.
+#[test]
+fn python_mapper_deterministic() {
+    let a = map_py_golden();
+    let b = map_py_golden();
+    let ia: HashSet<&str> = a.nodes.iter().map(|n| n.node_id.as_str()).collect();
+    let ib: HashSet<&str> = b.nodes.iter().map(|n| n.node_id.as_str()).collect();
+    assert_eq!(ia, ib);
+}
+
+/// Диспетчер: .py уходит в treesitter:python.
+#[test]
+fn dispatcher_routes_python_to_treesitter() {
+    let golden = ob2h::project::ast_golden::load_embedded()
+        .unwrap()
+        .into_iter()
+        .find(|g| g.spec.language == "python")
+        .unwrap();
+    let disp = AstParserDispatcher::new();
+    let mut out = AstScanResult::default();
+    let backend = disp.parse_source("source.py", &golden.source, &mut out);
+    assert_eq!(backend, "treesitter:python");
+    assert!(out.nodes.iter().any(|n| n.label == "run_pipeline"));
+}
