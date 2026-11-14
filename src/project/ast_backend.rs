@@ -628,6 +628,32 @@ pub mod ts {
                             context: sig.clone(),
                             provenance: "EXTRACTED".to_string(),
                         });
+                        // 71.2: тестовая функция — #[test]/#[tokio::test] на
+                        // предыдущих siblings (kind_detail='test' при записи)
+                        let is_test = node.parent().map(|p| {
+                            let mut pc = p.walk();
+                            let mut found = false;
+                            for sib in p.children(&mut pc) {
+                                if sib.id() == node.id() {
+                                    break;
+                                }
+                                if sib.kind() == "attribute_item" {
+                                    if let Ok(t) = sib.utf8_text(src) {
+                                        let tt = t.trim();
+                                        if tt.starts_with("#[test") || tt.starts_with("#[tokio::test") {
+                                            found = true;
+                                        }
+                                    }
+                                }
+                                if found {
+                                    break;
+                                }
+                            }
+                            found
+                        }).unwrap_or(false);
+                        if is_test {
+                            out.test_node_ids.push(node_id.clone());
+                        }
                         // Ф40.2: ROUTE — атрибут на строке fn или одной из двух
                         // предыдущих (0-based ключи), provenance=INFERRED.
                         let row0 = name_node.start_position().row;
@@ -643,6 +669,42 @@ pub mod ts {
                                 weight: 1.0,
                                 context: format!("{method} {path}"),
                                 provenance: "INFERRED".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            "impl_item" => {
+                // 71.2: impl Trait for Type → IMPLEMENTS (цель — голое имя трейта,
+                // как в dart/ts-эвристиках; source — структурный узел того же
+                // файла или файл-узел). Рекурсия продолжит собрать методы.
+                let trait_name = node.child_by_field_name("trait_").map(|t| text_of(t));
+                if let Some(t) = trait_name {
+                    if !t.is_empty() {
+                        let type_name = node.child_by_field_name("type_").and_then(|ty| {
+                            if ty.kind() == "type_identifier" {
+                                Some(text_of(ty))
+                            } else {
+                                find_descendant(ty, "type_identifier").map(|n| text_of(n))
+                            }
+                        });
+                        if let Some(type_name) = type_name {
+                            let source = if out
+                                .nodes
+                                .iter()
+                                .any(|n| n.label == type_name && n.file_path == rel_path)
+                            {
+                                format!("struct:{rel_path}:{type_name}")
+                            } else {
+                                format!("file:{rel_path}")
+                            };
+                            out.edges.push(AstEdge {
+                                source_node_id: source,
+                                target_node_id: format!("trait:{t}"),
+                                label: "IMPLEMENTS".to_string(),
+                                weight: 1.0,
+                                context: format!("impl {t} for {type_name}"),
+                                provenance: "EXTRACTED".to_string(),
                             });
                         }
                     }
@@ -990,6 +1052,10 @@ pub mod ts {
                                 .to_string(),
                             provenance: "EXTRACTED".to_string(),
                         });
+                        // 71.2: pytest-конвенция — test_* функции
+                        if fn_name.starts_with("test_") {
+                            out.test_node_ids.push(node_id.clone());
+                        }
                         // ROUTE: декораторный блок перед def (окно i-2..i)
                         let row0 = name_node.start_position().row;
                         let route = [row0.checked_sub(2), row0.checked_sub(1), Some(row0)]
@@ -1210,7 +1276,7 @@ pub mod ts {
                         });
                         out.edges.push(AstEdge {
                             source_node_id: file_node_id.to_string(),
-                            target_node_id: node_id,
+                            target_node_id: node_id.clone(),
                             label: "DEFINES".to_string(),
                             weight: 1.0,
                             context: node
@@ -1223,6 +1289,10 @@ pub mod ts {
                                 .to_string(),
                              provenance: "EXTRACTED".to_string(),
                          });
+                         // 71.2: go-тесты — Test* функции верхнего уровня
+                         if fn_name.starts_with("Test") {
+                             out.test_node_ids.push(node_id.clone());
+                         }
                      }
                  }
              }
@@ -1414,7 +1484,7 @@ pub mod ts {
                         });
                         out.edges.push(AstEdge {
                             source_node_id: file_node_id.to_string(),
-                            target_node_id: node_id,
+                            target_node_id: node_id.clone(),
                             label: "DEFINES".to_string(),
                             weight: 1.0,
                             context: node
@@ -1427,6 +1497,10 @@ pub mod ts {
                                 .to_string(),
                             provenance: "EXTRACTED".to_string(),
                         });
+                        // 71.2: dart-тесты — все функции *_test.dart
+                        if rel_path.ends_with("_test.dart") {
+                            out.test_node_ids.push(node_id.clone());
+                        }
                     }
                 }
             }
@@ -1520,7 +1594,7 @@ pub mod ts {
                         });
                         out.edges.push(AstEdge {
                             source_node_id: file_node_id.to_string(),
-                            target_node_id: node_id,
+                            target_node_id: node_id.clone(),
                             label: "DEFINES".to_string(),
                             weight: 1.0,
                             context: node
@@ -1533,6 +1607,29 @@ pub mod ts {
                                 .to_string(),
                             provenance: "EXTRACTED".to_string(),
                         });
+                        // 71.2: implements → IMPLEMENTS к interface:{name} (голые)
+                        if let Some(heritage) = first_direct_child(node, "class_heritage") {
+                            let ht = heritage.utf8_text(src).unwrap_or("");
+                            if let Some(pos) = ht.find("implements") {
+                                for part in ht[pos + "implements".len()..].split(',') {
+                                    let iface = part.trim();
+                                    if !iface.is_empty()
+                                        && iface
+                                            .chars()
+                                            .all(|c| c.is_alphanumeric() || c == '_')
+                                    {
+                                        out.edges.push(AstEdge {
+                                            source_node_id: node_id.clone(),
+                                            target_node_id: format!("interface:{iface}"),
+                                            label: "IMPLEMENTS".to_string(),
+                                            weight: 1.0,
+                                            context: format!("implements {iface}"),
+                                            provenance: "EXTRACTED".to_string(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1590,7 +1687,7 @@ pub mod ts {
                         });
                         out.edges.push(AstEdge {
                             source_node_id: file_node_id.to_string(),
-                            target_node_id: node_id,
+                            target_node_id: node_id.clone(),
                             label: "DEFINES".to_string(),
                             weight: 1.0,
                             context: node
@@ -1603,6 +1700,10 @@ pub mod ts {
                                 .to_string(),
                             provenance: "EXTRACTED".to_string(),
                         });
+                        // 71.2: js/ts-конвенция — test*/it* функции
+                        if fn_name.starts_with("test") {
+                            out.test_node_ids.push(node_id.clone());
+                        }
                     }
                 }
             }

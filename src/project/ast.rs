@@ -117,6 +117,9 @@ pub struct AstScanResult {
     pub gql_fields: Vec<GqlFieldRef>,
     /// Ф50: ссылки, резолвимые после полного скана (tf depends_on, k8s refs).
     pub pending_refs: Vec<PendingRef>,
+    /// 71.2: node_id тестовых символов — персистенс ставит graph_nodes.kind_detail =
+    /// 'test'; исходящие из них CALLS дают обратную связь TESTED_BY (71.6).
+    pub test_node_ids: Vec<String>,
 }
 
 // ============================================================================
