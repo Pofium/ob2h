@@ -319,30 +319,30 @@ Seed-дефолты слотов OB2H (создаются лениво при п
 
 ### Фаза 70 — Viewer: нативное окно egui (ядро, ручной запуск) (оценка 1.5–2 дня)
 
-- [ ] **70.1** Каркас `src/viewer/` (`mod.rs` + `app.rs`): eframe-приложение под feature `gui`; тема RU/EN (`sys-locale`/`OB2H_UI_LANG`, тексты по образцу `pin_input::Texts`); авто-обновление 2 с + F5; read-only открытие БД (`SQLITE_OPEN_READ_ONLY`, WAL); single-instance через lockfile `data/viewer.lock` (pid + проверка живости); правило «ни одной записи» (тест: сессия просмотра не меняет БД).
-- [ ] **70.2** Таб «Память»: FTS-поиск (memories_fts), фильтры проект/категория/источник/min trust, сортировка; панель деталей — content, meta (source/author/session/project), trust, связи из `memory_links`.
-- [ ] **70.3** Таб «Граф»: узлы/рёбра выбранного проекта (`graph_nodes`/`graph_edges`), фоновый force-layout (spring embedding), cap `OB2H_VIEWER_GRAPH_MAX_NODES=300` (топ по степени), отрисовка `Painter` с pan/zoom, цвет ребра по типу; клик по узлу — детали.
-- [ ] **70.4** Таб «Сессии»: список daily-логов workspace, ходы (user/assistant) выбранной сессии, FTS-поиск по логам — аналог «реплея» agentmemory (прокрутка событий без плеера).
-- [ ] **70.5** Таб «Уроки/Слоты»: lessons (confidence/reinforcements/decay; tombstones скрыты) и slots (label/scope/pinned/заполненность) — данные появятся после Ф64/Ф65, до того заглушка «нет данных».
-- [ ] **70.6** Таб «Статистика»: счётчики (memories/links/graph/lessons/slots/имена секретов — без значений), размер БД, `schema_version`, топ категорий и проектов.
+- [x] **70.1** Каркас `src/viewer/` (`mod.rs` + `app.rs`): eframe-приложение под feature `gui`; тема RU/EN (`sys-locale`/`OB2H_UI_LANG`, тексты по образцу `pin_input::Texts`); авто-обновление 2 с + F5; read-only открытие БД (`SQLITE_OPEN_READ_ONLY`, WAL); single-instance через lockfile `data/viewer.lock` (pid + проверка живости); правило «ни одной записи» (тест: сессия просмотра не меняет БД).
+- [x] **70.2** Таб «Память»: FTS-поиск (memories_fts), фильтры проект/категория/источник/min trust, сортировка; панель деталей — content, meta (source/author/session/project), trust, связи из `memory_links`.
+- [x] **70.3** Таб «Граф»: узлы/рёбра выбранного проекта (`graph_nodes`/`graph_edges`), фоновый force-layout (spring embedding), cap `OB2H_VIEWER_GRAPH_MAX_NODES=300` (топ по степени), отрисовка `Painter` с pan/zoom, цвет ребра по типу; клик по узлу — детали.
+- [x] **70.4** Таб «Сессии»: список daily-логов workspace, ходы (user/assistant) выбранной сессии, FTS-поиск по логам — аналог «реплея» agentmemory (прокрутка событий без плеера).
+- [x] **70.5** Таб «Уроки/Слоты»: lessons (confidence/reinforcements/decay; tombstones скрыты) и slots (label/scope/pinned/заполненность) — данные появятся после Ф64/Ф65, до того заглушка «нет данных».
+- [x] **70.6** Таб «Статистика»: счётчики (memories/links/graph/lessons/slots/имена секретов — без значений), размер БД, `schema_version`, топ категорий и проектов.
 - **DoD:** `cargo test --features gui` зелёные; окно открывается на живой копии БД; за сессию просмотра ни одной записи в БД; сборка без `gui` не меняется.
 
 ### Фаза 71 — Секреты во viewer: PIN-доступ, добавление, инициализация (оценка 1–1.5 дня)
 
-- [ ] **71.1** Таб «Секреты» (`src/viewer/tabs/secrets.rs`): конечный автомат not_initialized / locked / unlocked поверх переиспользуемого `SecretsService` (владеет им процесс viewer); «Начать сохранять» → init (PIN дважды, окно PIN как в CLI); locked → поле PIN; unlocked → TTL-индикатор и кнопка «Заблокировать».
-- [ ] **71.2** Список и операции: добавление записи (валидация имени как `secrets_set`), раскрытие значения с маской и авто-скрытием 15 с, копирование в буфер, удаление с подтверждением; каждая операция — через SecretsService + запись в `audit_log` (`actor=user`, `source_tool=viewer`).
-- [ ] **71.3** Тесты безопасности: zeroize при lock/TTL/закрытии окна; значения не попадают в аудит/логи; неудачный PIN не пишет в БД; повторный init на существующем сейфе запрещён (подсказка «сейф уже создан»); unlock во viewer не влияет на lock-состояние `ob2h serve` (и наоборот).
-- [ ] **71.4** headless-сборка: вкладка отвечает «недоступно в сборке без gui» (общее правило viewer, `[Error]`-стиль).
+- [x] **71.1** Таб «Секреты» (`src/viewer/tabs/secrets.rs`): конечный автомат not_initialized / locked / unlocked поверх переиспользуемого `SecretsService` (владеет им процесс viewer); «Начать сохранять» → init (PIN дважды, окно PIN как в CLI); locked → поле PIN; unlocked → TTL-индикатор и кнопка «Заблокировать».
+- [x] **71.2** Список и операции: добавление записи (валидация имени как `secrets_set`), раскрытие значения с маской и авто-скрытием 15 с, копирование в буфер, удаление с подтверждением; каждая операция — через SecretsService + запись в `audit_log` (`actor=user`, `source_tool=viewer`).
+- [x] **71.3** Тесты безопасности: zeroize при lock/TTL/закрытии окна; значения не попадают в аудит/логи; неудачный PIN не пишет в БД; повторный init на существующем сейфе запрещён (подсказка «сейф уже создан»); unlock во viewer не влияет на lock-состояние `ob2h serve` (и наоборот).
+- [x] **71.4** headless-сборка: вкладка отвечает «недоступно в сборке без gui» (общее правило viewer, `[Error]`-стиль).
 - **DoD:** полный цикл «Начать сохранять → добавить → unlock → показать → lock» во viewer; значения видны только после PIN и скрываются автоматически; MCP-контракт не растёт (56); аудит содержит операции viewer без значений.
 
 ### Фаза 72 — Viewer: активация из любого агента, доки, релиз 1.9.9 (оценка 1–1.5 дня)
 
-- [ ] **72.1** MCP `viewer_open` (56-й инструмент): спавн detached-процесса `current_exe() viewer --data-dir …` (Windows: `CREATE_BREAKAWAY_FROM_JOB` + `DETACHED_PROCESS`); статусы `opened` / `already_running` / `gui_unavailable`; без feature `gui` — `[Error] … [Подсказка]` (честно, не паника).
-- [ ] **72.2** CLI `ob2h viewer` — ручной запуск (главный путь пользователя); `ob2h doctor` — строка «Viewer: доступен / сборка без gui».
-- [ ] **72.3** Живая проверка выживания окна: Hermes/ZCode/DSH завершают MCP-сессию — окно остаётся (детач); если harness убивает job-дерево и breakaway не проходит — зафиксировать поведение в доках, фолбэк — CLI-инструкция в скилле.
-- [ ] **72.4** Скиллы (`skills/ob2h` + ZCode-вариант): питфоллы «показать память владельцу → `viewer_open`; headless/SSH — окно недоступно, сообщить честно» и «секреты — только через окно viewer/CLI по команде владельца; PIN в чате не запрашивать никогда».
-- [ ] **72.5** Доки: README (новинки: lifecycle-пак, viewer, секреты во viewer + счётчик 56 инструментов), `CHANGELOG.md` `[1.9.9]` (контракт 41 → 56), `docs/HERMES_INTEGRATION.md` (§5.3 разделение ролей, `<agent_slots>`, viewer), `skills/ob2h/SKILL.md` (питфоллы: когда lesson_save vs memory_save, лимиты слотов), `docs/SYNC.md` (lessons/slots в бандлах, audit — нет).
-- [ ] **72.6** Релиз 1.9.9: версия, тег, GitHub Release; **открытый вопрос CI**: релизная матрица по ADR-23 собирается без `gui` — добавить `--features gui` в Windows-артефакт (X11/Wayland на Windows не тянутся; для Linux при сложности — отдельный артефакт `ob2h-gui`). Решение — записать в `PLAN.md` §6 при реализации.
+- [x] **72.1** MCP `viewer_open` (56-й инструмент): спавн detached-процесса `current_exe() viewer --data-dir …` (Windows: `CREATE_BREAKAWAY_FROM_JOB` + `DETACHED_PROCESS`); статусы `opened` / `already_running` / `gui_unavailable`; без feature `gui` — `[Error] … [Подсказка]` (честно, не паника).
+- [x] **72.2** CLI `ob2h viewer` — ручной запуск (главный путь пользователя); `ob2h doctor` — строка «Viewer: доступен / сборка без gui».
+- [x] **72.3** Живая проверка выживания окна: Hermes/ZCode/DSH завершают MCP-сессию — окно остаётся (детач); если harness убивает job-дерево и breakaway не проходит — зафиксировать поведение в доках, фолбэк — CLI-инструкция в скилле.
+- [x] **72.4** Скиллы (`skills/ob2h` + ZCode-вариант): питфоллы «показать память владельцу → `viewer_open`; headless/SSH — окно недоступно, сообщить честно» и «секреты — только через окно viewer/CLI по команде владельца; PIN в чате не запрашивать никогда».
+- [x] **72.5** Доки: README (новинки: lifecycle-пак, viewer, секреты во viewer + счётчик 56 инструментов), `CHANGELOG.md` `[1.9.9]` (контракт 41 → 56), `docs/HERMES_INTEGRATION.md` (§5.3 разделение ролей, `<agent_slots>`, viewer), `skills/ob2h/SKILL.md` (питфоллы: когда lesson_save vs memory_save, лимиты слотов), `docs/SYNC.md` (lessons/slots в бандлах, audit — нет).
+- [x] **72.6** Релиз 1.9.9: версия, тег, GitHub Release; **открытый вопрос CI**: релизная матрица по ADR-23 собирается без `gui` — добавить `--features gui` в Windows-артефакт (X11/Wayland на Windows не тянутся; для Linux при сложности — отдельный артефакт `ob2h-gui`). Решение — записать в `PLAN.md` §6 при реализации.
 - **DoD:** `viewer_open` из Hermes/ZCode/DSH открывает окно (живая проверка); контракт-тест плагина — 56 инструментов; доки/CHANGELOG оформлены; релиз по §8.
 
 ---

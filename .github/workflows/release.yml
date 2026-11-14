@@ -31,18 +31,24 @@ jobs:
             os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: .zip
+            # v1.9.9 (Ф72.6): окно просмотра в релизном Windows-артефакте;
+            # X11/Wayland на Windows не тянутся. Linux/macOS — headless (см. PLAN.md §6).
+            features: "--features gui"
           - build: Linux-x86_64-gnu
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             ext: .tar.gz
+            features: ""
           - build: macOS-aarch64
             os: macos-latest
             target: aarch64-apple-darwin
             ext: .tar.gz
+            features: ""
           - build: macOS-x86_64
             os: macos-latest
             target: x86_64-apple-darwin
             ext: .tar.gz
+            features: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -64,7 +70,7 @@ jobs:
         uses: clechasseur/rs-cargo@v2
         with:
           command: build
-          args: --release --target ${{ matrix.target }}
+          args: --release --target ${{ matrix.target }} ${{ matrix.features }}
 
       - name: Stage artifacts
         shell: bash
