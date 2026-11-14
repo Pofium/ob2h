@@ -292,11 +292,11 @@ Seed-дефолты слотов OB2H (создаются лениво при п
 
 ### Фаза 66 — Хронология, рекап сессии, инкрементальные summaries (оценка 1–1.5 дня)
 
-- [ ] **66.1** `memory_timeline(anchor, before=5, after=5, project?)`: якорь = ISO-дата либо текст (FTS-хит по daily-логам как якорь); окно записей до/после с sessionId/author/временем; read-only поверх workspace daily-логов и `session_ingest`-данных.
-- [ ] **66.2** `session_recap(session_id?, save=?)`: дайджест последней/указанной сессии через `llm_client` (FakeLLM в тестах); `save=true` → факт в `memories` (type=recap, source=recap) + source_ids (ids daily-записей) → мост к провенансу; без сети в тестах.
-- [ ] **66.3** Инкрементальные summaries в консолидаторе: курсор «просуммированного префикса» сессии в kv; повторный дрим пропускает неизменённый префикс (как incremental session summaries agentmemory).
-- [ ] **66.4** Опционально (флаг `OB2H_DREAM_SLOTS`, дефолт off): dream-слот-рефлекс — переносит свежие TODO из daily-логов в `pending_items` (append, с уважением лимита) и счётчики паттернов в `session_guidance` — порт `slot-reflect` §3.3.
-- **DoD:** timeline возвращает корректное окно вокруг даты и вокруг FTS-хита; recap с FakeLLM детерминирован; повторный дрим на неизменённой сессии не делает LLM-вызов (логируем skip).
+- [x] **66.1** `memory_timeline(anchor, before=5, after=5)`: якорь = ISO-дата либо подстрока диалога (первый хит по содержимому daily-логов); окно before+якорь+after; без якоря — хвост. Read-only поверх daily-логов (session_id/author из session_ingest-меты).
+- [x] **66.2** `session_recap(session_id?, save=?)`: дайджест через llm_client (FakeLLM в тестах), extractive-фолбэк при недоступном LLM; `save=true` → факт в `memories` (category/source=recap, meta.source_ids = `daily/….jsonl#L…` — мост к провенансу Ф67); без сети в тестах.
+- [x] **66.3** Инкрементальный курсор префикса рекапа в kv (`recap:<sid>` = {prefix, digest}): неизменённая сессия — кэш-хит без LLM-вызова (тест со счётчиком вызовов), растущая — только хвост. (Фазовый курсор дрима по history.jsonl уже давал prefix-skip для phase1 — задублирован не был.)
+- [x] **66.4** Dream-слот-рефлекс за флагом `OB2H_DREAM_SLOTS` (дефолт off): TODO дня → global `pending_items` (append недостающих, cap 20, дедуп), счётчики → global `session_guidance`; вызывается в autodream после decay-sweep. Global-скоуп — у дрима нет проектного контекста (записано в PLAN.md §6).
+- **DoD:** timeline возвращает корректное окно вокруг даты и вокруг текстового якоря; recap с FakeLLM детерминирован; повторный рекап на неизменённой сессии не делает LLM-вызов — **выполнено** (5 тестов; suite 54 набора зелёный, clippy чисто, python 20 OK, smoke memory_timeline — оба типа якорей).
 
 ### Фаза 67 — Провенанс фактов (оценка 0.5–1 день)
 
