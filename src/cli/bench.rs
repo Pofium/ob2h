@@ -570,16 +570,18 @@ pub async fn cli_run(
 /// присутствие required_symbols/required_calls и паритет двойного парсинга.
 /// Возвращает (общий ok, json-записи по языкам).
 pub fn ast_golden_section() -> anyhow::Result<(bool, Vec<serde_json::Value>)> {
-    use crate::project::ast::{resolve_calls, AstCodeExtractor, AstScanResult};
+    use crate::project::ast::{resolve_calls, AstScanResult};
 
     let embedded = crate::project::ast_golden::load_embedded()?;
     let mut all_ok = true;
     let mut entries = Vec::new();
     for item in &embedded {
+        // Диспетчер — продакшн-путь: под фичей treesitter измеряется CST-бэкенд
+        // (call-гейт target-языков активен только тогда, когда бэкенд — CST)
         let parse = |src: &str| {
-            let ex = AstCodeExtractor::new();
+            let disp = crate::project::ast_backend::AstParserDispatcher::new();
             let mut res = AstScanResult::default();
-            ex.parse_file(&item.spec.fixture, src, &mut res);
+            disp.parse_source(&item.spec.fixture, src, &mut res);
             resolve_calls(&mut res);
             res
         };

@@ -22,10 +22,11 @@ pub use scanjob::{ScanJob, ScanJobManager, ScanJobResult, ScanJobStatus};
 pub use watcher::ProjectWatcher;
 
 /// Версия логики AST-экстрактора. Меняется, когда правки экстрактора делают
-/// старые узлы/рёбра неверными (как Ф41 — резолв импортов, Ф42 — границы тел
-/// TS/классов и фильтр ROUTE/dead-code). Хранится в `kv` на каждый проект:
-/// при несовпадении инкрементальный скан автоматически становится полным.
-pub const AST_EXTRACTOR_VERSION: &str = "45";
+/// старые узлы/рёбра неверными (как Ф41 — резолв квалифицированных вызовов
+/// 71.4, методы классов TS 71.7, виртуальные вызовы 71.6 — новые рёбра CALLS).
+/// Хранится в `kv` на каждый проект: при несовпадении инкрементальный скан
+/// автоматически становится полным.
+pub const AST_EXTRACTOR_VERSION: &str = "46";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectStats {

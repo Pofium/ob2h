@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 #[cfg_attr(not(feature = "treesitter"), allow(unused_imports))]
-use crate::project::ast::{AstCodeExtractor, AstEdge, AstNode, AstScanResult, CallSite};
+use crate::project::ast::{AstCodeExtractor, AstEdge, AstNode, AstScanResult};
 
 /// Унифицированный интерфейс бэкенда разбора одного файла.
 pub trait AstParserBackend: Send + Sync {

@@ -505,7 +505,6 @@ fn sfc_hybrid_svelte() {
 #[cfg(not(feature = "treesitter"))]
 #[test]
 fn sfc_regex_fallback() {
-    let ex = AstCodeExtractor::new();
     let mut res = AstScanResult::default();
     let backend = ob2h::project::ast_backend::AstParserDispatcher::new()
         .parse_source("Card.vue", "<script>\nexport function render() {}\n</script>\n", &mut res);
