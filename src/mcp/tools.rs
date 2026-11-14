@@ -1,5 +1,5 @@
-//! 51 инструмент MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
-//! Ralph, секреты, уроки, слоты).
+//! 53 инструмента MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
+//! Ralph, секреты, уроки, слоты, хронология/рекап).
 
 use super::protocol::McpToolDef;
 
@@ -31,6 +31,7 @@ pub fn annotations_for(name: &str) -> Option<serde_json::Value> {
         "lesson_list",
         "slot_list",
         "slot_get",
+        "memory_timeline",
     ];
     const DESTRUCTIVE: &[&str] = &[
         "memory_forget",
@@ -745,6 +746,30 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "project": { "type": "string", "description": "Проект (дефолт: активный проект сессии)" }
                 },
                 "required": ["label"]
+            }),
+        },
+        // v1.9.9: хронология и рекап (Фаза 66)
+        McpToolDef {
+            name: "memory_timeline".to_string(),
+            description: "Хронология ходов из daily-логов: окно записей до/после якоря. Якорь — ISO-дата (2026-11-14) либо текст (первая запись, содержащая подстроку). Без якоря — последние записи.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "anchor": { "type": "string", "description": "ISO-дата/дата-время или текст-подстрока (опционально)" },
+                    "before": { "type": "integer", "description": "Записей до якоря (дефолт 5, макс 50)" },
+                    "after": { "type": "integer", "description": "Записей после якоря (дефолт 5, макс 50)" }
+                }
+            }),
+        },
+        McpToolDef {
+            name: "session_recap".to_string(),
+            description: "Дайджест сессии (LLM) с инкрементальным курсором: повторный вызов на неизменённой сессии отдаёт кэш без LLM-вызова; растущая сессия до-суммаризуется по хвосту. save=true → итог сохраняется в память (category=recap, meta.source_ids — ссылки на daily-записи для провенанса).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "ID сессии (дефолт: последняя сессия в логах)" },
+                    "save": { "type": "boolean", "description": "Сохранить итог в долгосрочную память (дефолт false)" }
+                }
             }),
         },
     ]

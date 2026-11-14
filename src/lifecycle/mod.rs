@@ -4,6 +4,7 @@
 pub mod audit;
 pub mod lessons;
 pub mod slots;
+pub mod timeline;
 
 pub use lessons::{LessonRecord, LessonSaveOutcome, LessonSaveRequest, LessonsService};
 pub use slots::{SlotRecord, SlotsService};

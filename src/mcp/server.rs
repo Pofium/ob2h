@@ -2217,6 +2217,48 @@ impl McpServer {
                     Err(e) => format!("{e}"),
                 }
             }
+            // v1.9.9 Ф66: хронология и рекап сессии — контракт 51 → 53
+            "memory_timeline" => {
+                let anchor = args.get("anchor").and_then(|v| v.as_str()).unwrap_or("");
+                let before = args.get("before").and_then(|v| v.as_u64()).unwrap_or(5).clamp(0, 50) as usize;
+                let after = args.get("after").and_then(|v| v.as_u64()).unwrap_or(5).clamp(0, 50) as usize;
+                match crate::lifecycle::timeline::load_entries(&self.ctx.workspace) {
+                    Ok(entries) => {
+                        if entries.is_empty() {
+                            return "Хронология пуста (daily-логов нет)".to_string();
+                        }
+                        let idx = crate::lifecycle::timeline::resolve_anchor(&entries, anchor);
+                        if !anchor.trim().is_empty() && idx.is_none() {
+                            return format!(
+                                "[Error] якорь \"{anchor}\" не найден в daily-логах [Подсказка: ISO-дата вида 2026-11-14 или подстрока из диалога]"
+                            );
+                        }
+                        let win = crate::lifecycle::timeline::window(&entries, idx, before, after);
+                        if win.is_empty() {
+                            return "Хронология пуста (daily-логов нет)".to_string();
+                        }
+                        crate::lifecycle::timeline::render_timeline(&win)
+                    }
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
+            "session_recap" => {
+                let session_id = args.get("session_id").and_then(|v| v.as_str()).map(String::from);
+                let save = args.get("save").and_then(|v| v.as_bool()).unwrap_or(false);
+                match crate::lifecycle::timeline::recap_session(
+                    &self.ctx.workspace,
+                    &self.ctx.db,
+                    self.ctx.llm.as_ref(),
+                    Some(self.ctx.memory.as_ref()),
+                    session_id.as_deref(),
+                    save,
+                )
+                .await
+                {
+                    Ok(v) => serde_json::to_string(&v).unwrap_or_else(|e| format!("[Error] {e}")),
+                    Err(e) => format!("{e}"),
+                }
+            }
             other => format!("[Error] Unknown tool {other}"),
         }
     }
