@@ -376,10 +376,11 @@ INSERT INTO graph_nodes_fts (rowid, label, description)
 /// M11 (v1.9.9, Фаза 64): жизненный цикл памяти — уроки (lessons) с FTS5-индексом,
 /// слоты рабочего контекста (slots) и аудит-леджер (audit_log). Только CREATE
 /// (без изменения существующих таблиц), по образцу M9/M10.
-/// Отступление от эскиза PLAN_v1.9.9 §5.1: у lessons PK — `seq INTEGER` (rowid-алиас,
+/// Отступления от эскиза PLAN_v1.9.9 §5.1: у lessons PK — `seq INTEGER` (rowid-алиас,
 /// нужен для content_rowid FTS5 external content) + `id TEXT UNIQUE` как дедуп-ключ;
 /// у slots PK — `(label, project)` (project='' = global), чтобы одноимённые слоты
-/// разных проектов не коллидировали.
+/// разных проектов не коллидировали; у обеих таблиц есть origin — LWW-мердж синка
+/// (Ф65.4) работает по тем же правилам, что у memories.
 pub const MIGRATION_V11: &str = r#"
 CREATE TABLE IF NOT EXISTS lessons (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -393,6 +394,7 @@ CREATE TABLE IF NOT EXISTS lessons (
     project TEXT,
     tags TEXT NOT NULL DEFAULT '[]',
     decay_rate REAL NOT NULL DEFAULT 0.05,
+    origin TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_reinforced_at TEXT,
@@ -429,6 +431,7 @@ CREATE TABLE IF NOT EXISTS slots (
     description TEXT NOT NULL DEFAULT '',
     pinned INTEGER NOT NULL DEFAULT 1,
     read_only INTEGER NOT NULL DEFAULT 0,
+    origin TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (label, project)

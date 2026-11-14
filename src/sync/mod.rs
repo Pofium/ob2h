@@ -114,6 +114,9 @@ pub struct ImportStats {
     pub edges_applied: usize,
     /// Ф34.3: применённые рёбра памяти (тип mlink, v2-бандлы)
     pub links_applied: usize,
+    /// v1.9.9 Ф64/65: уроки и слоты жизненного цикла памяти
+    pub lessons_applied: usize,
+    pub slots_applied: usize,
     pub conflicts_lost: usize,
     /// Ф34.2: content-конфликты, записанные в sync/conflicts.jsonl
     pub conflicts_journaled: usize,
@@ -343,6 +346,32 @@ impl SyncManager {
                 rows.push(v.clone());
             },
         )?;
+        // v1.9.9 Ф64/65: уроки и слоты жизненного цикла памяти. audit_log и
+        // secrets в бандлы не входят (локальный журнал / личные данные, ADR-21).
+        self.collect_rows(
+            "SELECT id, content, context, confidence, reinforcements, source, source_ids, project, tags, decay_rate, origin, created_at, updated_at, last_reinforced_at, last_decayed_at, deleted_at
+             FROM lessons WHERE ?1 IS NULL OR MAX(updated_at, COALESCE(deleted_at, '')) >= ?1",
+            watermark.as_deref(),
+            &mut |v| {
+                v["type"] = json!("lesson");
+                v["origin"] = json!(self.node.effective_origin(
+                    v["origin"].as_str().unwrap_or("")
+                ));
+                rows.push(v.clone());
+            },
+        )?;
+        self.collect_rows(
+            "SELECT label, project, content, size_limit, description, pinned, read_only, origin, created_at, updated_at
+             FROM slots WHERE ?1 IS NULL OR updated_at >= ?1",
+            watermark.as_deref(),
+            &mut |v| {
+                v["type"] = json!("slot");
+                v["origin"] = json!(self.node.effective_origin(
+                    v["origin"].as_str().unwrap_or("")
+                ));
+                rows.push(v.clone());
+            },
+        )?;
 
         // Курсор (watermark) — максимум по времени ИЗМЕНЕНИЯ строк. У записей/узлов/
         // рёбер это updated_at (deleted_at — для tombstones); у memory_links (mlink)
@@ -389,6 +418,8 @@ impl SyncManager {
                 "node": rows.iter().filter(|r| r["type"] == "node").count(),
                 "edge": rows.iter().filter(|r| r["type"] == "edge").count(),
                 "mlink": rows.iter().filter(|r| r["type"] == "mlink").count(),
+                "lesson": rows.iter().filter(|r| r["type"] == "lesson").count(),
+                "slot": rows.iter().filter(|r| r["type"] == "slot").count(),
             },
         });
 
@@ -428,9 +459,10 @@ impl SyncManager {
         })?;
 
         info!(
-            "sync export: {} строк (mem/node/edge = {}/{}/{}), бандл {}",
+            "sync export: {} строк (mem/node/edge = {}/{}/{}, lesson/slot = {}/{}), бандл {}",
             rows.len(),
             header["counts"]["mem"], header["counts"]["node"], header["counts"]["edge"],
+            header["counts"]["lesson"], header["counts"]["slot"],
             path.display()
         );
         Ok(path)
@@ -598,9 +630,11 @@ impl SyncManager {
             "proj" => 0,
             "node" => 1,
             "mem" => 2,
-            "mlink" => 3,
-            "edge" => 4,
-            _ => 5,
+            "lesson" => 3,
+            "mlink" => 4,
+            "edge" => 5,
+            "slot" => 6,
+            _ => 7,
         });
 
         self.db.with_tx(|tx| {
@@ -620,6 +654,8 @@ impl SyncManager {
                         &mut journal,
                     )?,
                     "node" => Self::apply_node(tx, l, &self.node, &node_emb, &mut stats)?,
+                    "lesson" => Self::apply_lesson(tx, l, &self.node, &mut stats)?,
+                    "slot" => Self::apply_slot(tx, l, &self.node, &mut stats)?,
                     "mlink" => Self::apply_mlink(tx, l, &mut stats)?,
                     "edge" => Self::apply_edge(tx, l, &self.node, &mut stats)?,
                     other => warn!("sync import: неизвестный тип строки: {other}"),
@@ -688,8 +724,9 @@ impl SyncManager {
         }
 
         info!(
-            "sync import {}: mem={} node={} edge={} конфликты_проиграны={} пропуск_ссылок={}",
+            "sync import {}: mem={} node={} edge={} lesson={} slot={} конфликты_проиграны={} пропуск_ссылок={}",
             stats.bundle_id, stats.memories_applied, stats.nodes_applied, stats.edges_applied,
+            stats.lessons_applied, stats.slots_applied,
             stats.conflicts_lost, stats.skipped_missing_ref
         );
         Ok(stats)
@@ -966,6 +1003,186 @@ impl SyncManager {
 
     /// Ф34.3: ребро памяти (mlink) — идентичность (from_key, to_key, kind),
     /// LWW по MAX(created_at, deleted_at), upsert с оживлением (M7).
+    /// v1.9.9 Ф64: урок — LWW по updated_at/origin. Счётчик reinforcements
+    /// монотонный (max локального и входящего) — укрепления с другой машины
+    /// не откатываются; остальные поля — строкой целиком.
+    fn apply_lesson(
+        tx: &rusqlite::Transaction,
+        l: &serde_json::Value,
+        node: &NodeConfig,
+        stats: &mut ImportStats,
+    ) -> anyhow::Result<()> {
+        let id = l["id"].as_str().unwrap_or_default();
+        if id.is_empty() {
+            bail!("строка lesson без id");
+        }
+        let get_s = |k: &str| l[k].as_str().map(|s| s.to_string());
+        let inc_upd = get_s("updated_at").unwrap_or_default();
+        let inc_origin = get_s("origin").unwrap_or_default();
+        let inc_content = get_s("content").unwrap_or_default();
+        let inc_deleted = get_s("deleted_at");
+        let inc_reinf = l["reinforcements"].as_i64().unwrap_or(0);
+
+        let existing: Option<(String, String, Option<String>, i64, String, f64)> = tx
+            .query_row(
+                "SELECT updated_at, origin, deleted_at, reinforcements, content, confidence \
+                 FROM lessons WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            )
+            .optional()?;
+
+        if let Some((ex_upd, ex_origin, ex_del, ex_reinf, ex_content, ex_conf)) = &existing {
+            // no-op только при полном совпадении значимых полей: усечённая
+            // проверка «проглатывала» reinforce в ту же секунду (updated_at равен)
+            let inc_conf = l["confidence"].as_f64().unwrap_or(0.5);
+            let identical = *ex_upd == inc_upd
+                && *ex_content == inc_content
+                && ex_del.as_deref() == inc_deleted.as_deref()
+                && *ex_reinf >= inc_reinf
+                && (*ex_conf - inc_conf).abs() < 1e-9;
+            if identical {
+                return Ok(()); // идентично — no-op (повторная отправка границы)
+            }
+            if !Self::incoming_wins(node, &inc_upd, &inc_origin, ex_upd, ex_origin) {
+                if *ex_content != inc_content {
+                    stats.conflicts_lost += 1;
+                }
+                return Ok(());
+            }
+            let reinf = (*ex_reinf).max(inc_reinf);
+            tx.execute(
+                "UPDATE lessons SET content=?1, context=?2, confidence=?3, reinforcements=?4, \
+                 source=?5, source_ids=?6, project=?7, tags=?8, decay_rate=?9, origin=?10, \
+                 updated_at=?11, last_reinforced_at=?12, last_decayed_at=?13, deleted_at=?14 \
+                 WHERE id=?15",
+                params![
+                    inc_content,
+                    get_s("context").unwrap_or_default(),
+                    l["confidence"].as_f64().unwrap_or(0.5),
+                    reinf,
+                    get_s("source").unwrap_or_else(|| "manual".into()),
+                    get_s("source_ids").unwrap_or_else(|| "[]".into()),
+                    get_s("project"),
+                    get_s("tags").unwrap_or_else(|| "[]".into()),
+                    l["decay_rate"].as_f64().unwrap_or(0.05),
+                    inc_origin,
+                    inc_upd,
+                    get_s("last_reinforced_at"),
+                    get_s("last_decayed_at"),
+                    inc_deleted,
+                    id,
+                ],
+            )?;
+            stats.lessons_applied += 1;
+            return Ok(());
+        }
+
+        tx.execute(
+            "INSERT INTO lessons (id, content, context, confidence, reinforcements, source, \
+             source_ids, project, tags, decay_rate, origin, created_at, updated_at, \
+             last_reinforced_at, last_decayed_at, deleted_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            params![
+                id,
+                inc_content,
+                get_s("context").unwrap_or_default(),
+                l["confidence"].as_f64().unwrap_or(0.5),
+                inc_reinf,
+                get_s("source").unwrap_or_else(|| "manual".into()),
+                get_s("source_ids").unwrap_or_else(|| "[]".into()),
+                get_s("project"),
+                get_s("tags").unwrap_or_else(|| "[]".into()),
+                l["decay_rate"].as_f64().unwrap_or(0.05),
+                inc_origin,
+                get_s("created_at").unwrap_or_else(utcnow),
+                inc_upd,
+                get_s("last_reinforced_at"),
+                get_s("last_decayed_at"),
+                inc_deleted,
+            ],
+        )?;
+        stats.lessons_applied += 1;
+        Ok(())
+    }
+
+    /// v1.9.9 Ф65: слот — LWW по updated_at/origin, идентичность (label, project).
+    fn apply_slot(
+        tx: &rusqlite::Transaction,
+        l: &serde_json::Value,
+        node: &NodeConfig,
+        stats: &mut ImportStats,
+    ) -> anyhow::Result<()> {
+        let label = l["label"].as_str().unwrap_or_default();
+        if label.is_empty() {
+            bail!("строка slot без label");
+        }
+        let project = l["project"].as_str().unwrap_or("");
+        let inc_upd = l["updated_at"].as_str().unwrap_or_default();
+        let inc_origin = l["origin"].as_str().unwrap_or("");
+        let inc_content = l["content"].as_str().unwrap_or("");
+
+        let existing: Option<(String, String, String)> = tx
+            .query_row(
+                "SELECT updated_at, origin, content FROM slots WHERE label = ?1 AND project = ?2",
+                params![label, project],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+
+        if let Some((ex_upd, ex_origin, ex_content)) = &existing {
+            if *ex_upd == inc_upd && *ex_content == inc_content {
+                return Ok(()); // идентично — no-op
+            }
+            if !Self::incoming_wins(node, inc_upd, inc_origin, ex_upd, ex_origin) {
+                if *ex_content != inc_content {
+                    stats.conflicts_lost += 1;
+                }
+                return Ok(());
+            }
+            tx.execute(
+                "UPDATE slots SET content=?1, size_limit=?2, description=?3, pinned=?4, \
+                 read_only=?5, origin=?6, updated_at=?7 WHERE label=?8 AND project=?9",
+                params![
+                    inc_content,
+                    l["size_limit"].as_i64().unwrap_or(2000),
+                    l["description"].as_str().unwrap_or(""),
+                    l["pinned"].as_i64().unwrap_or(1),
+                    l["read_only"].as_i64().unwrap_or(0),
+                    inc_origin,
+                    inc_upd,
+                    label,
+                    project,
+                ],
+            )?;
+            stats.slots_applied += 1;
+            return Ok(());
+        }
+
+        tx.execute(
+            "INSERT INTO slots (label, project, content, size_limit, description, pinned, \
+             read_only, origin, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                label,
+                project,
+                inc_content,
+                l["size_limit"].as_i64().unwrap_or(2000),
+                l["description"].as_str().unwrap_or(""),
+                l["pinned"].as_i64().unwrap_or(1),
+                l["read_only"].as_i64().unwrap_or(0),
+                inc_origin,
+                l["created_at"]
+                    .as_str()
+                    .map(String::from)
+                    .unwrap_or_else(utcnow),
+                inc_upd,
+            ],
+        )?;
+        stats.slots_applied += 1;
+        Ok(())
+    }
+
     fn apply_mlink(
         tx: &rusqlite::Transaction,
         l: &serde_json::Value,
@@ -1444,6 +1661,47 @@ impl SyncManager {
                     h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
                 ]);
             }
+            // v1.9.9 Ф64/65: уроки и слоты в сверке дрейфа (verify)
+            let (lessons_alive, slots_alive): (i64, i64) = conn.query_row(
+                "SELECT (SELECT COUNT(*) FROM lessons WHERE deleted_at IS NULL), \
+                 (SELECT COUNT(*) FROM slots)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let mut lessons_sum: u64 = 0;
+            let lsn_rows = {
+                let mut stmt =
+                    conn.prepare("SELECT id, updated_at, deleted_at FROM lessons")?;
+                let it = stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                })?;
+                it.flatten().collect::<Vec<_>>()
+            };
+            for (id, upd, deleted) in lsn_rows {
+                let h = Sha256::digest(format!("{id}|{upd}|{deleted:?}").as_bytes());
+                lessons_sum ^= u64::from_le_bytes([h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]]);
+            }
+            let mut slots_sum: u64 = 0;
+            let slot_rows = {
+                let mut stmt =
+                    conn.prepare("SELECT label, project, updated_at FROM slots")?;
+                let it = stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                })?;
+                it.flatten().collect::<Vec<_>>()
+            };
+            for (label, project, upd) in slot_rows {
+                let h = Sha256::digest(format!("{label}|{project}|{upd}").as_bytes());
+                slots_sum ^= u64::from_le_bytes([h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]]);
+            }
             Ok(json!({
                 "memories_total": mem_total,
                 "memories_alive": mem_alive,
@@ -1452,6 +1710,10 @@ impl SyncManager {
                 "links_deleted": links_deleted,
                 "mem_checksum": format!("{mem_sum:016x}"),
                 "links_checksum": format!("{links_sum:016x}"),
+                "lessons_alive": lessons_alive,
+                "slots_alive": slots_alive,
+                "lessons_checksum": format!("{lessons_sum:016x}"),
+                "slots_checksum": format!("{slots_sum:016x}"),
             }))
         })
     }
@@ -1509,6 +1771,10 @@ impl SyncManager {
             "links_deleted",
             "mem_checksum",
             "links_checksum",
+            "lessons_alive",
+            "slots_alive",
+            "lessons_checksum",
+            "slots_checksum",
         ] {
             lines.push(field(name, &get(local, name), &get(remote, name)));
         }
