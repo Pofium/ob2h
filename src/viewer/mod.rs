@@ -9,6 +9,7 @@
 //! Ядро (data/lock/layout/secrets_ctl/texts/theme) компилируется и тестируется
 //! без GUI; само окно ([`app`]/[`tabs`]) — только при feature `gui`.
 
+pub mod brand;
 pub mod data;
 pub mod layout;
 pub mod lock;

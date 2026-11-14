@@ -32,6 +32,8 @@ pub struct SecretsTab {
     /// (текст, это ошибка)
     message: Option<(String, bool)>,
     list: Vec<SecretRecordMeta>,
+    /// Предыдущее состояние «заперт» — для автофокуса PIN при переходе.
+    was_locked: bool,
 }
 
 impl SecretsTab {
@@ -57,17 +59,33 @@ impl SecretsTab {
     /// Рисует таб по состоянию сейфа.
     pub fn ui(&mut self, ui: &mut egui::Ui, ro: &Connection, ctl: &mut SecretsController, t: &UiTexts) {
         self.revealed.retain(|_, (_, at)| at.elapsed() < REVEAL_TTL);
+        if super::take_hotkey_flag(ui, "ob2h_esc") {
+            self.confirm_delete = None;
+        }
         let state = ctl.state(ro);
+        let locked = matches!(state, SecretsState::Locked);
+        let focus_pin = locked && !self.was_locked;
+        self.was_locked = locked;
 
         if let Some((msg, is_err)) = &self.message {
             let color = if *is_err { ui.visuals().error_fg_color } else { ui.visuals().weak_text_color() };
-            ui.colored_label(color, msg);
-            ui.add_space(2.0);
+            egui::Frame::new()
+                .fill(color.linear_multiply(0.10))
+                .stroke(egui::Stroke::new(1.0, color.linear_multiply(0.45)))
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(color, if *is_err { "⚠" } else { "✓" });
+                        ui.colored_label(color, msg);
+                    });
+                });
+            ui.add_space(4.0);
         }
 
         match state {
             SecretsState::NotInitialized => self.not_initialized_ui(ui, ctl, t),
-            SecretsState::Locked => self.locked_ui(ui, ctl, t),
+            SecretsState::Locked => self.locked_ui(ui, ctl, t, focus_pin),
             SecretsState::Unlocked { ttl_left_sec } => self.unlocked_ui(ui, ctl, t, ttl_left_sec),
         }
     }
@@ -84,7 +102,10 @@ impl SecretsTab {
         }
         egui::Grid::new("secrets_init_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
             ui.weak(t.secrets_pin);
-            ui.add(egui::TextEdit::singleline(&mut self.pin).password(true).desired_width(140.0));
+            let resp_pin = ui.add(egui::TextEdit::singleline(&mut self.pin).password(true).desired_width(140.0));
+            if self.init_mode && self.pin.is_empty() && self.pin_confirm.is_empty() {
+                resp_pin.request_focus();
+            }
             ui.end_row();
             ui.weak(t.secrets_pin_confirm);
             let resp = ui.add(egui::TextEdit::singleline(&mut self.pin_confirm).password(true).desired_width(140.0));
@@ -107,7 +128,7 @@ impl SecretsTab {
         });
     }
 
-    fn locked_ui(&mut self, ui: &mut egui::Ui, ctl: &mut SecretsController, t: &UiTexts) {
+    fn locked_ui(&mut self, ui: &mut egui::Ui, ctl: &mut SecretsController, t: &UiTexts, focus_pin: bool) {
         ui.label(egui::RichText::new(t.secrets_intro).size(12.5));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -117,6 +138,9 @@ impl SecretsTab {
                     .password(true)
                     .desired_width(140.0),
             );
+            if focus_pin {
+                resp.request_focus();
+            }
             let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if ui.button(t.secrets_unlock).clicked() || enter {
                 let pin = std::mem::take(&mut self.pin);
@@ -139,7 +163,13 @@ impl SecretsTab {
         ttl_left_sec: u64,
     ) {
         ui.horizontal(|ui| {
-            badge(ui, &format!("{} {}:{:02}", t.secrets_ttl, ttl_left_sec / 60, ttl_left_sec % 60), egui::Color32::from_rgb(16, 185, 129));
+            // TTL < 60 с — сигнальный оранжевый, иначе зелёный.
+            let ttl_color = if ttl_left_sec < 60 {
+                ui.visuals().selection.stroke.color
+            } else {
+                egui::Color32::from_rgb(16, 185, 129)
+            };
+            badge(ui, &format!("{} {}:{:02}", t.secrets_ttl, ttl_left_sec / 60, ttl_left_sec % 60), ttl_color);
             if ui.button(t.secrets_lock).clicked() {
                 ctl.lock();
                 self.list.clear();
@@ -195,7 +225,11 @@ impl SecretsTab {
                     let access_count = meta.access_count;
                     card_frame(ui, false).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&name).strong());
+                            ui.label(
+                                egui::RichText::new(&name)
+                                    .strong()
+                                    .color(ui.visuals().text_color()),
+                            );
                             if let Some(hint) = &hint {
                                 ui.weak(hint);
                             }
@@ -242,7 +276,14 @@ impl SecretsTab {
                             }
                             if self.confirm_delete.as_deref() == Some(name.as_str()) {
                                 ui.colored_label(ui.visuals().error_fg_color, t.secrets_confirm_delete);
-                                if ui.button(t.secrets_delete).clicked() {
+                                let danger = ui.visuals().error_fg_color;
+                                if ui
+                                    .add(
+                                        egui::Button::new(egui::RichText::new(t.secrets_delete).color(danger))
+                                            .fill(danger.linear_multiply(0.15)),
+                                    )
+                                    .clicked()
+                                {
                                     match ctl.delete(&name) {
                                         Ok(_) => {
                                             self.revealed.remove(&name);

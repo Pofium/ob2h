@@ -218,6 +218,12 @@ pub struct GraphData {
     pub total_nodes: usize,
 }
 
+/// Timestamp для UI: ISO `2026-11-14T11:28:03…` → `2026-11-14 11:28`.
+/// Короткие/битые строки проходят как есть (обрезка до 16 символов).
+pub fn fmt_ts(s: &str) -> String {
+    s.replace('T', " ").chars().take(16).collect()
+}
+
 /// Кап узлов из `OB2H_VIEWER_GRAPH_MAX_NODES` (дефолт 300, Ф70.3).
 pub fn graph_max_nodes() -> usize {
     std::env::var("OB2H_VIEWER_GRAPH_MAX_NODES")
@@ -227,14 +233,45 @@ pub fn graph_max_nodes() -> usize {
         .unwrap_or(300)
 }
 
-/// Загружает граф: топ `max_nodes` узлов по степени, рёбра только между ними.
-pub fn load_graph(conn: &Connection, max_nodes: usize) -> rusqlite::Result<GraphData> {
+/// Тематический срез графа: всё, общая память (без проекта) или проект.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphScope {
+    /// Все узлы (кап по степени).
+    All,
+    /// Граф знаний: узлы без project_id («общая память»).
+    Knowledge,
+    /// Граф конкретного проекта.
+    Project(String),
+}
+
+/// Проекты графа для комбо срезов (по убыванию числа узлов).
+pub fn graph_projects(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare(
-        "SELECT id, node_id, label, node_type, description, project_id, file_path, line_start, is_god_node \
-         FROM graph_nodes WHERE deleted_at IS NULL",
+        "SELECT project_id FROM graph_nodes WHERE deleted_at IS NULL AND project_id IS NOT NULL \
+         GROUP BY project_id ORDER BY COUNT(*) DESC, project_id",
     )?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    rows.collect()
+}
+
+/// Загружает граф в тематическом срезе: топ `max_nodes` узлов по степени,
+/// рёбра только между ними; степень считается внутри среза.
+pub fn load_graph(
+    conn: &Connection,
+    max_nodes: usize,
+    scope: &GraphScope,
+) -> rusqlite::Result<GraphData> {
+    let (cond, param) = match scope {
+        GraphScope::All => ("", None),
+        GraphScope::Knowledge => (" AND project_id IS NULL", None),
+        GraphScope::Project(p) => (" AND project_id = ?1", Some(p.clone())),
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, node_id, label, node_type, description, project_id, file_path, line_start, is_god_node \
+         FROM graph_nodes WHERE deleted_at IS NULL{cond}"
+    ))?;
     let mut nodes: Vec<GraphNode> = stmt
-        .query_map([], |r| {
+        .query_map(rusqlite::params_from_iter(param.iter()), |r| {
             Ok(GraphNode {
                 id: r.get(0)?,
                 node_id: r.get(1)?,
@@ -251,11 +288,25 @@ pub fn load_graph(conn: &Connection, max_nodes: usize) -> rusqlite::Result<Graph
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let total_nodes = nodes.len();
 
-    let mut estmt = conn.prepare(
-        "SELECT source_id, target_id, label, weight FROM graph_edges WHERE deleted_at IS NULL",
-    )?;
+    // Рёбра среза: JOIN от узлов темы по индексам (IN-подзапрос по всем
+    // рёбрам вешал UI на больших корпусах). Для All — все живые рёбра.
+    let edge_sql = if matches!(scope, GraphScope::All) {
+        "SELECT source_id, target_id, label, weight FROM graph_edges WHERE deleted_at IS NULL"
+            .to_string()
+    } else {
+        let cs = cond.replace("project_id", "s.project_id");
+        let ct = cond.replace("project_id", "t.project_id");
+        format!(
+            "SELECT e.source_id, e.target_id, e.label, weight \
+             FROM graph_edges e \
+             JOIN graph_nodes s ON s.id = e.source_id \
+             JOIN graph_nodes t ON t.id = e.target_id \
+             WHERE e.deleted_at IS NULL AND s.deleted_at IS NULL AND t.deleted_at IS NULL{cs}{ct}"
+        )
+    };
+    let mut estmt = conn.prepare(&edge_sql)?;
     let all_edges: Vec<GraphEdge> = estmt
-        .query_map([], |r| {
+        .query_map(rusqlite::params_from_iter(param.iter()), |r| {
             Ok(GraphEdge {
                 source: r.get(0)?,
                 target: r.get(1)?,
@@ -518,11 +569,46 @@ mod tests {
         })
         .unwrap();
         let ro = open_readonly(&tmp.path().join("ob2h.db")).unwrap();
-        let g = load_graph(&ro, 3).unwrap();
+        let g = load_graph(&ro, 3, &GraphScope::All).unwrap();
         assert_eq!(g.total_nodes, 8);
         assert_eq!(g.nodes.len(), 3);
         assert_eq!(g.nodes[0].id, 1, "хаб должен быть первым");
         assert!(g.edges.iter().all(|e| e.source == 1));
+    }
+
+    #[test]
+    fn graph_scope_splits_topics() {
+        let (tmp, db) = seed();
+        db.with_conn(|conn| {
+            // 1/2 — общая память (NULL), 3/4 — проект a, 5 — проект b.
+            for (i, proj) in [(1, None), (2, None), (3, Some("a")), (4, Some("a")), (5, Some("b"))] {
+                conn.execute(
+                    "INSERT INTO graph_nodes (id, node_id, label, node_type, project_id, created_at, updated_at) \
+                     VALUES (?1, ?2, ?2, 'Concept', ?3, '2026-01-01', '2026-01-01')",
+                    rusqlite::params![i, format!("n{i}"), proj],
+                )?;
+            }
+            for (a, b) in [(1, 2), (3, 4), (1, 3)] {
+                conn.execute(
+                    "INSERT INTO graph_edges (source_id, target_id, label, created_at) \
+                     VALUES (?1, ?2, 'RELATED', '2026-01-01')",
+                    [a, b],
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let ro = open_readonly(&tmp.path().join("ob2h.db")).unwrap();
+        let all = load_graph(&ro, 100, &GraphScope::All).unwrap();
+        assert_eq!(all.total_nodes, 5);
+        assert_eq!(all.edges.len(), 3);
+        let k = load_graph(&ro, 100, &GraphScope::Knowledge).unwrap();
+        assert_eq!(k.total_nodes, 2);
+        assert_eq!(k.edges.len(), 1, "рёбра только внутри общей памяти");
+        let a = load_graph(&ro, 100, &GraphScope::Project("a".into())).unwrap();
+        assert_eq!(a.total_nodes, 2);
+        assert_eq!(a.edges.len(), 1);
+        assert_eq!(graph_projects(&ro).unwrap(), vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]
@@ -540,5 +626,12 @@ mod tests {
     fn sessions_missing_dir_is_empty() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(load_sessions(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn fmt_ts_humanizes_iso() {
+        assert_eq!(fmt_ts("2026-11-14T11:28:03.123Z"), "2026-11-14 11:28");
+        assert_eq!(fmt_ts("2026-11-14"), "2026-11-14");
+        assert_eq!(fmt_ts(""), "");
     }
 }

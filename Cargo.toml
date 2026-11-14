@@ -48,6 +48,9 @@ rpassword = "7"
 lru = "0.12"
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"], optional = true }
 sys-locale = { version = "0.3.2", optional = true }
+# Бренд-логотип viewer (PNG из OmnesProducts). Крейт уже транзитивный в дереве
+# (eframe) — новых скачиваний нет; только png-декод, без лишних форматов.
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [dev-dependencies]
 tempfile = "3.17"
@@ -63,6 +66,6 @@ libc = "0.2"
 [features]
 # Локальное окно ввода PIN (egui/eframe). Опционально: в headless/CI-сборках
 # GUI не собирается, PIN вводится через терминал (rpassword).
-gui = ["dep:eframe", "dep:sys-locale"]
+gui = ["dep:eframe", "dep:sys-locale", "dep:image"]
 
 

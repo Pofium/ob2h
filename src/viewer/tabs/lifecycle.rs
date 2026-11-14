@@ -1,12 +1,16 @@
-//! Таб «Уроки · Слоты» (Ф70.5): два подраздела с переключателем.
-//! Tombstones уроков скрыты запросом; пустые разделы — честная заглушка «нет данных».
+//! Таб «Уроки · Слоты» (Ф70.5): процедурный опыт и рабочий контекст агента.
+//! Tombstones уроков скрыты запросом; пустые разделы — честный empty state.
+//! UX: пилюли-подтабы, поиск по урокам, разворот полного содержимого слота.
+
+use std::collections::HashSet;
 
 use eframe::egui;
 use rusqlite::Connection;
 
-use super::{badge, card_frame, snippet};
+use super::{badge, card_frame, empty_state, pill, snippet, take_hotkey_flag};
 use crate::viewer::data::{self, LessonRow, SlotRow};
 use crate::viewer::texts::UiTexts;
+use crate::viewer::theme;
 
 /// Состояние таба «Уроки · Слоты».
 #[derive(Default)]
@@ -14,6 +18,9 @@ pub struct LifecycleTab {
     lessons: Vec<LessonRow>,
     slots: Vec<SlotRow>,
     show_slots: bool,
+    query: String,
+    /// Развёрнутые слоты (по label): полное содержимое вместо сниппета.
+    expanded: HashSet<String>,
 }
 
 impl LifecycleTab {
@@ -25,12 +32,42 @@ impl LifecycleTab {
 
     /// Рисует таб.
     pub fn ui(&mut self, ui: &mut egui::Ui, t: &UiTexts) {
+        let p = theme::palette(ui.visuals().dark_mode);
+        let accent = egui::Color32::from_rgb(p.accent[0], p.accent[1], p.accent[2]);
         ui.horizontal(|ui| {
-            if ui.selectable_label(!self.show_slots, format!("{} ({})", t.lessons, self.lessons.len())).clicked() {
+            if pill(
+                ui,
+                !self.show_slots,
+                &format!("{} ({})", t.lessons, self.lessons.len()),
+                accent,
+                "",
+            ) {
                 self.show_slots = false;
             }
-            if ui.selectable_label(self.show_slots, format!("{} ({})", t.slots, self.slots.len())).clicked() {
+            if pill(
+                ui,
+                self.show_slots,
+                &format!("{} ({})", t.slots, self.slots.len()),
+                accent,
+                "",
+            ) {
                 self.show_slots = true;
+            }
+            if !self.show_slots {
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.query)
+                        .id_salt("lessons_search")
+                        .hint_text(t.lessons_search)
+                        .desired_width(220.0),
+                );
+                if take_hotkey_flag(ui, "ob2h_focus_search") {
+                    resp.request_focus();
+                }
+                if !self.query.is_empty()
+                    && ui.button(egui::RichText::new("✕").size(12.0)).clicked()
+                {
+                    self.query.clear();
+                }
             }
         });
         ui.add_space(4.0);
@@ -48,10 +85,25 @@ impl LifecycleTab {
 
     fn lessons_ui(&self, ui: &mut egui::Ui, t: &UiTexts) {
         if self.lessons.is_empty() {
-            ui.weak(t.no_data);
+            empty_state(ui, "✎", t.no_data, t.empty_lessons);
             return;
         }
-        for l in &self.lessons {
+        let q = self.query.trim().to_lowercase();
+        let shown: Vec<&LessonRow> = self
+            .lessons
+            .iter()
+            .filter(|l| {
+                q.is_empty()
+                    || l.content.to_lowercase().contains(&q)
+                    || l.context.to_lowercase().contains(&q)
+                    || l.tags.iter().any(|tag| tag.to_lowercase().contains(&q))
+            })
+            .collect();
+        if shown.is_empty() {
+            empty_state(ui, "∅", t.no_results, t.empty_search);
+            return;
+        }
+        for l in shown {
             card_frame(ui, false).show(ui, |ui| {
                 ui.label(egui::RichText::new(snippet(&l.content, 300)).size(12.5));
                 if !l.context.trim().is_empty() {
@@ -71,7 +123,7 @@ impl LifecycleTab {
                     }
                     ui.weak(format!("{}: {}", t.reinforcements, l.reinforcements));
                     for tag in l.tags.iter().take(5) {
-                        badge(ui, tag, egui::Color32::from_rgb(148, 163, 184));
+                        badge(ui, tag, egui::Color32::from_rgb(154, 163, 178));
                     }
                 });
             });
@@ -79,15 +131,22 @@ impl LifecycleTab {
         }
     }
 
-    fn slots_ui(&self, ui: &mut egui::Ui, t: &UiTexts) {
+    fn slots_ui(&mut self, ui: &mut egui::Ui, t: &UiTexts) {
         if self.slots.is_empty() {
-            ui.weak(t.no_data);
+            empty_state(ui, "▤", t.no_data, t.empty_slots);
             return;
         }
-        for s in &self.slots {
+        // Копия имён/полей, чтобы замыкание карточки не держало заимствование self.slots.
+        let slots: Vec<SlotRow> = self.slots.clone();
+        for s in slots {
+            let expanded = self.expanded.contains(&s.label);
             card_frame(ui, false).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&s.label).strong());
+                    ui.label(
+                        egui::RichText::new(&s.label)
+                            .strong()
+                            .color(ui.visuals().text_color()),
+                    );
                     if s.project.is_empty() {
                         badge(ui, t.slot_global, egui::Color32::from_rgb(139, 92, 246));
                     } else {
@@ -109,7 +168,22 @@ impl LifecycleTab {
                 }
                 if !s.content.trim().is_empty() {
                     ui.add_space(3.0);
-                    ui.label(egui::RichText::new(snippet(&s.content, 400)).monospace().size(11.5));
+                    let text = if expanded {
+                        s.content.clone()
+                    } else {
+                        snippet(&s.content, 400)
+                    };
+                    ui.label(egui::RichText::new(text).monospace().size(11.5));
+                    if s.content.chars().count() > 400 {
+                        let label = if expanded { t.slot_collapse } else { t.slot_expand };
+                        if ui.small_button(label).clicked() {
+                            if expanded {
+                                self.expanded.remove(&s.label);
+                            } else {
+                                self.expanded.insert(s.label.clone());
+                            }
+                        }
+                    }
                 }
             });
             ui.add_space(4.0);

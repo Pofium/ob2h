@@ -101,7 +101,7 @@ fn viewing_session_writes_nothing() {
             assert_eq!(rows.len(), 1, "tombstone не должен попадать в выдачу");
             let _ = data::memory_links(&conn, rows[0].id).unwrap();
             let _ = data::distinct_memory_values(&conn, "category").unwrap();
-            let _ = data::load_graph(&conn, 300).unwrap();
+            let _ = data::load_graph(&conn, 300, &data::GraphScope::All).unwrap();
             let _ = data::load_lessons(&conn, 100).unwrap();
             let _ = data::load_slots(&conn).unwrap();
             let _ = data::load_stats(&conn, &db_path).unwrap();

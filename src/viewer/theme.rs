@@ -1,11 +1,12 @@
-//! Палитра viewer в стиле omnes agent (стилистический бриф Ф70): тёмная тема
-//! по умолчанию, красный акцент, цветные бейджи типов графа. Чистые данные
-//! (`[u8; 3]`), без зависимости от egui — тестируется headless.
+//! Палитра viewer по брендбуку семейства Omnes (OmnesProducts/brandbook.html):
+//! Dark Charcoal #111827 (~60%), Off-White #F4F5F7 (~30%), Brand Orange #FF6B00
+//! (~10%, сигнальный). Плоские формы, без градиентов. Чистые данные (`[u8; 3]`),
+//! без зависимости от egui — тестируется headless.
 
 /// Цвет как RGB-тройка.
 pub type Rgb = [u8; 3];
 
-/// Набор цветов темы (dark — omnes hsl(222 47% …), light — hsl(210 40% 98%)).
+/// Набор цветов темы (dark — charcoal-поверхности, light — off-white).
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {
     /// Фон окна.
@@ -18,50 +19,54 @@ pub struct Palette {
     pub border: Rgb,
     /// Основной текст.
     pub text: Rgb,
-    /// Приглушённый текст.
+    /// Приглушённый текст (контраст ≥ 4.5 к фону).
     pub muted: Rgb,
-    /// Акцент (omnes primary red).
+    /// Акцент (Brand Orange; в light — затемнённый для контраста текста).
     pub accent: Rgb,
+    /// Текст поверх акцентной заливки.
+    pub accent_fg: Rgb,
     /// Фон выделения.
     pub selection: Rgb,
-    /// Ошибки.
+    /// Ошибки (семантический красный брендбука).
     pub error: Rgb,
-    /// Успех.
+    /// Успех (семантический зелёный брендбука).
     pub ok: Rgb,
 }
 
-/// Палитра темы: `dark` — omnes dark, иначе light.
+/// Палитра темы: `dark` — charcoal, иначе off-white.
 pub fn palette(dark: bool) -> Palette {
     if dark {
         Palette {
-            bg: [8, 13, 23],        // hsl(222 47% 6%)
-            panel: [11, 18, 32],    // hsl(222 47% 8%)
-            card: [17, 26, 44],     // hsl(222 40% 12%)
-            border: [34, 48, 71],   // hsl(217 33% 20%)
-            text: [226, 232, 240],  // slate-200
-            muted: [148, 163, 184], // hsl(215 20% 65%)
-            accent: [223, 51, 51],  // hsl(0 75% 55%)
-            selection: [127, 29, 29],
-            error: [248, 113, 113],
-            ok: [52, 211, 153],
+            bg: [17, 24, 39],        // #111827 Dark Charcoal
+            panel: [22, 31, 48],     // charcoal +1 ступень
+            card: [27, 37, 55],      // charcoal +2 ступени
+            border: [42, 54, 72],
+            text: [244, 245, 247],   // #F4F5F7 Off-White
+            muted: [154, 163, 178],  // #9AA3B2 (брендбук)
+            accent: [255, 107, 0],   // #FF6B00 Brand Orange
+            accent_fg: [17, 24, 39], // charcoal поверх оранжевого
+            selection: [64, 40, 31], // orange 20% поверх charcoal
+            error: [240, 140, 130],  // светлый вариант #C0392B для тёмного фона
+            ok: [76, 195, 138],      // светлый вариант #1B7F3B
         }
     } else {
         Palette {
-            bg: [248, 250, 252],   // hsl(210 40% 98%)
+            bg: [244, 245, 247],     // #F4F5F7 Off-White
             panel: [255, 255, 255],
-            card: [241, 245, 249],
-            border: [203, 213, 225],
-            text: [15, 23, 42],
-            muted: [100, 116, 139],
-            accent: [222, 38, 38], // hsl(0 72% 51%)
-            selection: [254, 226, 226],
-            error: [220, 38, 38],
-            ok: [5, 150, 105],
+            card: [236, 238, 242],
+            border: [216, 220, 227], // #D8DCE3 (брендбук)
+            text: [17, 24, 39],      // #111827
+            muted: [91, 100, 114],   // #5B6472 (брендбук)
+            accent: [194, 84, 0],    // orange, затемнённый до контраста ≥ 4.5
+            accent_fg: [255, 255, 255],
+            selection: [255, 224, 204], // orange-тинт поверх off-white
+            error: [192, 57, 43],    // #C0392B
+            ok: [27, 127, 59],       // #1B7F3B
         }
     }
 }
 
-/// Цвет типа узла графа (омnes GraphView.typeColors + AST-типы ob2h).
+/// Цвет типа узла графа (data-viz палитра; бренд-оран reserved для сигналов UI).
 pub fn type_color(node_type: &str) -> Rgb {
     match node_type {
         "Person" => [244, 63, 94],      // #f43f5e
@@ -75,13 +80,19 @@ pub fn type_color(node_type: &str) -> Rgb {
         "Artifact" => [249, 115, 22],   // #f97316
         "Concept" => [20, 184, 166],    // #14b8a6
         "Organization" => [236, 72, 153],
-        // AST-типы кодового графа (project/ast.rs)
-        "function" | "method" => [59, 130, 246],
-        "struct" | "class" | "enum" | "trait" | "interface" => [139, 92, 246],
-        "module" | "package" => [16, 185, 129],
-        "file" => [245, 158, 11],
-        "variable" | "const" | "field" => [20, 184, 166],
-        _ => [148, 163, 184], // Other/default — slate-400
+        // AST-типы кодового графа (project/ast.rs) — PascalCase и lowercase.
+        "function" | "method" | "Function" | "Method" => [59, 130, 246],
+        "struct" | "class" | "enum" | "trait" | "interface"
+        | "Struct" | "Class" | "Enum" | "Trait" | "Interface" => [139, 92, 246],
+        "module" | "package" | "Module" | "Package"
+        | "ExternalModule" | "ExternalPackage" => [16, 185, 129],
+        "file" | "File" => [245, 158, 11],
+        "variable" | "const" | "field" | "Variable" | "Const" | "Field"
+        | "Mapping" => [20, 184, 166],
+        "table" | "Table" | "schema" | "Schema" => [6, 182, 212],
+        "element" | "Element" | "CssClass" | "CssId" | "CssVar"
+        | "Notebook" => [236, 72, 153],
+        _ => [154, 163, 178], // Other/default — брендовый muted #9AA3B2
     }
 }
 
@@ -95,9 +106,24 @@ mod tests {
         let l = palette(false);
         assert_ne!(d.bg, l.bg);
         assert_ne!(d.text, l.text);
-        // Акцент — красный в обеих темах (доминанта красного канала).
-        assert!(d.accent[0] > d.accent[1] && d.accent[0] > d.accent[2]);
-        assert!(l.accent[0] > l.accent[1] && l.accent[0] > l.accent[2]);
+        // Акцент — оранжевый в обеих темах (R > G > B, как #FF6B00).
+        for p in [d, l] {
+            assert!(p.accent[0] > p.accent[1] && p.accent[1] > p.accent[2]);
+        }
+    }
+
+    #[test]
+    fn brand_hex_exact() {
+        let d = palette(true);
+        let l = palette(false);
+        assert_eq!(d.bg, [17, 24, 39]); // #111827
+        assert_eq!(d.text, [244, 245, 247]); // #F4F5F7
+        assert_eq!(d.accent, [255, 107, 0]); // #FF6B00
+        assert_eq!(l.bg, [244, 245, 247]);
+        assert_eq!(l.text, [17, 24, 39]);
+        // Текст поверх акцента контрастен самой заливке.
+        assert_ne!(d.accent, d.accent_fg);
+        assert_ne!(l.accent, l.accent_fg);
     }
 
     #[test]
@@ -105,7 +131,12 @@ mod tests {
         assert_eq!(type_color("Person"), [244, 63, 94]);
         assert_eq!(type_color("Technology"), [6, 182, 212]);
         assert_ne!(type_color("Person"), type_color("Location"));
-        assert_eq!(type_color("что-то неизвестное"), [148, 163, 184]);
+        assert_eq!(type_color("что-то неизвестное"), [154, 163, 178]);
         assert_eq!(type_color("function"), type_color("method"));
+        // PascalCase AST-типы (project/ast.rs) не должны падать в серый дефолт.
+        assert_eq!(type_color("File"), [245, 158, 11]);
+        assert_eq!(type_color("Function"), type_color("function"));
+        assert_eq!(type_color("ExternalModule"), [16, 185, 129]);
+        assert_eq!(type_color("Struct"), type_color("class"));
     }
 }
