@@ -99,7 +99,7 @@ async fn test_blast_radius_and_mcp_impact() -> anyhow::Result<()> {
 
     // 1. Тестируем прямой метод analyze_impact
     let impact = ctx.db.with_conn(|conn| {
-        GraphAnalytics::analyze_impact(conn, "impact_proj", "db_query", 3)
+        GraphAnalytics::analyze_impact(conn, "impact_proj", "db_query", 3, 0.5)
     })?;
 
     assert_eq!(impact.target_symbol, "db_query");
@@ -117,7 +117,7 @@ async fn test_blast_radius_and_mcp_impact() -> anyhow::Result<()> {
 
     // 2. Тестируем ограничение глубины max_depth = 1
     let shallow = ctx.db.with_conn(|conn| {
-        GraphAnalytics::analyze_impact(conn, "impact_proj", "db_query", 1)
+        GraphAnalytics::analyze_impact(conn, "impact_proj", "db_query", 1, 0.5)
     })?;
     assert_eq!(shallow.affected_nodes.len(), 1);
     assert_eq!(shallow.affected_nodes[0].label, "user_repo");
@@ -169,7 +169,7 @@ fn test_blast_radius_isolated_node() -> anyhow::Result<()> {
         Ok(())
     })?;
 
-    let impact = db.with_conn(|conn| GraphAnalytics::analyze_impact(conn, "iso_proj", "standalone_func", 3))?;
+    let impact = db.with_conn(|conn| GraphAnalytics::analyze_impact(conn, "iso_proj", "standalone_func", 3, 0.5))?;
     assert_eq!(impact.risk_level, RiskLevel::Low);
     assert_eq!(impact.affected_nodes.len(), 0);
     assert!(impact.markdown_summary.contains("Зависимых компонентов не обнаружено"));
@@ -184,7 +184,7 @@ fn test_blast_radius_unknown_symbol() -> anyhow::Result<()> {
         conn.execute("INSERT INTO projects (id, name, root_path, created_at, updated_at) VALUES ('p', 'P', '/app', '2026-01-01', '2026-01-01')", [])
     })?;
 
-    let impact = db.with_conn(|conn| GraphAnalytics::analyze_impact(conn, "p", "non_existent_function", 3))?;
+    let impact = db.with_conn(|conn| GraphAnalytics::analyze_impact(conn, "p", "non_existent_function", 3, 0.5))?;
     assert_eq!(impact.risk_level, RiskLevel::Low);
     assert!(impact.markdown_summary.contains("не найден в графе проекта"));
 

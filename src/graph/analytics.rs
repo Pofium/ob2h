@@ -46,12 +46,21 @@ impl std::fmt::Display for RiskLevel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AffectedTest {
+    pub label: String,
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImpactReport {
     pub target_symbol: String,
     pub target_file: Option<String>,
     pub target_type: Option<String>,
     pub max_depth: usize,
     pub affected_nodes: Vec<AffectedNode>,
+    /// 71.6: затронутые тесты (обратные CALLS из kind_detail='test') —
+    /// агент сразу видит, что прогонять после правки.
+    pub affected_tests: Vec<AffectedTest>,
     pub risk_level: RiskLevel,
     pub risk_factors: Vec<String>,
     pub markdown_summary: String,
@@ -375,13 +384,19 @@ impl GraphAnalytics {
     }
 
     /// Анализ радиуса изменений (Blast Radius) для функции, класса или файла.
+    /// 71.6: `min_confidence` — фильтр рёбер по порогу доверия (дефолт 0.5
+    /// включает эвристики виртуальных вызовов и co-change; 0.7+ — только
+    /// точные RESOLVED/SYNTAX); в отчёт включается список затронутых тестов
+    /// (TESTED_BY, kind_detail='test') и co-change-связи (GIT_HISTORY).
     pub fn analyze_impact(
         conn: &Connection,
         project_id: &str,
         symbol_or_path: &str,
         max_depth: usize,
+        min_confidence: f64,
     ) -> Result<ImpactReport> {
         let max_depth = max_depth.clamp(1, 10);
+        let min_confidence = min_confidence.clamp(0.0, 1.0);
 
         // 1. Поиск целевого узла
         let mut target_stmt = conn.prepare(
@@ -424,6 +439,7 @@ impl GraphAnalytics {
                     target_type: None,
                     max_depth,
                     affected_nodes: Vec::new(),
+                    affected_tests: Vec::new(),
                     risk_level: RiskLevel::Low,
                     risk_factors: vec!["Символ не найден в графе проекта.".to_string()],
                     markdown_summary: format!(
@@ -445,12 +461,14 @@ impl GraphAnalytics {
 
         let mut in_edge_stmt = conn.prepare(
             r#"
-            SELECT e.source_id, e.label, n.node_id, n.label, n.node_type, n.file_path, n.is_god_node, COALESCE(e.provenance, '')
+            SELECT e.source_id, e.label, n.node_id, n.label, n.node_type, n.file_path,
+                   n.is_god_node, COALESCE(e.provenance, ''), COALESCE(e.confidence, 1.0)
             FROM graph_edges e
             JOIN graph_nodes n ON n.id = e.source_id
             WHERE e.target_id = ?1
               AND (e.deleted_at IS NULL OR e.deleted_at = '')
               AND (n.deleted_at IS NULL OR n.deleted_at = '')
+              AND COALESCE(e.confidence, 1.0) >= ?2
             "#,
         )?;
 
@@ -459,7 +477,7 @@ impl GraphAnalytics {
                 continue;
             }
 
-            let rows = in_edge_stmt.query_map(params![current_pk], |r| {
+            let rows = in_edge_stmt.query_map(params![current_pk, min_confidence], |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
                     r.get::<_, String>(1)?,
@@ -521,6 +539,48 @@ impl GraphAnalytics {
             ));
         }
 
+        // 71.8: co-change связи (GIT_HISTORY) — временное зацепление файлов
+        let co_changed: Vec<&AffectedNode> = affected_nodes
+            .iter()
+            .filter(|n| n.provenance == "GIT_HISTORY")
+            .collect();
+        if !co_changed.is_empty() {
+            risk_factors.push(format!(
+                "Временное зацепление (co-change): {} файлов менялись вместе с целевым по истории коммитов",
+                co_changed.len()
+            ));
+        }
+
+        // 71.6: затронутые тесты — TESTED_BY (обратные CALLS из kind_detail='test')
+        let mut affected_tests: Vec<AffectedTest> = Vec::new();
+        {
+            let pks: Vec<i64> = affected_nodes.iter().map(|n| n.id).collect();
+            for chunk in pks.chunks(500) {
+                let placeholders = vec!["?"; chunk.len()].join(",");
+                let sql = format!(
+                    "SELECT label, file_path FROM graph_nodes
+                     WHERE id IN ({placeholders}) AND kind_detail = 'test'
+                       AND (deleted_at IS NULL OR deleted_at = '')"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |r| {
+                    Ok(AffectedTest {
+                        label: r.get(0)?,
+                        file_path: r.get(1)?,
+                    })
+                })?;
+                for r in rows {
+                    affected_tests.push(r?);
+                }
+            }
+        }
+        if !affected_tests.is_empty() {
+            risk_factors.push(format!(
+                "Затронуто тестов (TESTED_BY): {}",
+                affected_tests.len()
+            ));
+        }
+
         let risk_level =
             if target_is_god || !god_nodes_affected.is_empty() || affected_nodes.len() > 8 {
                 RiskLevel::High
@@ -577,13 +637,28 @@ impl GraphAnalytics {
                     for n in nodes {
                         let loc = n.file_path.as_deref().unwrap_or("-");
                         let god_mark = if n.is_god_node { " [👑 GodNode]" } else { "" };
+                        let prov_mark = match n.provenance.as_str() {
+                            "GIT_HISTORY" => " [⏱ co-change]",
+                            "HEURISTIC" => " [~ виртуальный вызов]",
+                            _ => "",
+                        };
                         md.push_str(&format!(
-                            "- `{}` [{}] ({}) через `{}`{}\n",
-                            n.label, n.node_type, loc, n.edge_label, god_mark
+                            "- `{}` [{}] ({}) через `{}`{}{}\n",
+                            n.label, n.node_type, loc, n.edge_label, god_mark, prov_mark
                         ));
                     }
                     md.push('\n');
                 }
+            }
+
+            // 71.6: TESTED_BY — что прогонять после правки
+            if !affected_tests.is_empty() {
+                md.push_str("### 🧪 Затронутые тесты (TESTED_BY) — прогнать после правки:\n\n");
+                for t in &affected_tests {
+                    let loc = t.file_path.as_deref().unwrap_or("-");
+                    md.push_str(&format!("- `{}` ({})\n", t.label, loc));
+                }
+                md.push('\n');
             }
 
             md.push_str("### 🛡️ Рекомендации перед изменением:\n");
@@ -609,6 +684,7 @@ impl GraphAnalytics {
             target_type: Some(target_type),
             max_depth,
             affected_nodes,
+            affected_tests,
             risk_level,
             risk_factors,
             markdown_summary: md,

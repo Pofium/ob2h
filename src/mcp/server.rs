@@ -2044,9 +2044,21 @@ impl McpServer {
                     None => return "[Error] id is required (no active project)".to_string(),
                 };
                 let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+                // 71.6: порог confidence рёбер (дефолт 0.5 — включает
+                // эвристики виртуальных вызовов и co-change; 0.7+ — точные)
+                let min_confidence = args
+                    .get("min_confidence")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.5);
 
                 match self.ctx.db.with_conn(|conn| {
-                    crate::graph::GraphAnalytics::analyze_impact(conn, id, symbol_or_path, depth)
+                    crate::graph::GraphAnalytics::analyze_impact(
+                        conn,
+                        id,
+                        symbol_or_path,
+                        depth,
+                        min_confidence,
+                    )
                 }) {
                     Ok(imp) => imp.markdown_summary,
                     Err(e) => format!("[Error] {e}"),

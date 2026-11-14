@@ -351,6 +351,61 @@ fn cochange_edges_from_git_history() -> anyhow::Result<()> {
     Ok(())
 }
 
+// ——— 71.6: project_impact — TESTED_BY и фильтр confidence ———
+
+/// TESTED_BY: тестовый узел (kind_detail='test'), вызывающий целевой символ
+/// через CALLS (confidence 0.5 — эвристика), попадает в affected_tests при
+/// дефолтном пороге 0.5 и отфильтровывается при 0.7 (только точные рёбра).
+#[test]
+fn impact_tested_by_and_confidence_filter() -> anyhow::Result<()> {
+    use ob2h::graph::analytics::GraphAnalytics;
+
+    let db = ob2h::db::Database::in_memory()?;
+    db.with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO projects (id, name, root_path, created_at, updated_at)
+             VALUES ('t71', 'T71', '/app', '2026-01-01', '2026-01-01')",
+            [],
+        )?;
+        // целевой символ + тест, вызывающий его через эвристическое ребро
+        conn.execute(
+            "INSERT INTO graph_nodes (node_id, label, node_type, file_path, project_id, provenance, created_at, updated_at)
+             VALUES ('fn:src/store.rs:fetch', 'fetch', 'Function', 'src/store.rs', 't71', 'SYNTAX', '2026-01-01', '2026-01-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO graph_nodes (node_id, label, node_type, file_path, project_id, provenance, kind_detail, created_at, updated_at)
+             VALUES ('fn:tests/store_test.rs:fetch_test', 'fetch_test', 'Function', 'tests/store_test.rs', 't71', 'SYNTAX', 'test', '2026-01-01', '2026-01-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO graph_edges (source_id, target_id, label, weight, contexts, project_id, provenance, confidence, created_at, updated_at)
+             SELECT s.id, t.id, 'CALLS', 1.0, 'typepass:virtual:fetch', 't71', 'HEURISTIC', 0.5, '2026-01-01', '2026-01-01'
+             FROM graph_nodes s, graph_nodes t
+             WHERE s.node_id = 'fn:tests/store_test.rs:fetch_test' AND t.node_id = 'fn:src/store.rs:fetch'",
+            [],
+        )?;
+        Ok(())
+    })?;
+
+    // дефолтный порог 0.5: тест виден (эвристика проходит)
+    let rep = db.with_conn(|conn| GraphAnalytics::analyze_impact(conn, "t71", "fetch", 3, 0.5))?;
+    assert_eq!(rep.affected_nodes.len(), 1, "эвристическое ребро на пороге 0.5 проходит");
+    assert_eq!(rep.affected_tests.len(), 1, "TESTED_BY: fetch_test");
+    assert_eq!(rep.affected_tests[0].label, "fetch_test");
+    assert_eq!(rep.affected_tests[0].file_path.as_deref(), Some("tests/store_test.rs"));
+    assert!(rep
+        .markdown_summary
+        .contains("Затронутые тесты (TESTED_BY)"));
+
+    // порог 0.7: эвристика отфильтрована — ни узла, ни теста
+    let strict = db.with_conn(|conn| GraphAnalytics::analyze_impact(conn, "t71", "fetch", 3, 0.7))?;
+    assert!(strict.affected_nodes.is_empty(), "эвристика отсечена на 0.7");
+    assert!(strict.affected_tests.is_empty());
+
+    Ok(())
+}
+
 // ——— 71.7: F1-метрики golden — вспомогательные функции ———
 
 /// Достать SYNTAX-символы (словарь SYMBOL_TYPES) как (label, node_type).
