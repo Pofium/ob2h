@@ -1847,6 +1847,21 @@ impl AstCodeExtractor {
         root: &Path,
         known_hashes: Option<&HashMap<String, String>>,
     ) -> AstScanResult {
+        self.scan_directory_with(root, known_hashes, &mut |rel_path, content, out| {
+            self.parse_file(rel_path, content, out);
+            "regex".to_string()
+        })
+    }
+
+    /// Ф70.2 (PLAN_v2.0): вариант с внешним бэкенд-колбэком — колбэк решает,
+    /// каким бэкендом разбирать конкретный файл (диспетчер ast_backend.rs).
+    /// Возвращаемое имя бэкенда — для телеметрии.
+    pub fn scan_directory_with(
+        &self,
+        root: &Path,
+        known_hashes: Option<&HashMap<String, String>>,
+        parse_one: &mut dyn FnMut(&str, &str, &mut AstScanResult) -> String,
+    ) -> AstScanResult {
         let mut result = AstScanResult::default();
         let mut files_to_scan = Vec::new();
 
@@ -1885,7 +1900,7 @@ impl AstCodeExtractor {
                     result
                         .file_meta
                         .insert(rel_path.clone(), (file_size, lines_count));
-                    self.parse_file(&rel_path, &content, &mut result);
+                    parse_one(&rel_path, &content, &mut result);
                 }
             }
         }

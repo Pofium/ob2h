@@ -1,6 +1,7 @@
 //! Сервис управления проектами и проектной памятью (Фаза 10, Фаза 11).
 
 pub mod ast;
+pub mod ast_backend;
 pub mod ast_golden;
 pub mod hooks;
 pub mod scanjob;
@@ -40,7 +41,8 @@ pub struct ProjectStats {
 #[derive(Clone)]
 pub struct ProjectService {
     conn: Arc<Mutex<Connection>>,
-    ast_extractor: Arc<AstCodeExtractor>,
+    /// Ф70.2: диспетчер бэкендов AST (regex / tree-sitter) вместо прямого экстрактора.
+    ast_dispatcher: Arc<crate::project::ast_backend::AstParserDispatcher>,
     embedder: Option<Arc<dyn crate::embedding::EmbeddingProvider>>,
 }
 
@@ -57,7 +59,7 @@ impl ProjectService {
     ) -> Self {
         Self {
             conn,
-            ast_extractor: Arc::new(AstCodeExtractor::new()),
+            ast_dispatcher: Arc::new(crate::project::ast_backend::AstParserDispatcher::new()),
             embedder,
         }
     }
@@ -471,7 +473,7 @@ impl ProjectService {
             std::collections::HashMap::new()
         };
 
-        let mut scan_res = self.ast_extractor.scan_directory(
+        let mut scan_res = self.ast_dispatcher.scan_directory(
             path_obj,
             if incremental {
                 Some(&known_hashes)

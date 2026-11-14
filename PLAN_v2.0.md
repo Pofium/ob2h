@@ -183,7 +183,7 @@
 
 #### Фаза 70 — Фундамент гибридного AST (Tree-sitter Core) (оценка: 5–7 дней)
 - [x] **70.1** Подключение `tree-sitter` (0.27.x) и грамматик через `tree-sitter-language` под опциональную фичу `treesitter`. *(Выполнено: tree-sitter 0.27.2 + tree-sitter-{rust 0.24.2, python 0.25.0, go 0.25.0, typescript 0.23.2, dart 0.3.0} под фичей `treesitter`, по умолчанию выключена; ABI-совместимость подтверждена smoke-тестом `test_treesitter_load.rs` — 5/5 языков парсят сниппеты без ERROR; запись в PLAN.md §6.)*
-- [ ] **70.2** Абстракция `AstParserTrait`: унифицированный интерфейс разбора `parse_source(path, content) -> AstFileResult` с прозрачным переключением между Tree-sitter и regex.
+- [x] **70.2** Абстракция `AstParserTrait`: унифицированный интерфейс разбора `parse_source(path, content) -> AstFileResult` с прозрачным переключением между Tree-sitter и regex. *(Выполнено: трейт `AstParserBackend` (`parse_source` в общий `AstScanResult` — консолидированный эквивалент AstFileResult v1.x), `RegexBackend` поверх экстрактора, cfg-заготовка `TreeSitterEngine` (`lang_for_path`, `has_mapper` пуст до 70.3), `AstParserDispatcher` с kill-switch `OB2H_TREESITTER=0` и fallback 70.9 (ERROR-узлы → regex); скан-флоу переведён на диспетчер через `scan_directory_with`-колбэк (`scan_directory` — тонкая обертка, без дублирования сборщика). Тесты: kill-switch, паритет диспетчер↔прямой экстрактор.)*
 - [ ] **70.3** Парсер Rust на `tree-sitter-rust`: разбор `impl`, трейтов, макросов, структур, модулей и `use`-импортов.
 - [ ] **70.4** Парсер TypeScript/JS на `tree-sitter-typescript`: классы, интерфейсы, стрелочные функции, типы, ESM/CJS импорты.
 - [ ] **70.5** Парсер Python на `tree-sitter-python`: async-функции, декораторы, классы, схемы импортов.
