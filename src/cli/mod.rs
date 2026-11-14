@@ -124,7 +124,7 @@ pub enum Commands {
         /// Подкоманда (напр. history — тренд ночных прогонов, Ф30)
         #[command(subcommand)]
         command: Option<BenchCommands>,
-        /// Режим: search (memory_search hybrid) | context (build_context) | latency (p50/p95 по memories и graph_nodes, Ф35.1)
+        /// Режим: search (memory_search hybrid) | context (build_context) | latency (p50/p95 по memories и graph_nodes, Ф35.1) | all (сводный JSON-отчет + гейт ADR-13, Ф69.4)
         #[arg(short, long, default_value = "search")]
         mode: String,
         /// Уровни k для recall@k, через запятую

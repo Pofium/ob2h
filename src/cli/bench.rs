@@ -346,8 +346,13 @@ pub async fn cli_run(
         }
         return Ok(());
     }
-    if mode != "search" && mode != "context" && mode != "code" && mode != "latency" {
-        anyhow::bail!("mode должен быть search|context|code|latency|history, получено: {mode}");
+    if mode != "search"
+        && mode != "context"
+        && mode != "code"
+        && mode != "latency"
+        && mode != "all"
+    {
+        anyhow::bail!("mode должен быть all|search|context|code|latency|history, получено: {mode}");
     }
     let ks: Vec<usize> = k_spec
         .split(',')
@@ -356,6 +361,11 @@ pub async fn cli_run(
         .map_err(|e| anyhow::anyhow!("--k: ожидались числа через запятую (напр. 5,10): {e}"))?;
     if ks.contains(&0) {
         anyhow::bail!("--k: уровни k должны быть ≥ 1");
+    }
+
+    // Ф69.4: сводный раннер — единый JSON-отчет + гейт ADR-13 (не требует golden.jsonl).
+    if mode == "all" {
+        return cli_run_all(ctx, &ks, project, as_json).await;
     }
 
     let golden_path: std::path::PathBuf = match golden {
@@ -554,6 +564,314 @@ pub async fn cli_run(
         &rec,
     );
     Ok(())
+}
+
+/// Ф69.4: секция ast_golden сводного раннера — по вшитым эталонам (Ф69.3):
+/// присутствие required_symbols/required_calls и паритет двойного парсинга.
+/// Возвращает (общий ok, json-записи по языкам).
+pub fn ast_golden_section() -> anyhow::Result<(bool, Vec<serde_json::Value>)> {
+    use crate::project::ast::{resolve_calls, AstCodeExtractor, AstScanResult};
+
+    let embedded = crate::project::ast_golden::load_embedded()?;
+    let mut all_ok = true;
+    let mut entries = Vec::new();
+    for item in &embedded {
+        let parse = |src: &str| {
+            let ex = AstCodeExtractor::new();
+            let mut res = AstScanResult::default();
+            ex.parse_file(&item.spec.fixture, src, &mut res);
+            resolve_calls(&mut res);
+            res
+        };
+        let a = parse(&item.source);
+        let b = parse(&item.source);
+
+        // Паритет (NFR «Детерминизм AST»): двойной парсинг → те же node_id и рёбра.
+        let nodes_a: HashSet<&str> = a.nodes.iter().map(|n| n.node_id.as_str()).collect();
+        let nodes_b: HashSet<&str> = b.nodes.iter().map(|n| n.node_id.as_str()).collect();
+        let edge_key = |r: &AstScanResult| -> HashSet<String> {
+            r.edges
+                .iter()
+                .map(|e| format!("{}|{}|{}", e.source_node_id, e.target_node_id, e.label))
+                .collect()
+        };
+        let parity = nodes_a == nodes_b && edge_key(&a) == edge_key(&b);
+
+        let sym_req = item.spec.required_symbols.len();
+        let sym_found = item
+            .spec
+            .required_symbols
+            .iter()
+            .filter(|s| {
+                a.nodes
+                    .iter()
+                    .any(|n| n.label == s.name && n.node_type == s.kind)
+            })
+            .count();
+        let call_req = item.spec.required_calls.len();
+        let call_found = if item.spec.call_extraction == "current" {
+            item.spec
+                .required_calls
+                .iter()
+                .filter(|c| {
+                    let from = a.nodes.iter().find(|n| n.label == c.from).map(|n| &n.node_id);
+                    let to = a.nodes.iter().find(|n| n.label == c.to).map(|n| &n.node_id);
+                    from.is_some()
+                        && to.is_some()
+                        && a.edges.iter().any(|e| {
+                            Some(&e.source_node_id) == from
+                                && Some(&e.target_node_id) == to
+                                && e.label == "CALLS"
+                        })
+                })
+                .count()
+        } else {
+            call_req // target: не проверяется текущим парсером (цель Фазы 70)
+        };
+        let ok = parity && sym_found == sym_req && call_found == call_req;
+        if !ok {
+            all_ok = false;
+        }
+        entries.push(json!({
+            "language": item.spec.language,
+            "symbols": format!("{sym_found}/{sym_req}"),
+            "calls": format!("{call_found}/{call_req}"),
+            "call_extraction": item.spec.call_extraction,
+            "parity": parity,
+            "ok": ok,
+        }));
+    }
+    Ok((all_ok, entries))
+}
+
+/// Ф69.4 (PLAN_v2.0): сводный раннер `ob2h bench all` — единый JSON-отчет и
+/// пороги регрессии ADR-13 для CI. Секции: ast_golden (вшитые эталоны — всегда),
+/// retrieval search/context/latency (при наличии персонального golden.jsonl),
+/// code (при --project и golden_code.jsonl). Гейт: сбой секции ast_golden или
+/// регрессия recall@5/MRR против предыдущей записи history.jsonl режима search.
+/// Регрессия → exit-код ≠ 0 (гейт CI).
+pub async fn cli_run_all(
+    ctx: &crate::mcp::AppContext,
+    ks: &[usize],
+    project: Option<&str>,
+    as_json: bool,
+) -> anyhow::Result<()> {
+    use crate::dream::bench_gate::{is_degradation, read_history, MRR_DROP_LIMIT, RECALL_DROP_LIMIT};
+
+    let mut report = serde_json::Map::new();
+    let mut notes: Vec<String> = Vec::new();
+    let mut gate_over = false;
+
+    // — Секция ast_golden (всегда доступна: эталоны вшиты в бинарник) —
+    let (ast_ok, ast_entries) = ast_golden_section()?;
+    report.insert("ast_golden".into(), json!({ "ok": ast_ok, "languages": ast_entries }));
+    if !ast_ok {
+        gate_over = true;
+        notes.push("ast_golden: срыв эталона символов/вызовов или паритета".into());
+    }
+
+    // — Секция retrieval (персональный golden.jsonl) —
+    let golden_path = ctx.settings.data_dir.join("bench").join("golden.jsonl");
+    let mut search_recall5: Option<f64> = None;
+    let mut search_mrr: Option<f64> = None;
+    if golden_path.is_file() {
+        let cases = load_golden(&golden_path)?;
+        let search = run_bench(&ctx.memory, &cases, "search", ks).await?;
+        let context = run_bench(&ctx.memory, &cases, "context", ks).await?;
+        let lat = run_latency(&ctx.memory, &ctx.graph, &ctx.embedder, &ctx.db, &cases).await?;
+        let r5 = search
+            .ks
+            .iter()
+            .position(|&x| x == 5)
+            .and_then(|i| search.recall.get(i).copied());
+        search_recall5 = r5;
+        search_mrr = Some(search.mrr);
+        report.insert("search".into(), bench_result_json(&search));
+        report.insert("context".into(), bench_result_json(&context));
+        report.insert(
+            "latency".into(),
+            json!({
+                "mem_p95_ms": (lat.mem_p95_ms * 10.0).round() / 10.0,
+                "graph_p95_ms": (lat.graph_p95_ms * 10.0).round() / 10.0,
+                "gate_p95_ms": LATENCY_GATE_P95_MS,
+            }),
+        );
+        if lat.mem_p95_ms > LATENCY_GATE_P95_MS || lat.graph_p95_ms > LATENCY_GATE_P95_MS {
+            notes.push(format!(
+                "latency: p95 > {LATENCY_GATE_P95_MS:.0} мс — критерий эксперимента sqlite-vec (35.1)"
+            ));
+        }
+    } else {
+        report.insert(
+            "retrieval".into(),
+            json!({ "skipped": "data/bench/golden.jsonl отсутствует" }),
+        );
+        notes.push("retrieval пропущен: персональный golden.jsonl не заведён".into());
+    }
+
+    // — Секция code (опционально: --project + golden_code.jsonl) —
+    if let Some(pid) = project {
+        let code_path = ctx.settings.data_dir.join("bench").join("golden_code.jsonl");
+        if code_path.is_file() {
+            let cases = load_golden(&code_path)?;
+            let damping = std::env::var("OB2H_PPR_DAMPING")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(crate::graph::pagerank::DAMPING_MAX);
+            let weights = crate::graph::pagerank::parse_ppr_weights(
+                &std::env::var("OB2H_PPR_WEIGHTS")
+                    .unwrap_or_else(|_| crate::graph::pagerank::DEFAULT_PPR_WEIGHTS.to_string()),
+            );
+            let code = run_code_bench(&ctx.graph, &cases, pid, ks, damping, &weights).await?;
+            report.insert("code".into(), bench_result_json(&code));
+        } else {
+            notes.push("code пропущен: data/bench/golden_code.jsonl отсутствует".into());
+        }
+    } else {
+        notes.push("code пропущен: не указан --project".into());
+    }
+
+    // — Гейт ADR-13: регрессия против предыдущей записи history.jsonl (mode=search) —
+    if let (Some(r5), Some(mrr)) = (search_recall5, search_mrr) {
+        let prev = read_history(&ctx.settings, 50)?
+            .into_iter()
+            .rev()
+            .find(|row| {
+                row.get("mode").and_then(|v| v.as_str()) == Some("search")
+                    && row.get("recall@5").and_then(|v| v.as_f64()).is_some()
+            });
+        match prev {
+            Some(p) => {
+                let pr5 = p.get("recall@5").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let pm = p.get("mrr").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                if is_degradation((pr5, pm), (r5, mrr)) {
+                    gate_over = true;
+                    notes.push(format!(
+                        "retrieval: регрессия recall@5 {pr5:.3}→{r5:.3} / MRR {pm:.3}→{mrr:.3} сверх порогов ADR-13"
+                    ));
+                }
+            }
+            None => {
+                notes.push("retrieval: первый прогон — база фиксируется".into());
+            }
+        }
+    }
+
+    report.insert(
+        "gate".into(),
+        json!({
+            "adr": "ADR-13",
+            "over": gate_over,
+            "limits": {
+                "recall5_drop": RECALL_DROP_LIMIT,
+                "mrr_drop": MRR_DROP_LIMIT,
+            },
+            "notes": notes,
+        }),
+    );
+
+    let value = serde_json::Value::Object(report);
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+    } else {
+        print_all_human(&value);
+    }
+
+    // Накопительная история: одна запись на сводный прогон (mode=all).
+    if let (Some(r5), Some(_mrr)) = (search_recall5, search_mrr) {
+        let db_path = ctx.settings.data_dir.join("ob2h.db");
+        let db_size_mb = std::fs::metadata(&db_path)
+            .map(|m| m.len() as f64 / 1_048_576.0)
+            .unwrap_or(0.0);
+        let mrr = search_mrr.unwrap_or(0.0);
+        let rec = json!({
+            "ts": chrono::Utc::now().to_rfc3339(),
+            "mode": "all",
+            "recall@5": r5,
+            "mrr": (mrr * 1000.0).round() / 1000.0,
+            "db_size_mb": (db_size_mb * 10.0).round() / 10.0,
+            "embedding_backend": ctx.settings.embed_provider,
+            "ast_golden_ok": ast_ok,
+        });
+        let _ = crate::cli::bench_history::append_record(
+            &crate::cli::bench_history::history_path(&ctx.settings.data_dir),
+            &rec,
+        );
+    }
+
+    if gate_over {
+        anyhow::bail!("Гейт ADR-13: регрессия — детали в notes отчета (exit ≠ 0 для CI)");
+    }
+    Ok(())
+}
+
+/// Компактный JSON-объект результата BenchResult (для секций all-отчета).
+fn bench_result_json(result: &BenchResult) -> serde_json::Value {
+    json!({
+        "mode": result.mode,
+        "cases": result.cases,
+        "k": result.ks,
+        "recall_at_k": result.recall,
+        "mrr": result.mrr,
+        "empty_count": result.empty_count,
+        "p50_ms": (result.p50_ms * 10.0).round() / 10.0,
+        "p95_ms": (result.p95_ms * 10.0).round() / 10.0,
+    })
+}
+
+/// Человекочитаемый вывод сводного отчета.
+fn print_all_human(report: &serde_json::Value) {
+    println!("ob2h bench all v{}", env!("CARGO_PKG_VERSION"));
+    if let Some(ast) = report.get("ast_golden") {
+        println!(
+            "ast_golden: ok={} ({})",
+            ast.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
+            ast.get("languages")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr
+                    .iter()
+                    .filter_map(|e| e.get("language").and_then(|l| l.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", "))
+                .unwrap_or_default()
+        );
+    }
+    for section in ["search", "context", "code"] {
+        if let Some(s) = report.get(section) {
+            println!(
+                "{section}: кейсов {} | recall@5 {} | MRR {} | p95 {} мс",
+                s.get("cases").and_then(|v| v.as_u64()).unwrap_or(0),
+                s.get("recall_at_k")
+                    .and_then(|v| v.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_f64())
+                    .map(|r| format!("{r:.3}"))
+                    .unwrap_or_else(|| "-".into()),
+                s.get("mrr").and_then(|v| v.as_f64()).map(|m| format!("{m:.3}")).unwrap_or_else(|| "-".into()),
+                s.get("p95_ms").and_then(|v| v.as_f64()).map(|p| format!("{p:.1}")).unwrap_or_else(|| "-".into()),
+            );
+        }
+    }
+    if let Some(sk) = report.get("retrieval").and_then(|v| v.get("skipped")) {
+        println!("retrieval: пропущен ({sk})");
+    }
+    if let Some(gate) = report.get("gate") {
+        println!(
+            "гейт ADR-13: {}",
+            if gate.get("over").and_then(|v| v.as_bool()).unwrap_or(false) {
+                "ПРЕВЫШЕН"
+            } else {
+                "не превышен"
+            }
+        );
+        if let Some(notes) = gate.get("notes").and_then(|v| v.as_array()) {
+            for n in notes {
+                if let Some(s) = n.as_str() {
+                    println!("  • {s}");
+                }
+            }
+        }
+    }
 }
 
 fn print_human(result: &BenchResult, golden_path: &Path) {
@@ -820,6 +1138,16 @@ mod tests {
     #[test]
     fn normalize_collapses_whitespace_and_case() {
         assert_eq!(normalize("  Привет   МИР \n"), "привет мир");
+    }
+
+    #[test]
+    fn ast_golden_section_all_ok() {
+        let (ok, langs) = ast_golden_section().expect("секция ast_golden");
+        assert!(ok, "вшитые эталоны должны проходить паритет и присутствие");
+        assert_eq!(langs.len(), 5);
+        for e in &langs {
+            assert!(e.get("ok").and_then(|v| v.as_bool()).unwrap_or(false));
+        }
     }
 
     #[test]
