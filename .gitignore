@@ -12,4 +12,5 @@ ob2h-linux-x86_64
 __pycache__/
 
 .mimosa/
+.qoder/
 target_bench/

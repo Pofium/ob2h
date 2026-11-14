@@ -8,7 +8,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.9.2-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
+[![Release](https://img.shields.io/badge/Release-v1.9.10-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](https://github.com/Pofium/ob2h)
 [![CloudTips](https://img.shields.io/badge/%F0%9F%92%B0%20%D0%A7%D0%B0%D0%B5%D0%B2%D1%8B%20%D0%B0%D0%B2%D1%82%D0%BE%D1%80%D1%83-CloudTips%20(РФ)-ff69b4.svg)](https://pay.cloudtips.ru/p/4e7f8019)
 
@@ -49,7 +49,7 @@
 16. 🤖 **Работает без настроенного API-ключа (три эшелона LLM)**: явный ключ `OB2H_LLM_*` → автоподхват основной модели подключённого harness (Hermes, ZCode, Codex) → локальная мини-модель **Qwen3-0.6B** (~1.4 GB, Candle, качается лениво) для дриминга. Дриминг никогда не остаётся без модели.
 17. ⬆️ **Самообновление**: `ob2h update check/apply` скачивает релиз с GitHub, самозаменяет бинарник и переустанавливает плагин/скилл; раз в сутки `serve` проверяет новую версию (только уведомление, без автоприменения).
 18. 🎓 **Жизненный цикл памяти (v1.9.9)**: уроки (процедурный опыт с confidence и дедуп-укреплением), слоты рабочего контекста (`<agent_slots>` в контексте агента, бюджет 1500 символов), хронология и инкрементальный рекап сессий, провенанс фактов до цитат daily-логов, аудит-леджер операций и скрабинг секретов в конвейерах захвата.
-19. 🖥️ **Окно просмотра (Viewer, v1.9.9)**: нативное окно (`ob2h viewer` или MCP `viewer_open`) — память с FTS-поиском, граф с force-layout и pan/zoom, реплей сессий, уроки/слоты, статистика. Строго read-only («ни одной записи»), single-instance, RU/EN, тёмная/светлая тема в стилистике omnes agent. Сборка: `--features gui`; headless отвечает честно.
+19. 🖥️ **Окно просмотра (Viewer, v1.9.9–1.9.10)**: нативное окно (`ob2h viewer` или MCP `viewer_open`) — память с FTS-поиском, граф с force-layout, pan/zoom и **разбивкой по темам** (общая память / каждый проект), реплей сессий, уроки/слоты, статистика-дашборд. Строго read-only («ни одной записи»), single-instance, RU/EN, тёмная/светлая тема в стилистике семейства **Omnes** (логотип, палитра, Segoe UI/Consolas), хоткеи Ctrl+1…6 / F5 / Esc. Сборка: `--features gui`; headless отвечает честно.
 20. 🔑 **Секреты во viewer**: вкладка «Секреты» в окне просмотра — инициализация сейфа («Начать сохранять», PIN дважды), разблокировка по локальному PIN, добавление/просмотр (маска, авто-скрытие 15 с)/копирование/удаление с подтверждением. PIN никогда не проходит через чат/MCP/LLM; ключ затирается при блокировке и закрытии окна.
 
 **Кому подходит:** у кого Hermes живёт на двух машинах (ПК + VPS/сервер, работа + дом)
