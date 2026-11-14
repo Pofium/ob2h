@@ -6,8 +6,11 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use ob2h::graph::callpath::SYMBOL_TYPES;
 use ob2h::project::ast::{resolve_calls, AstCodeExtractor, AstScanResult};
-use ob2h::project::ast_golden::load_all;
+use ob2h::project::ast_golden::{
+    f1, load_all, CALL_F1_MIN, SYMBOL_F1_MIN,
+};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ast_golden")
@@ -118,6 +121,141 @@ fn current_parser_meets_required_level() {
                 );
             }
         }
+    }
+}
+
+/// Гейт 71.7: symbol F1 ≥ 0.95 на всех языках (regex-бэкенд — дефолтный путь
+/// продакшена), call F1 ≥ 0.90 для языков с гарантированными вызовами (current).
+#[test]
+fn f1_gates_regex_backend() {
+    let items = load_all(&fixtures_dir()).expect("загрузка ast_golden");
+    for (fixture_path, g) in &items {
+        let src = std::fs::read_to_string(fixture_path).expect("фикстура читается");
+        let res = parse(&g.fixture, &src);
+
+        let predicted: HashSet<(String, String)> = res
+            .nodes
+            .iter()
+            .filter(|n| SYMBOL_TYPES.contains(&n.node_type.as_str()))
+            .map(|n| (n.label.clone(), n.node_type.clone()))
+            .collect();
+        let required: HashSet<(String, String)> = g
+            .required_symbols
+            .iter()
+            .map(|s| (s.name.clone(), s.kind.clone()))
+            .collect();
+        let tp = predicted.intersection(&required).count();
+        let sym_f1 = f1(tp, predicted.len() - tp, required.len() - tp);
+        assert!(
+            sym_f1 >= SYMBOL_F1_MIN,
+            "{}: symbol F1 {:.3} < {:.2}; предсказано {:?}, требовалось {:?}",
+            g.language,
+            sym_f1,
+            SYMBOL_F1_MIN,
+            predicted,
+            required
+        );
+
+        let label_of = |nid: &str| -> String {
+            res.nodes
+                .iter()
+                .find(|n| n.node_id == nid)
+                .map(|n| n.label.clone())
+                .unwrap_or_default()
+        };
+        let pred_calls: HashSet<(String, String)> = res
+            .edges
+            .iter()
+            .filter(|e| e.label == "CALLS" && e.provenance != "HEURISTIC")
+            .map(|e| (label_of(&e.source_node_id), label_of(&e.target_node_id)))
+            .collect();
+        let req_calls: HashSet<(String, String)> = g
+            .required_calls
+            .iter()
+            .map(|c| (c.from.clone(), c.to.clone()))
+            .collect();
+        let ctp = pred_calls.intersection(&req_calls).count();
+        let call_f1 = f1(ctp, pred_calls.len() - ctp, req_calls.len() - ctp);
+        if g.call_extraction == "current" {
+            assert!(
+                call_f1 >= CALL_F1_MIN,
+                "{}: call F1 {:.3} < {:.2}; предсказано {:?}, требовалось {:?}",
+                g.language,
+                call_f1,
+                CALL_F1_MIN,
+                pred_calls,
+                req_calls
+            );
+        }
+    }
+}
+
+/// Гейт 71.7 под tree-sitter (Фаза 70 — ядро глубокого call graph): все 5
+/// языков дают и symbol F1 ≥ 0.95, и call F1 ≥ 0.90.
+#[cfg(feature = "treesitter")]
+#[test]
+fn f1_gates_treesitter_backend() {
+    use ob2h::project::ast_backend::ts;
+
+    let items = load_all(&fixtures_dir()).expect("загрузка ast_golden");
+    for (fixture_path, g) in &items {
+        let src = std::fs::read_to_string(fixture_path).expect("фикстура читается");
+        let lang = match g.language.as_str() {
+            "rust" => "rust",
+            "python" => "python",
+            "ts" => "ts",
+            "go" => "go",
+            "dart" => "dart",
+            other => panic!("неизвестный язык {other}"),
+        };
+        let mut res = AstScanResult::default();
+        ts::parse_source(&g.fixture, &src, lang, &mut res).expect("tree-sitter разбор");
+        resolve_calls(&mut res);
+
+        let predicted: HashSet<(String, String)> = res
+            .nodes
+            .iter()
+            .filter(|n| SYMBOL_TYPES.contains(&n.node_type.as_str()))
+            .map(|n| (n.label.clone(), n.node_type.clone()))
+            .collect();
+        let required: HashSet<(String, String)> = g
+            .required_symbols
+            .iter()
+            .map(|s| (s.name.clone(), s.kind.clone()))
+            .collect();
+        let tp = predicted.intersection(&required).count();
+        let sym_f1 = f1(tp, predicted.len() - tp, required.len() - tp);
+        assert!(sym_f1 >= SYMBOL_F1_MIN, "{}: symbol F1 {:.3}", g.language, sym_f1);
+
+        let label_of = |nid: &str| -> String {
+            res.nodes
+                .iter()
+                .find(|n| n.node_id == nid)
+                .map(|n| n.label.clone())
+                .unwrap_or_default()
+        };
+        let pred_calls: HashSet<(String, String)> = res
+            .edges
+            .iter()
+            .filter(|e| e.label == "CALLS" && e.provenance != "HEURISTIC")
+            .map(|e| (label_of(&e.source_node_id), label_of(&e.target_node_id)))
+            .collect();
+        let req_calls: HashSet<(String, String)> = g
+            .required_calls
+            .iter()
+            .map(|c| (c.from.clone(), c.to.clone()))
+            .collect();
+        let ctp = pred_calls.intersection(&req_calls).count();
+        let call_f1 = f1(ctp, pred_calls.len() - ctp, req_calls.len() - ctp);
+        assert!(
+            call_f1 >= CALL_F1_MIN,
+            "{}: call F1 {:.3} < {:.2}; предсказано {:?}, требовалось {:?}",
+            g.language,
+            call_f1,
+            CALL_F1_MIN,
+            pred_calls,
+            req_calls
+        );
     }
 }
 

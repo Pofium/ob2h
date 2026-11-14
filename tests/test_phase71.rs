@@ -40,9 +40,9 @@ fn import_table_qualified_call_rust() {
     .unwrap();
 
     let ex = AstCodeExtractor::new();
+    // диспетчер — продакшн-путь: под treesitter даёт CST-квалификаторы
     let mut res = ex.scan_directory_with(root, None, &mut |rel, content, out| {
-        ex.parse_file(rel, content, out);
-        "regex".to_string()
+        ob2h::project::ast_backend::AstParserDispatcher::new().parse_source(rel, content, out)
     });
     let resolved = resolve_calls(&mut res);
     assert!(resolved >= 1, "хотя бы одно ребро вызова; рёбра: {:?}", res
@@ -215,7 +215,10 @@ pub fn run() -> bool {
     TokenCache::refresh(&TokenCache)
 }
 "#;
-    let res = parse_regex("src/static.rs", src);
+    // диспетчер — продакшн-путь (CST-квалификатор Type::method() под treesitter)
+    let mut res = AstScanResult::default();
+    ob2h::project::ast_backend::AstParserDispatcher::new().parse_source("src/static.rs", src, &mut res);
+    resolve_calls(&mut res);
     let edge = res.edges.iter().find(|e| {
         e.label == "CALLS"
             && e.source_node_id == "fn:src/static.rs:run"

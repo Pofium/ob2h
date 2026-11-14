@@ -628,7 +628,74 @@ pub fn ast_golden_section() -> anyhow::Result<(bool, Vec<serde_json::Value>)> {
         } else {
             call_req // target: не проверяется текущим парсером (цель Фазы 70)
         };
-        let ok = parity && sym_found == sym_req && call_found == call_req;
+
+        // 71.7: F1-метрики на исчерпывающих эталонах. Предсказанные символы —
+        // словарь SYMBOL_TYPES; предсказанные вызовы — CALLS без эвристик
+        // (виртуальные вызовы измеряются отдельно, вне гарантированного слоя).
+        use crate::graph::callpath::SYMBOL_TYPES;
+        use std::collections::HashSet as BenchHashSet;
+        let predicted_syms: BenchHashSet<(String, String)> = a
+            .nodes
+            .iter()
+            .filter(|n| SYMBOL_TYPES.contains(&n.node_type.as_str()))
+            .map(|n| (n.label.clone(), n.node_type.clone()))
+            .collect();
+        let required_syms: BenchHashSet<(String, String)> = item
+            .spec
+            .required_symbols
+            .iter()
+            .map(|s| (s.name.clone(), s.kind.clone()))
+            .collect();
+        let sym_tp = predicted_syms.intersection(&required_syms).count();
+        let sym_f1 = crate::project::ast_golden::f1(
+            sym_tp,
+            predicted_syms.len() - sym_tp,
+            required_syms.len() - sym_tp,
+        );
+
+        let label_of = |nid: &str| -> String {
+            a.nodes
+                .iter()
+                .find(|n| n.node_id == nid)
+                .map(|n| n.label.clone())
+                .unwrap_or_default()
+        };
+        let predicted_calls: BenchHashSet<(String, String)> = a
+            .edges
+            .iter()
+            .filter(|e| e.label == "CALLS" && e.provenance != "HEURISTIC")
+            .map(|e| (label_of(&e.source_node_id), label_of(&e.target_node_id)))
+            .collect();
+        let required_calls_set: BenchHashSet<(String, String)> = item
+            .spec
+            .required_calls
+            .iter()
+            .map(|c| (c.from.clone(), c.to.clone()))
+            .collect();
+        let call_tp = predicted_calls.intersection(&required_calls_set).count();
+        let call_f1 = crate::project::ast_golden::f1(
+            call_tp,
+            predicted_calls.len() - call_tp,
+            required_calls_set.len() - call_tp,
+        );
+
+        // Гейт 71.7: symbol F1 ≥ 0.95 (все языки), call F1 ≥ 0.90 — для
+        // языков с гарантированными вызовами (current); target-языки —
+        // метрика репортится, гейт только под фичей treesitter.
+        let sym_ok = sym_f1 >= crate::project::ast_golden::SYMBOL_F1_MIN;
+        let call_ok = if item.spec.call_extraction == "current" {
+            call_f1 >= crate::project::ast_golden::CALL_F1_MIN
+        } else {
+            #[cfg(feature = "treesitter")]
+            {
+                call_f1 >= crate::project::ast_golden::CALL_F1_MIN
+            }
+            #[cfg(not(feature = "treesitter"))]
+            {
+                true
+            }
+        };
+        let ok = parity && sym_found == sym_req && call_found == call_req && sym_ok && call_ok;
         if !ok {
             all_ok = false;
         }
@@ -636,6 +703,8 @@ pub fn ast_golden_section() -> anyhow::Result<(bool, Vec<serde_json::Value>)> {
             "language": item.spec.language,
             "symbols": format!("{sym_found}/{sym_req}"),
             "calls": format!("{call_found}/{call_req}"),
+            "symbol_f1": (sym_f1 * 1000.0).round() / 1000.0,
+            "call_f1": (call_f1 * 1000.0).round() / 1000.0,
             "call_extraction": item.spec.call_extraction,
             "parity": parity,
             "ok": ok,

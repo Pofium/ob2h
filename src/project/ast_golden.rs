@@ -11,6 +11,19 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+/// 71.7: целевые пороги качества на golden-наборе.
+pub const SYMBOL_F1_MIN: f64 = 0.95;
+pub const CALL_F1_MIN: f64 = 0.90;
+
+/// F1 = 2·TP / (2·TP + FP + FN); при пустых множествах — 1.0.
+pub fn f1(tp: usize, fp: usize, fn_count: usize) -> f64 {
+    let denom = 2 * tp + fp + fn_count;
+    if denom == 0 {
+        return 1.0;
+    }
+    2.0 * tp as f64 / denom as f64
+}
+
 /// Требуемый символ эталона: имя + словарный node_type реестра LANGS.
 #[derive(Debug, Deserialize, serde::Serialize)]
 pub struct AstGoldenSymbol {

@@ -725,8 +725,10 @@ pub mod ts {
                                 .child_by_field_name("field")
                                 .map(|n| text_of(n))
                                 .unwrap_or_default();
+                            // tree-sitter-rust: поле объекта — `value`
                             let q = f
-                                .child_by_field_name("object")
+                                .child_by_field_name("value")
+                                .or_else(|| f.child_by_field_name("object"))
                                 .filter(|o| o.kind() == "identifier")
                                 .map(|o| text_of(o));
                             (name, q)
@@ -1618,15 +1620,27 @@ pub mod ts {
                             context: format!("import from '{module}'"),
                             provenance: "EXTRACTED".to_string(),
                         });
-                        // 71.4: ImportRef — named/namespace импорты для
-                        // file-scope таблицы импортов (type-pass)
+                        // 71.4: ImportRef — named/namespace/default импорты
+                        // для file-scope таблицы импортов (type-pass).
+                        // Структура TS-грамматики: import_clause →
+                        // named_imports → import_specifier (вложенность!),
+                        // namespace_import и голый identifier (default).
+                        let mut push_ref = |item: Option<String>, alias: Option<String>| {
+                            out.imports.push(crate::project::ast::ImportRef {
+                                rel_path: rel_path.to_string(),
+                                module: module.to_string(),
+                                item,
+                                alias,
+                            });
+                        };
                         let mut c = node.walk();
                         for child in node.children(&mut c) {
                             if child.kind() != "import_clause" {
                                 continue;
                             }
                             let mut cc = child.walk();
-                            for spec in child.children(&mut cc) {
+                            let clause_children: Vec<_> = child.children(&mut cc).collect();
+                            for spec in clause_children {
                                 match spec.kind() {
                                     "import_specifier" => {
                                         let item = spec
@@ -1638,28 +1652,51 @@ pub mod ts {
                                             .map(text_of)
                                             .filter(|s| !s.is_empty());
                                         if !item.is_empty() {
-                                            out.imports.push(crate::project::ast::ImportRef {
-                                                rel_path: rel_path.to_string(),
-                                                module: module.to_string(),
-                                                item: Some(item),
-                                                alias,
-                                            });
+                                            push_ref(Some(item), alias);
+                                        }
+                                    }
+                                    "named_imports" => {
+                                        let mut c3 = spec.walk();
+                                        let inner: Vec<_> = spec.children(&mut c3).collect();
+                                        for ispec in inner {
+                                            if ispec.kind() != "import_specifier" {
+                                                continue;
+                                            }
+                                            let item = ispec
+                                                .child_by_field_name("name")
+                                                .map(text_of)
+                                                .unwrap_or_default();
+                                            let alias = ispec
+                                                .child_by_field_name("alias")
+                                                .map(text_of)
+                                                .filter(|s| !s.is_empty());
+                                            if !item.is_empty() {
+                                                push_ref(Some(item), alias);
+                                            }
                                         }
                                     }
                                     "namespace_import" => {
-                                        // `import * as Utils from './utils'`
-                                        let alias = spec
+                                        // `import * as Utils from './utils'`;
+                                        // имя — единственный named-потомок
+                                        let by_field = spec
                                             .child_by_field_name("name")
                                             .map(text_of)
                                             .filter(|s| !s.is_empty());
+                                        let alias = by_field.or_else(|| {
+                                            let mut c4 = spec.walk();
+                                            let found = spec
+                                                .children(&mut c4)
+                                                .find(|n| n.kind() == "identifier")
+                                                .map(|n| text_of(n));
+                                            found
+                                        });
                                         if let Some(alias) = alias {
-                                            out.imports.push(crate::project::ast::ImportRef {
-                                                rel_path: rel_path.to_string(),
-                                                module: module.to_string(),
-                                                item: None,
-                                                alias: Some(alias),
-                                            });
+                                            push_ref(None, Some(alias));
                                         }
+                                    }
+                                    "identifier" => {
+                                        // default-импорт: `import Def from './def'`
+                                        push_ref(None, Some(text_of(spec)));
                                     }
                                     _ => {}
                                 }

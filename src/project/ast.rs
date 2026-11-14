@@ -7989,7 +7989,9 @@ pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
         idxs.sort_by_key(|&i| scan.nodes[i].line_start);
     }
 
-    // 3. Резолв каждого места вызова
+    // 3. Резолв каждого места вызова — два прохода: сначала квалифицированные
+    // сайты (точные пути: импорт/статика), потом bare — иначе bare same-file
+    // выигрывает гонку seen и точный контекст квалифицированного вызова теряется.
     let mut added = 0usize;
     let mut seen: HashSet<(String, String)> = HashSet::from_iter(
         scan.edges
@@ -7997,7 +7999,11 @@ pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
             .filter(|e| e.label == "CALLS")
             .map(|e| (e.source_node_id.clone(), e.target_node_id.clone())),
     );
+    for qualified_pass in [true, false] {
     for site in &scan.call_sites {
+        if site.qualifier.is_some() != qualified_pass {
+            continue;
+        }
         // Python: вызов вне тела функции не должен приписываться предыдущей функции.
         let is_python = site.rel_path.ends_with(".py") || site.rel_path.ends_with(".ipynb");
         let Some(ci) = syms_by_file.get(site.rel_path.as_str()).and_then(|idxs| {
@@ -8190,6 +8196,7 @@ pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
                 added += 1;
             }
         }
+    }
     }
     added
 }
