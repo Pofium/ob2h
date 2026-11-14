@@ -58,7 +58,7 @@ impl AstParserBackend for RegexBackend {
 /// Ф70.3 — rust; Ф70.4/70.5/70.6/70.12 добавят ts/python/go/dart.
 #[cfg(feature = "treesitter")]
 pub fn has_mapper(lang: &str) -> bool {
-    matches!(lang, "rust" | "python")
+    matches!(lang, "rust" | "python" | "go" | "dart")
 }
 
 /// Язык tree-sitter для пути по расширению: rust | python | ts | go | dart.
@@ -102,6 +102,82 @@ pub mod ts {
     /// Схлопывание пробелов (формат сигнатур regex-бэкенда).
     fn collapse_ws(s: &str) -> String {
         s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Общий узел File (зеркало parse_file) — возвращает `file:{rel}`.
+    fn push_file_node(out: &mut AstScanResult, rel_path: &str, content: &str) -> String {
+        let file_node_id = format!("file:{rel_path}");
+        out.nodes.push(AstNode {
+            node_id: file_node_id.clone(),
+            label: rel_path.to_string(),
+            node_type: "File".to_string(),
+            description: format!("Исходный файл проекта: {rel_path}"),
+            file_path: rel_path.to_string(),
+            line_start: 1,
+            line_end: content.lines().count().max(1),
+        });
+        file_node_id
+    }
+
+    /// Прямой ребёнок заданного kind (не рекурсивно).
+    fn first_direct_child<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+        let mut c = node.walk();
+        if !c.goto_first_child() {
+            return None;
+        }
+        loop {
+            let child = c.node();
+            if child.kind() == kind {
+                return Some(child);
+            }
+            if !c.goto_next_sibling() {
+                return None;
+            }
+        }
+    }
+
+    /// DFS по поддереву: первый узел заданного kind.
+    fn find_descendant<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+        if node.kind() == kind {
+            return Some(node);
+        }
+        let mut c = node.walk();
+        for child in node.children(&mut c) {
+            if let Some(found) = find_descendant(child, kind) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Все type_identifier в поддереве (имена типов: базы/миксины/интерфейсы).
+    #[allow(dead_code)]
+    fn type_identifiers_in(node: Node, src: &[u8]) -> Vec<String> {
+        let mut out = Vec::new();
+        collect_type_ids(node, src, &mut out);
+        out
+    }
+
+    fn collect_type_ids(node: Node, src: &[u8], out: &mut Vec<String>) {
+        if node.kind() == "type_identifier" {
+            if let Ok(t) = node.utf8_text(src) {
+                out.push(t.to_string());
+            }
+        }
+        let mut c = node.walk();
+        for child in node.children(&mut c) {
+            collect_type_ids(child, src, out);
+        }
+    }
+
+    /// Тексты прямых детей kind="type" (базы класса в секции superclass/mixins).
+    fn direct_type_texts(node: Node, src: &[u8]) -> Vec<String> {
+        let mut c = node.walk();
+        node.children(&mut c)
+            .filter(|ch| ch.kind() == "type")
+            .filter_map(|ch| ch.utf8_text(src).ok().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     /// `#[get("/path")]` → (метод, путь); None — не маршрутный атрибут.
@@ -154,8 +230,16 @@ pub mod ts {
                 map_python(rel_path, content, root, out);
                 Ok(())
             }
+            "go" => {
+                map_go(rel_path, content, root, out);
+                Ok(())
+            }
+            "dart" => {
+                map_dart(rel_path, content, root, out);
+                Ok(())
+            }
             _ => Err(anyhow::anyhow!(
-                "маппинг `{lang}` ещё не реализован (Ф70.4+)"
+                "маппинг `{lang}` ещё не реализован (Ф70.4: ts)"
             )),
         }
     }
@@ -167,16 +251,7 @@ pub mod ts {
     /// superset: методы `impl`-блоков и сигнатуры трейтов (function_signature_item),
     /// которые regex-бэкенд терял.
     pub fn map_rust(rel_path: &str, content: &str, root: Node, out: &mut AstScanResult) {
-        let file_node_id = format!("file:{rel_path}");
-        out.nodes.push(AstNode {
-            node_id: file_node_id.clone(),
-            label: rel_path.to_string(),
-            node_type: "File".to_string(),
-            description: format!("Исходный файл проекта: {rel_path}"),
-            file_path: rel_path.to_string(),
-            line_start: 1,
-            line_end: content.lines().count().max(1),
-        });
+        let file_node_id = push_file_node(out, rel_path, content);
 
         // 1. Маршруты axum/actix (Ф40.2): #[get("/path")] → (МЕТОД, путь) по строке.
         let src = content.as_bytes();
@@ -416,16 +491,7 @@ pub mod ts {
     /// `__tablename__` (QUERIES_TABLE — поиск внутри тела класса, точнее
     /// построчной эвристики regex), импорты + ImportRef, call_sites (PY_CALL_SKIP).
     pub fn map_python(rel_path: &str, content: &str, root: Node, out: &mut AstScanResult) {
-        let file_node_id = format!("file:{rel_path}");
-        out.nodes.push(AstNode {
-            node_id: file_node_id.clone(),
-            label: rel_path.to_string(),
-            node_type: "File".to_string(),
-            description: format!("Исходный файл проекта: {rel_path}"),
-            file_path: rel_path.to_string(),
-            line_start: 1,
-            line_end: content.lines().count().max(1),
-        });
+        let file_node_id = push_file_node(out, rel_path, content);
 
         let src = content.as_bytes();
         // Маршруты FastAPI/Flask: ключ — последняя строка блока декораторов
@@ -809,6 +875,318 @@ pub mod ts {
             loop {
                 let child = c.node();
                 visit_py_tablename(child, src, class_node_id, out);
+                if !c.goto_next_sibling() {
+                    break;
+                }
+            }
+            c.goto_parent();
+        }
+    }
+
+    /// Ф70.6 (PLAN_v2.0): CST→AST маппинг Go (tree-sitter-go).
+    /// Зеркало regex-бэкенда (структуры/интерфейсы как Struct, функции/методы)
+    /// плюс IMPORTS-рёбра, которые regex-бэкенд для Go не извлекал (superset);
+    /// call_sites — для эталона вызовов (golden `target`), type-pass резолвит.
+    pub fn map_go(rel_path: &str, content: &str, root: Node, out: &mut AstScanResult) {
+        let file_node_id = push_file_node(out, rel_path, content);
+        let src = content.as_bytes();
+        walk_go(root, src, rel_path, &file_node_id, out);
+        collect_call_sites_standalone(rel_path, content, crate::project::ast::GO_CALL_SKIP, out);
+    }
+
+    fn walk_go(node: Node, src: &[u8], rel_path: &str, file_node_id: &str, out: &mut AstScanResult) {
+        let text_of = |n: Node| n.utf8_text(src).unwrap_or("").to_string();
+        match node.kind() {
+            "import_declaration" => {
+                // import_spec: поле path — интерпретируемый строковый литерал
+                let mut c = node.walk();
+                for child in node.children(&mut c) {
+                    if child.kind() == "import_spec" {
+                        if let Some(path_node) = child.child_by_field_name("path") {
+                            let p = path_node.utf8_text(src).unwrap_or("").trim_matches('"');
+                            if !p.is_empty() {
+                                out.edges.push(AstEdge {
+                                    source_node_id: file_node_id.to_string(),
+                                    target_node_id: format!("module:{p}"),
+                                    label: "IMPORTS".to_string(),
+                                    weight: 1.0,
+                                    context: format!("import \"{p}\";"),
+                                    provenance: "EXTRACTED".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            "type_spec" => {
+                // type X struct {...} / type X interface {...} — оба как Struct
+                // (зеркало go_struct_re: «Go структура/интерфейс»)
+                if let (Some(name_node), Some(ty)) = (
+                    node.child_by_field_name("name"),
+                    node.child_by_field_name("type"),
+                ) {
+                    if matches!(ty.kind(), "struct_type" | "interface_type") {
+                        let name = text_of(name_node);
+                        if !name.is_empty() {
+                            let node_id = format!("struct:{rel_path}:{name}");
+                            let line = node.start_position().row + 1;
+                            out.nodes.push(AstNode {
+                                node_id: node_id.clone(),
+                                label: name.clone(),
+                                node_type: "Struct".to_string(),
+                                description: format!(
+                                    "Go структура/интерфейс `{name}` в {rel_path}"
+                                ),
+                                file_path: rel_path.to_string(),
+                                line_start: line,
+                                line_end: line,
+                            });
+                            out.edges.push(AstEdge {
+                                source_node_id: file_node_id.to_string(),
+                                target_node_id: node_id,
+                                label: "DEFINES".to_string(),
+                                weight: 1.0,
+                                context: node
+                                    .utf8_text(src)
+                                    .unwrap_or("")
+                                    .lines()
+                                    .next()
+                                    .unwrap_or("")
+                                    .trim()
+                                    .to_string(),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            "function_declaration" | "method_declaration" => {
+                // method_declaration: имя после receiver — regex-бэкенд эмитил
+                // методы тем же `fn:{rel}:{name}`; зеркалим.
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let fn_name = text_of(name_node);
+                    if !fn_name.is_empty() {
+                        let node_id = format!("fn:{rel_path}:{fn_name}");
+                        let line = name_node.start_position().row + 1;
+                        let line_end = node
+                            .child_by_field_name("body")
+                            .map(|b| b.end_position().row + 1)
+                            .unwrap_or(line);
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: fn_name.clone(),
+                            node_type: "Function".to_string(),
+                            description: format!("Go функция/метод `{fn_name}` в {rel_path}"),
+                            file_path: rel_path.to_string(),
+                            line_start: line,
+                            line_end: line_end.max(line),
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: node
+                                .utf8_text(src)
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+        let mut c = node.walk();
+        if c.goto_first_child() {
+            loop {
+                let child = c.node();
+                walk_go(child, src, rel_path, file_node_id, out);
+                if !c.goto_next_sibling() {
+                    break;
+                }
+            }
+            c.goto_parent();
+        }
+    }
+
+    /// Ф70.12 (PLAN_v2.0): CST→AST маппинг Dart (tree-sitter-dart, nielsenko).
+    /// Зеркало regex-бэкенда: классы (extends → INHERITS, with → IMPLEMENTS
+    /// trait:, implements → IMPLEMENTS interface:), миксины как Trait,
+    /// функции/методы; IMPORTS из uri. Первая очередь v2.0 — эталон обязателен.
+    pub fn map_dart(rel_path: &str, content: &str, root: Node, out: &mut AstScanResult) {
+        let file_node_id = push_file_node(out, rel_path, content);
+        let src = content.as_bytes();
+        walk_dart(root, src, rel_path, &file_node_id, out);
+        collect_call_sites_standalone(rel_path, content, crate::project::ast::DART_CALL_SKIP, out);
+    }
+
+    fn walk_dart(
+        node: Node,
+        src: &[u8],
+        rel_path: &str,
+        file_node_id: &str,
+        out: &mut AstScanResult,
+    ) {
+        let text_of = |n: Node| n.utf8_text(src).unwrap_or("").to_string();
+        match node.kind() {
+            "import_or_export" => {
+                if let Some(uri) = find_descendant(node, "configurable_uri") {
+                    let raw = text_of(uri);
+                    let module = raw.trim_matches(|c| c == '\'' || c == '"');
+                    if !module.is_empty() {
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: format!("module:{module}"),
+                            label: "IMPORTS".to_string(),
+                            weight: 1.0,
+                            context: format!("import '{module}';"),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            "class_declaration" => {
+                if let Some(name_node) = first_direct_child(node, "identifier") {
+                    let class_name = text_of(name_node);
+                    if !class_name.is_empty() {
+                        let node_id = format!("class:{rel_path}:{class_name}");
+                        let line = node.start_position().row + 1;
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: class_name.clone(),
+                            node_type: "Class".to_string(),
+                            description: format!("Dart класс `{class_name}` в {rel_path}"),
+                            file_path: rel_path.to_string(),
+                            line_start: line,
+                            line_end: line,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id.clone(),
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: node
+                                .utf8_text(src)
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                        // Грамматика nielsenko: mixins вложены В superclass
+                        // (superclass = extends Base with Mix), interfaces — прямой
+                        // ребёнок. extends → INHERITS class:{}, with → IMPLEMENTS
+                        // trait:{}, implements → IMPLEMENTS interface:{}.
+                        let mut emit = |prefix: &str, verb: &str, label: &str, ids: &[String]| {
+                            for id in ids {
+                                out.edges.push(AstEdge {
+                                    source_node_id: node_id.clone(),
+                                    target_node_id: format!("{prefix}:{id}"),
+                                    label: label.to_string(),
+                                    weight: 1.0,
+                                    context: format!("{verb} {id}"),
+                                    provenance: "EXTRACTED".to_string(),
+                                });
+                            }
+                        };
+                        if let Some(superclass) = first_direct_child(node, "superclass") {
+                            emit("class", "extends", "INHERITS", &direct_type_texts(superclass, src));
+                            if let Some(mixins) = first_direct_child(superclass, "mixins") {
+                                emit("trait", "with", "IMPLEMENTS", &direct_type_texts(mixins, src));
+                            }
+                        }
+                        if let Some(interfaces) = first_direct_child(node, "interfaces") {
+                            emit("interface", "implements", "IMPLEMENTS", &direct_type_texts(interfaces, src));
+                        }
+                    }
+                }
+            }
+            "mixin_declaration" => {
+                if let Some(name_node) = first_direct_child(node, "identifier") {
+                    let mixin_name = text_of(name_node);
+                    if !mixin_name.is_empty() {
+                        let node_id = format!("trait:{rel_path}:{mixin_name}");
+                        let line = node.start_position().row + 1;
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: mixin_name.clone(),
+                            node_type: "Trait".to_string(),
+                            description: format!("Dart миксин `{mixin_name}` в {rel_path}"),
+                            file_path: rel_path.to_string(),
+                            line_start: line,
+                            line_end: line,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: node
+                                .utf8_text(src)
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            "function_declaration" | "method_declaration" => {
+                // имя — первый identifier внутри function_signature
+                let name = find_descendant(node, "function_signature")
+                    .and_then(|sig| first_direct_child(sig, "identifier"))
+                    .map(|n| n.utf8_text(src).unwrap_or("").to_string());
+                if let Some(fn_name) = name {
+                    if !fn_name.is_empty() {
+                        let node_id = format!("fn:{rel_path}:{fn_name}");
+                        let line = node.start_position().row + 1;
+                        let line_end = find_descendant(node, "function_body")
+                            .map(|b| b.end_position().row + 1)
+                            .unwrap_or(line);
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: fn_name.clone(),
+                            node_type: "Function".to_string(),
+                            description: format!("Dart функция/метод `{fn_name}` в {rel_path}"),
+                            file_path: rel_path.to_string(),
+                            line_start: line,
+                            line_end: line_end.max(line),
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: node
+                                .utf8_text(src)
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+        let mut c = node.walk();
+        if c.goto_first_child() {
+            loop {
+                let child = c.node();
+                walk_dart(child, src, rel_path, file_node_id, out);
                 if !c.goto_next_sibling() {
                     break;
                 }

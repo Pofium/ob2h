@@ -6,7 +6,8 @@
 use tree_sitter::Parser;
 
 /// (имя, грамматика, минимальный корректный сниппет).
-const LANGS: &[(&str, fn() -> tree_sitter::Language, &str)] = &[
+type LangEntry = (&'static str, fn() -> tree_sitter::Language, &'static str);
+const LANGS: &[LangEntry] = &[
     ("rust", || tree_sitter_rust::LANGUAGE.into(), "pub fn main() {}"),
     (
         "python",
@@ -415,4 +416,183 @@ fn dispatcher_routes_python_to_treesitter() {
     let backend = disp.parse_source("source.py", &golden.source, &mut out);
     assert_eq!(backend, "treesitter:python");
     assert!(out.nodes.iter().any(|n| n.label == "run_pipeline"));
+}
+
+// ——— Ф70.6: Go mapper (CST → AstScanResult) ———
+
+fn map_lang_golden(lang: &str, rel: &str) -> AstScanResult {
+    let golden = ob2h::project::ast_golden::load_embedded()
+        .expect("вшитые эталоны")
+        .into_iter()
+        .find(|g| g.spec.language == lang)
+        .unwrap_or_else(|| panic!("эталон {lang}"));
+    let mut out = AstScanResult::default();
+    ts::parse_source(rel, &golden.source, lang, &mut out)
+        .unwrap_or_else(|e| panic!("{lang} mapper отказал: {e}"));
+    out
+}
+
+/// Go: эталонные символы + вызовы + IMPORTS (superset regex).
+#[test]
+fn go_mapper_meets_golden() {
+    let mut res = map_lang_golden("go", "source.go");
+    for (name, kind) in [
+        ("CacheConfig", "Struct"),
+        ("LoadSettings", "Function"),
+        ("RunPipeline", "Function"),
+    ] {
+        assert!(
+            res.nodes.iter().any(|n| n.label == name && n.node_type == kind),
+            "Go символ {name} ({kind}) не найден"
+        );
+    }
+    ob2h::project::ast::resolve_calls(&mut res);
+    let from = res.nodes.iter().find(|n| n.label == "RunPipeline").map(|n| n.node_id.clone()).unwrap();
+    let to = res.nodes.iter().find(|n| n.label == "LoadSettings").map(|n| n.node_id.clone()).unwrap();
+    assert!(
+        res.edges.iter().any(|e| e.source_node_id == from
+            && e.target_node_id == to
+            && e.label == "CALLS"),
+        "нет CALLS RunPipeline → LoadSettings"
+    );
+
+    // IMPORTS — superset: regex-бэкенд Go импорты не извлекал
+    let src = "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"x\")\n}\n";
+    let mut out = AstScanResult::default();
+    ts::parse_source("main.go", src, "go", &mut out).expect("разбор");
+    assert!(
+        out.edges.iter().any(|e| e.label == "IMPORTS" && e.target_node_id == "module:fmt"),
+        "IMPORTS для Go не найдены"
+    );
+}
+
+/// Go: паритет node_id с regex-бэкендом.
+#[test]
+fn go_mapper_node_ids_match_regex() {
+    let golden = ob2h::project::ast_golden::load_embedded()
+        .unwrap()
+        .into_iter()
+        .find(|g| g.spec.language == "go")
+        .unwrap();
+    let mut regex_res = AstScanResult::default();
+    AstCodeExtractor::new().parse_file("source.go", &golden.source, &mut regex_res);
+    let ts_res = map_lang_golden("go", "source.go");
+    let ids_regex: HashSet<&str> = regex_res.nodes.iter().map(|n| n.node_id.as_str()).collect();
+    let ids_ts: HashSet<&str> = ts_res.nodes.iter().map(|n| n.node_id.as_str()).collect();
+    assert_eq!(
+        ids_regex, ids_ts,
+        "ts-нет: {:?}, regex-нет: {:?}",
+        ids_ts.difference(&ids_regex).collect::<Vec<_>>(),
+        ids_regex.difference(&ids_ts).collect::<Vec<_>>(),
+    );
+}
+
+// ——— Ф70.12: Dart mapper (CST → AstScanResult) ———
+
+/// Dart: эталонные символы + вызовы + классовые рёбра (extends/with/implements).
+#[test]
+fn dart_mapper_meets_golden() {
+    let mut res = map_lang_golden("dart", "source.dart");
+    for (name, kind) in [
+        ("TokenCache", "Class"),
+        ("loadSettings", "Function"),
+        ("runPipeline", "Function"),
+    ] {
+        assert!(
+            res.nodes.iter().any(|n| n.label == name && n.node_type == kind),
+            "Dart символ {name} ({kind}) не найден"
+        );
+    }
+    assert!(
+        res.nodes.iter().any(|n| n.label == "refresh" && n.node_type == "Function"),
+        "метод класса не найден"
+    );
+    ob2h::project::ast::resolve_calls(&mut res);
+    let from = res.nodes.iter().find(|n| n.label == "runPipeline").map(|n| n.node_id.clone()).unwrap();
+    let to = res.nodes.iter().find(|n| n.label == "loadSettings").map(|n| n.node_id.clone()).unwrap();
+    assert!(
+        res.edges.iter().any(|e| e.source_node_id == from
+            && e.target_node_id == to
+            && e.label == "CALLS"),
+        "нет CALLS runPipeline → loadSettings"
+    );
+
+    // Классовые рёбра: extends → INHERITS, with → IMPLEMENTS trait:, implements
+    let src = r#"import 'package:flutter/material.dart';
+
+class UserService extends Base with Mix implements Repo {
+}
+
+mixin Mix {
+}
+"#;
+    let mut out = AstScanResult::default();
+    ts::parse_source("user_service.dart", src, "dart", &mut out).expect("разбор");
+    let cls = "class:user_service.dart:UserService";
+    assert!(
+        out.edges.iter().any(|e| e.source_node_id == cls
+            && e.label == "INHERITS"
+            && e.target_node_id == "class:Base"),
+        "INHERITS extends не найден"
+    );
+    assert!(
+        out.edges.iter().any(|e| e.source_node_id == cls
+            && e.label == "IMPLEMENTS"
+            && e.target_node_id == "trait:Mix"),
+        "IMPLEMENTS with не найден"
+    );
+    assert!(
+        out.edges.iter().any(|e| e.source_node_id == cls
+            && e.label == "IMPLEMENTS"
+            && e.target_node_id == "interface:Repo"),
+        "IMPLEMENTS implements не найден"
+    );
+    // Миксин → Trait + IMPORTS
+    assert!(
+        out.nodes.iter().any(|n| n.label == "Mix" && n.node_type == "Trait"),
+        "миксин не найден"
+    );
+    assert!(
+        out.edges.iter().any(|e| e.label == "IMPORTS"
+            && e.target_node_id == "module:package:flutter/material.dart"),
+        "IMPORTS для Dart не найден"
+    );
+}
+
+/// Dart: паритет node_id с regex-бэкендом.
+#[test]
+fn dart_mapper_node_ids_match_regex() {
+    let golden = ob2h::project::ast_golden::load_embedded()
+        .unwrap()
+        .into_iter()
+        .find(|g| g.spec.language == "dart")
+        .unwrap();
+    let mut regex_res = AstScanResult::default();
+    AstCodeExtractor::new().parse_file("source.dart", &golden.source, &mut regex_res);
+    let ts_res = map_lang_golden("dart", "source.dart");
+    let ids_regex: HashSet<&str> = regex_res.nodes.iter().map(|n| n.node_id.as_str()).collect();
+    let ids_ts: HashSet<&str> = ts_res.nodes.iter().map(|n| n.node_id.as_str()).collect();
+    assert_eq!(
+        ids_regex, ids_ts,
+        "ts-нет: {:?}, regex-нет: {:?}",
+        ids_ts.difference(&ids_regex).collect::<Vec<_>>(),
+        ids_regex.difference(&ids_ts).collect::<Vec<_>>(),
+    );
+}
+
+/// Диспетчер: .go и .dart уходят в tree-sitter.
+#[test]
+fn dispatcher_routes_go_and_dart_to_treesitter() {
+    for (lang, rel) in [("go", "source.go"), ("dart", "source.dart")] {
+        let golden = ob2h::project::ast_golden::load_embedded()
+            .unwrap()
+            .into_iter()
+            .find(|g| g.spec.language == lang)
+            .unwrap();
+        let disp = AstParserDispatcher::new();
+        let mut out = AstScanResult::default();
+        let backend = disp.parse_source(rel, &golden.source, &mut out);
+        assert_eq!(backend, format!("treesitter:{lang}"));
+        assert!(out.nodes.iter().any(|n| n.node_type == "Function"), "{lang}: нет fn");
+    }
 }

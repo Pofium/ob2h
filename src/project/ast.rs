@@ -1451,6 +1451,18 @@ pub(crate) const RUST_CALL_SKIP: &[&str] = &[
     "where", "type", "dyn", "ref", "const", "static", "enum", "trait",
 ];
 
+/// Ф70.6: ключевые слова Go, которые не считаются вызовами (TS-маппер).
+pub(crate) const GO_CALL_SKIP: &[&str] = &[
+    "if", "for", "range", "while", "switch", "case", "return", "go", "defer", "func", "var",
+    "const", "type", "struct", "interface", "map", "chan", "select", "else",
+];
+
+/// Ф70.12: ключевые слова Dart, которые не считаются вызовами (TS-маппер).
+pub(crate) const DART_CALL_SKIP: &[&str] = &[
+    "if", "for", "while", "switch", "case", "catch", "return", "new", "await", "async", "sync",
+    "try", "else", "do", "super", "this", "factory", "get", "set",
+];
+
 /// Ф70.3: единый шаблон мест вызовов (extractor::call_re и TS-маппер tree-sitter).
 pub(crate) const CALL_RE_PATTERN: &str = r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\(";
 
