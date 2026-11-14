@@ -1463,8 +1463,71 @@ pub(crate) const DART_CALL_SKIP: &[&str] = &[
     "try", "else", "do", "super", "this", "factory", "get", "set",
 ];
 
+/// Ф70.4: ключевые слова TS/JS, которые не считаются вызовами (TS-маппер).
+pub(crate) const TS_CALL_SKIP: &[&str] = &[
+    "if", "for", "while", "switch", "case", "catch", "return", "new", "function", "typeof",
+    "await", "async", "do", "else", "try", "throw", "delete", "void",
+];
+
 /// Ф70.3: единый шаблон мест вызовов (extractor::call_re и TS-маппер tree-sitter).
 pub(crate) const CALL_RE_PATTERN: &str = r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\(";
+
+/// Ф70.4: паттерны TS-мостов (extractor и TS-маппер tree-sitter используют одни).
+pub(crate) const TS_HTTP_RE_PATTERN: &str =
+    r#"(?i)(?:fetch|axios(?:\.(get|post|put|delete|patch))?)\s*\(\s*["'`]([^"'`]+)["'`]"#;
+pub(crate) const TS_GQL_RE_PATTERN: &str = r#"(?:gql|graphql)\s*`([^`]*)`"#;
+pub(crate) const GQL_IDENT_RE_PATTERN: &str = r"([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:\(|\{)";
+pub(crate) const TS_CLASSNAME_RE_PATTERN: &str =
+    r#"(?i)\sclassname\s*=\s*(?:"([^"]+)"|'([^']+)')"#;
+
+/// Ф70.4: HTTP-вызовы (мосты SERVES_ENDPOINT, Ф49.4б) — для TS-маппера.
+pub(crate) fn collect_http_calls_standalone(rel_path: &str, content: &str, out: &mut AstScanResult) {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    collect_http_calls(rel_path, content, RE.get_or_init(|| Regex::new(TS_HTTP_RE_PATTERN).unwrap()), out);
+}
+
+/// Ф70.4: gql-поля (мосты QUERIES_FIELD, Ф49.4в) — для TS-маппера.
+pub(crate) fn collect_gql_fields_standalone(rel_path: &str, content: &str, out: &mut AstScanResult) {
+    static GQL: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static IDENT: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let gql = GQL.get_or_init(|| Regex::new(TS_GQL_RE_PATTERN).unwrap());
+    let ident = IDENT.get_or_init(|| Regex::new(GQL_IDENT_RE_PATTERN).unwrap());
+    for cap in gql.captures_iter(content) {
+        let body = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        for icap in ident.captures_iter(body) {
+            if let Some(ident_m) = icap.get(1) {
+                out.gql_fields.push(GqlFieldRef {
+                    rel_path: rel_path.to_string(),
+                    field: ident_m.as_str().to_string(),
+                });
+            }
+        }
+    }
+}
+
+/// Ф70.4: React className → BINDS_CLASS (Ф55) — для TS-маппера,
+/// дедуп по имени в пределах файла (зеркало regex-пути).
+pub(crate) fn collect_ts_binds_class(content: &str, file_node_id: &str, out: &mut AstScanResult) {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(TS_CLASSNAME_RE_PATTERN).unwrap());
+    let mut seen: HashSet<String> = HashSet::new();
+    for cap in re.captures_iter(content) {
+        let value = cap.get(1).or_else(|| cap.get(2)).map(|m| m.as_str()).unwrap_or("");
+        for name in value.split_whitespace() {
+            if name.is_empty() || !seen.insert(name.to_string()) {
+                continue;
+            }
+            out.edges.push(AstEdge {
+                source_node_id: file_node_id.to_string(),
+                target_node_id: format!("cssclass:{name}"),
+                label: "BINDS_CLASS".to_string(),
+                weight: 1.0,
+                context: format!("className=\"{value}\""),
+                provenance: "INFERRED".to_string(),
+            });
+        }
+    }
+}
 
 /// Ф70.3: самостоятельный проход мест вызовов для tree-sitter-маппера —
 /// тот же контракт, что у regex-пути parse_rust/parse_python (type-pass Ф39.1).
@@ -1822,14 +1885,14 @@ impl AstCodeExtractor {
             gql_field_re: Regex::new(r"^\s*([a-z][a-zA-Z0-9_]*)\s*(?:\([^)]*\))?\s*:").unwrap(),
 
             // Ф55: React className (статика)
-            ts_classname_re: Regex::new(r#"(?i)\sclassname\s*=\s*(?:"([^"]+)"|'([^']+)')"#).unwrap(),
+            ts_classname_re: Regex::new(TS_CLASSNAME_RE_PATTERN).unwrap(),
 
             // Ф49.4: клиентские вызовы и gql-строки
-            ts_http_re: Regex::new(r#"(?i)(?:fetch|axios(?:\.(get|post|put|delete|patch))?)\s*\(\s*["'`]([^"'`]+)["'`]"#).unwrap(),
+            ts_http_re: Regex::new(TS_HTTP_RE_PATTERN).unwrap(),
             py_http_re: Regex::new(r#"requests\.(get|post|put|delete|patch)\s*\(\s*["']([^"']+)["']"#).unwrap(),
-            ts_gql_re: Regex::new(r#"(?:gql|graphql)\s*`([^`]*)`"#).unwrap(),
+            ts_gql_re: Regex::new(TS_GQL_RE_PATTERN).unwrap(),
             py_gql_re: Regex::new(r#"(?s)(?:gql|graphql)\s*\(\s*(?:"""(.*?)"""|'''(.*?)''')"#).unwrap(),
-            gql_ident_re: Regex::new(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:\(|\{)").unwrap(),
+            gql_ident_re: Regex::new(GQL_IDENT_RE_PATTERN).unwrap(),
 
             // Ф50.1: Terraform
             tf_block_re: Regex::new(r#"(?m)^\s*(resource|module|variable|output|data)\s+"([^"]+)"(?:\s+"([^"]+)")?"#).unwrap(),

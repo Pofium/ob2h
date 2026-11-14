@@ -58,7 +58,7 @@ impl AstParserBackend for RegexBackend {
 /// Ф70.3 — rust; Ф70.4/70.5/70.6/70.12 добавят ts/python/go/dart.
 #[cfg(feature = "treesitter")]
 pub fn has_mapper(lang: &str) -> bool {
-    matches!(lang, "rust" | "python" | "go" | "dart")
+    matches!(lang, "rust" | "python" | "go" | "dart" | "ts" | "tsx")
 }
 
 /// Язык tree-sitter для пути по расширению: rust | python | ts | go | dart.
@@ -68,7 +68,8 @@ pub fn lang_for_path(rel_path: &str) -> Option<&'static str> {
     Some(match ext {
         "rs" => "rust",
         "py" => "python",
-        "ts" | "tsx" | "js" | "jsx" => "ts",
+        "ts" | "js" => "ts",
+        "tsx" | "jsx" => "tsx",
         "go" => "go",
         "dart" => "dart",
         _ => return None,
@@ -93,6 +94,7 @@ pub mod ts {
             "rust" => tree_sitter_rust::LANGUAGE.into(),
             "python" => tree_sitter_python::LANGUAGE.into(),
             "ts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
             "go" => tree_sitter_go::LANGUAGE.into(),
             "dart" => tree_sitter_dart::LANGUAGE.into(),
             _ => return None,
@@ -238,9 +240,11 @@ pub mod ts {
                 map_dart(rel_path, content, root, out);
                 Ok(())
             }
-            _ => Err(anyhow::anyhow!(
-                "маппинг `{lang}` ещё не реализован (Ф70.4: ts)"
-            )),
+            "ts" | "tsx" => {
+                map_ts_js(rel_path, content, root, out);
+                Ok(())
+            }
+            _ => Err(anyhow::anyhow!("маппинг `{lang}` не поддерживается")),
         }
     }
 
@@ -1187,6 +1191,214 @@ pub mod ts {
             loop {
                 let child = c.node();
                 walk_dart(child, src, rel_path, file_node_id, out);
+                if !c.goto_next_sibling() {
+                    break;
+                }
+            }
+            c.goto_parent();
+        }
+    }
+
+    /// Ф70.4 (PLAN_v2.0): CST→AST маппинг TS/JS (tree-sitter-typescript/tsx).
+    /// Зеркало regex-бэкенда: import/class/interface/type-alias/function;
+    /// superset: методы классов (method_definition) и стрелки
+    /// `const x = (...) =>` — regex их терял. Мосты/эвристики (HTTP, gql,
+    /// React BINDS_CLASS) — те же regex-проходы, что у regex-бэкенда,
+    /// чтобы фича не теряла функциональность на ts-файлах.
+    pub fn map_ts_js(rel_path: &str, content: &str, root: Node, out: &mut AstScanResult) {
+        let file_node_id = push_file_node(out, rel_path, content);
+        let src = content.as_bytes();
+        walk_ts(root, src, rel_path, &file_node_id, out);
+        // Мосты и эвристики — без регрессии относительно regex-бэкенда
+        crate::project::ast::collect_http_calls_standalone(rel_path, content, out);
+        crate::project::ast::collect_gql_fields_standalone(rel_path, content, out);
+        crate::project::ast::collect_ts_binds_class(content, &file_node_id, out);
+        collect_call_sites_standalone(rel_path, content, crate::project::ast::TS_CALL_SKIP, out);
+    }
+
+    fn walk_ts(
+        node: Node,
+        src: &[u8],
+        rel_path: &str,
+        file_node_id: &str,
+        out: &mut AstScanResult,
+    ) {
+        let text_of = |n: Node| n.utf8_text(src).unwrap_or("").to_string();
+        match node.kind() {
+            "import_statement" => {
+                if let Some(source_node) = node.child_by_field_name("source") {
+                    let raw = text_of(source_node);
+                    let module = raw.trim_matches(|c| c == '\'' || c == '"');
+                    if !module.is_empty() {
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: format!("module:{module}"),
+                            label: "IMPORTS".to_string(),
+                            weight: 1.0,
+                            context: format!("import from '{module}'"),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            "class_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = text_of(name_node);
+                    if !name.is_empty() {
+                        let node_id = format!("class:{rel_path}:{name}");
+                        let line = node.start_position().row + 1;
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: name.clone(),
+                            node_type: "Class".to_string(),
+                            description: format!("TypeScript/JS класс `{name}` в {rel_path}"),
+                            file_path: rel_path.to_string(),
+                            line_start: line,
+                            line_end: line,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: node
+                                .utf8_text(src)
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            "interface_declaration" | "type_alias_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = text_of(name_node);
+                    if !name.is_empty() {
+                        let node_id = format!("interface:{rel_path}:{name}");
+                        let line = node.start_position().row + 1;
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: name.clone(),
+                            node_type: "Interface".to_string(),
+                            description: format!("Интерфейс/тип `{name}` в {rel_path}"),
+                            file_path: rel_path.to_string(),
+                            line_start: line,
+                            line_end: line,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: node
+                                .utf8_text(src)
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            "function_declaration" | "method_definition" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let fn_name = text_of(name_node);
+                    if !fn_name.is_empty() {
+                        let node_id = format!("fn:{rel_path}:{fn_name}");
+                        let line = name_node.start_position().row + 1;
+                        let line_end = node
+                            .child_by_field_name("body")
+                            .map(|b| b.end_position().row + 1)
+                            .unwrap_or(line);
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: fn_name.clone(),
+                            node_type: "Function".to_string(),
+                            description: format!("Функция `{fn_name}` в {rel_path}"),
+                            file_path: rel_path.to_string(),
+                            line_start: line,
+                            line_end: line_end.max(line),
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: node
+                                .utf8_text(src)
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            "lexical_declaration" | "variable_declaration" => {
+                // superset: const/let/var x = (...) => ... — стрелочные функции
+                let mut c = node.walk();
+                for child in node.children(&mut c) {
+                    if child.kind() != "variable_declarator" {
+                        continue;
+                    }
+                    let is_arrow = child
+                        .child_by_field_name("value")
+                        .map(|v| v.kind() == "arrow_function")
+                        .unwrap_or(false);
+                    if !is_arrow {
+                        continue;
+                    }
+                    if let Some(name_node) = child.child_by_field_name("name") {
+                        let fn_name = text_of(name_node);
+                        if fn_name.is_empty() {
+                            continue;
+                        }
+                        let node_id = format!("fn:{rel_path}:{fn_name}");
+                        let line = name_node.start_position().row + 1;
+                        out.nodes.push(AstNode {
+                            node_id,
+                            label: fn_name.clone(),
+                            node_type: "Function".to_string(),
+                            description: format!("Функция `{fn_name}` в {rel_path}"),
+                            file_path: rel_path.to_string(),
+                            line_start: line,
+                            line_end: line,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: format!("fn:{rel_path}:{fn_name}"),
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: node
+                                .utf8_text(src)
+                                .unwrap_or("")
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+        let mut c = node.walk();
+        if c.goto_first_child() {
+            loop {
+                let child = c.node();
+                walk_ts(child, src, rel_path, file_node_id, out);
                 if !c.goto_next_sibling() {
                     break;
                 }

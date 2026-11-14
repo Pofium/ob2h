@@ -596,3 +596,113 @@ fn dispatcher_routes_go_and_dart_to_treesitter() {
         assert!(out.nodes.iter().any(|n| n.node_type == "Function"), "{lang}: нет fn");
     }
 }
+
+// ——— Ф70.4: TS/JS mapper (CST → AstScanResult) ———
+
+/// TS: эталонные символы + superset (метод класса) + вызовы.
+#[test]
+fn ts_mapper_meets_golden() {
+    let mut res = map_lang_golden("ts", "source.ts");
+    for (name, kind) in [
+        ("TokenCache", "Class"),
+        ("loadSettings", "Function"),
+        ("runPipeline", "Function"),
+    ] {
+        assert!(
+            res.nodes.iter().any(|n| n.label == name && n.node_type == kind),
+            "TS символ {name} ({kind}) не найден"
+        );
+    }
+    // superset: метод класса — regex-бэкенд его не эмитил
+    assert!(
+        res.nodes.iter().any(|n| n.label == "refresh" && n.node_type == "Function"),
+        "метод класса (superset) не найден"
+    );
+    ob2h::project::ast::resolve_calls(&mut res);
+    let from = res.nodes.iter().find(|n| n.label == "runPipeline").map(|n| n.node_id.clone()).unwrap();
+    let to = res.nodes.iter().find(|n| n.label == "loadSettings").map(|n| n.node_id.clone()).unwrap();
+    assert!(
+        res.edges.iter().any(|e| e.source_node_id == from
+            && e.target_node_id == to
+            && e.label == "CALLS"),
+        "нет CALLS runPipeline → loadSettings"
+    );
+}
+
+/// TS: паритет в направлении миграции — все node_id regex-бэкенда сохраняются
+/// в tree-sitter выдаче (привязка памяти), mapper может добавлять (методы/стрелки).
+#[test]
+fn ts_mapper_regex_ids_are_subset() {
+    let golden = ob2h::project::ast_golden::load_embedded()
+        .unwrap()
+        .into_iter()
+        .find(|g| g.spec.language == "ts")
+        .unwrap();
+    let mut regex_res = AstScanResult::default();
+    AstCodeExtractor::new().parse_file("source.ts", &golden.source, &mut regex_res);
+    let ts_res = map_lang_golden("ts", "source.ts");
+    let ids_regex: HashSet<&str> = regex_res.nodes.iter().map(|n| n.node_id.as_str()).collect();
+    let ids_ts: HashSet<&str> = ts_res.nodes.iter().map(|n| n.node_id.as_str()).collect();
+    let missing: Vec<&str> = ids_regex.difference(&ids_ts).copied().collect();
+    assert!(
+        missing.is_empty(),
+        "node_id regex, потерянные в tree-sitter (привязка памяти!): {missing:?}"
+    );
+}
+
+/// TS: стрелки `const x = (...) =>` (superset), interface/type-alias,
+/// React BINDS_CLASS, HTTP-мосты.
+#[test]
+fn ts_mapper_superset_and_bridges() {
+    let src = r#"import { api } from './api';
+
+export interface User {
+    id: number;
+}
+
+export type UserId = string;
+
+export const loadUser = async (id: UserId) => {
+    return api(`/users/${id}`);
+};
+
+class Panel {
+    render(): string {
+        return '<div class="x"></div>';
+    }
+}
+"#;
+    let mut out = AstScanResult::default();
+    ts::parse_source("panel.tsx", src, "tsx", &mut out).expect("разбор tsx");
+
+    // interface и type-alias → interface:{rel}:{name} (зеркало ts_interface_re)
+    assert!(out.nodes.iter().any(|n| n.label == "User" && n.node_type == "Interface"));
+    assert!(out.nodes.iter().any(|n| n.label == "UserId" && n.node_type == "Interface"));
+    // стрелка (superset) + method_definition (superset)
+    assert!(
+        out.nodes.iter().any(|n| n.label == "loadUser" && n.node_type == "Function"),
+        "стрелочная функция (superset) не найдена"
+    );
+    assert!(
+        out.nodes.iter().any(|n| n.label == "render" && n.node_type == "Function"),
+        "метод класса (superset) не найден"
+    );
+    // IMPORTS из source-поля
+    assert!(
+        out.edges.iter().any(|e| e.label == "IMPORTS" && e.target_node_id == "module:./api"),
+        "IMPORTS не найден"
+    );
+}
+
+/// TSX-грамматика действительно подключена для .tsx/.jsx (диспетчер).
+#[test]
+fn dispatcher_routes_ts_and_tsx() {
+    for (rel, expected) in [("a.ts", "treesitter:ts"), ("b.tsx", "treesitter:tsx")] {
+        let src = "export function demo(): void {}\n";
+        let disp = AstParserDispatcher::new();
+        let mut out = AstScanResult::default();
+        let backend = disp.parse_source(rel, src, &mut out);
+        assert_eq!(backend, expected);
+        assert!(out.nodes.iter().any(|n| n.label == "demo"));
+    }
+}
