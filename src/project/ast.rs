@@ -52,7 +52,8 @@ pub struct AstEdge {
 }
 
 /// Ф39.1: замеченное место вызова (для последующего резолва type-pass'ом).
-#[derive(Debug, Clone)]
+/// Ord — для дедупа после CST+line-based проходов (71.1).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CallSite {
     pub rel_path: String,
     pub line: usize,

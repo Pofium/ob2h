@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 #[cfg_attr(not(feature = "treesitter"), allow(unused_imports))]
-use crate::project::ast::{AstCodeExtractor, AstEdge, AstNode, AstScanResult};
+use crate::project::ast::{AstCodeExtractor, AstEdge, AstNode, AstScanResult, CallSite};
 
 /// Унифицированный интерфейс бэкенда разбора одного файла.
 pub trait AstParserBackend: Send + Sync {
@@ -109,7 +109,7 @@ pub mod ts {
     }
 
     use crate::project::ast::{
-        collect_call_sites_standalone, split_rust_use, AstEdge, AstNode, AstScanResult,
+        collect_call_sites_standalone, split_rust_use, AstEdge, AstNode, AstScanResult, CallSite,
     };
 
     /// Грамматика дерева по имени языка (pub — кросс-проверки интеграционных тестов).
@@ -440,6 +440,9 @@ pub mod ts {
 
         // 3. Места вызовов для type-pass (тот же контракт, что у regex-пути).
         collect_call_sites_standalone(rel_path, content, crate::project::ast::RUST_CALL_SKIP, out);
+        // 71.1: дедуп мест вызовов после CST + line-based проходов
+        out.call_sites.sort();
+        out.call_sites.dedup();
     }
 
     /// Собрать карту «строка → (метод, путь)» из маршрутных атрибутов.
@@ -645,6 +648,29 @@ pub mod ts {
                     }
                 }
             }
+            "call_expression" => {
+                // 71.1: имя вызова — identifier (прямые) или field_expression.field
+                // (obj.method()); цепочки a.b().c() дают каждое звено. Ключевые
+                // слова (if/match/…) не являются call_expression — отсекаются
+                // структурно, skip-списки regex-пути не нужны.
+                if let Some(f) = node.child_by_field_name("function") {
+                    let name = match f.kind() {
+                        "identifier" => text_of(f),
+                        "field_expression" => f
+                            .child_by_field_name("field")
+                            .map(|n| text_of(n))
+                            .unwrap_or_default(),
+                        _ => String::new(),
+                    };
+                    if !name.is_empty() {
+                        out.call_sites.push(CallSite {
+                            rel_path: rel_path.to_string(),
+                            line: node.start_position().row + 1,
+                            name,
+                        });
+                    }
+                }
+            }
             _ => {}
         }
         // Рекурсия (impl/mod bodies и прочие контейнеры).
@@ -679,6 +705,8 @@ pub mod ts {
 
         // Места вызовов для type-pass (словарь python).
         collect_call_sites_standalone(rel_path, content, crate::project::ast::PY_CALL_SKIP, out);
+        out.call_sites.sort();
+        out.call_sites.dedup();
     }
 
     /// Собрать карту «строка → (метод, путь)» из декораторов `@app.get("/x")`
@@ -981,6 +1009,27 @@ pub mod ts {
                     }
                 }
             }
+            "call" => {
+                // 71.1: function — identifier (прямые) или attribute.attribute
+                // (obj.method())
+                if let Some(f) = node.child_by_field_name("function") {
+                    let name = match f.kind() {
+                        "identifier" => text_of(f),
+                        "attribute" => f
+                            .child_by_field_name("attribute")
+                            .map(|n| text_of(n))
+                            .unwrap_or_default(),
+                        _ => String::new(),
+                    };
+                    if !name.is_empty() {
+                        out.call_sites.push(CallSite {
+                            rel_path: rel_path.to_string(),
+                            line: node.start_position().row + 1,
+                            name,
+                        });
+                    }
+                }
+            }
             _ => {}
         }
         let mut cursor = node.walk();
@@ -1068,6 +1117,8 @@ pub mod ts {
         let src = content.as_bytes();
         walk_go(root, src, rel_path, &file_node_id, out);
         collect_call_sites_standalone(rel_path, content, crate::project::ast::GO_CALL_SKIP, out);
+        out.call_sites.sort();
+        out.call_sites.dedup();
     }
 
     fn walk_go(node: Node, src: &[u8], rel_path: &str, file_node_id: &str, out: &mut AstScanResult) {
@@ -1170,18 +1221,39 @@ pub mod ts {
                                 .unwrap_or("")
                                 .trim()
                                 .to_string(),
-                            provenance: "EXTRACTED".to_string(),
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-        let mut c = node.walk();
-        if c.goto_first_child() {
-            loop {
-                let child = c.node();
-                walk_go(child, src, rel_path, file_node_id, out);
+                             provenance: "EXTRACTED".to_string(),
+                         });
+                     }
+                 }
+             }
+             "call_expression" => {
+                 // 71.1: function — identifier или selector_expression.sel
+                 // (pkg.Func / obj.Method)
+                 if let Some(f) = node.child_by_field_name("function") {
+                     let name = match f.kind() {
+                         "identifier" => text_of(f),
+                         "selector_expression" => f
+                             .child_by_field_name("sel")
+                             .map(|n| text_of(n))
+                             .unwrap_or_default(),
+                         _ => String::new(),
+                     };
+                     if !name.is_empty() {
+                         out.call_sites.push(CallSite {
+                             rel_path: rel_path.to_string(),
+                             line: node.start_position().row + 1,
+                             name,
+                         });
+                     }
+                 }
+             }
+             _ => {}
+         }
+         let mut c = node.walk();
+         if c.goto_first_child() {
+             loop {
+                 let child = c.node();
+                 walk_go(child, src, rel_path, file_node_id, out);
                 if !c.goto_next_sibling() {
                     break;
                 }
@@ -1199,6 +1271,8 @@ pub mod ts {
         let src = content.as_bytes();
         walk_dart(root, src, rel_path, &file_node_id, out);
         collect_call_sites_standalone(rel_path, content, crate::project::ast::DART_CALL_SKIP, out);
+        out.call_sites.sort();
+        out.call_sites.dedup();
     }
 
     fn walk_dart(
@@ -1356,6 +1430,20 @@ pub mod ts {
                     }
                 }
             }
+            "method_invocation" => {
+                // 71.1: поле method — прямые вызовы и obj.method() (цепочки
+                // a.b().c() дают каждое звено); конструкторы без поля пропускаем
+                if let Some(m) = node.child_by_field_name("method") {
+                    let name = text_of(m);
+                    if !name.is_empty() {
+                        out.call_sites.push(CallSite {
+                            rel_path: rel_path.to_string(),
+                            line: node.start_position().row + 1,
+                            name,
+                        });
+                    }
+                }
+            }
             _ => {}
         }
         let mut c = node.walk();
@@ -1386,6 +1474,8 @@ pub mod ts {
         crate::project::ast::collect_gql_fields_standalone(rel_path, content, out);
         crate::project::ast::collect_ts_binds_class(content, &file_node_id, out);
         collect_call_sites_standalone(rel_path, content, crate::project::ast::TS_CALL_SKIP, out);
+        out.call_sites.sort();
+        out.call_sites.dedup();
     }
 
     fn walk_ts(
@@ -1560,6 +1650,27 @@ pub mod ts {
                                 .trim()
                                 .to_string(),
                             provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+            }
+            "call_expression" => {
+                // 71.1: function — identifier или member_expression.property
+                // (obj.method()); property_identifier/private_property_identifier
+                if let Some(f) = node.child_by_field_name("function") {
+                    let name = match f.kind() {
+                        "identifier" => text_of(f),
+                        "member_expression" => f
+                            .child_by_field_name("property")
+                            .map(|n| text_of(n))
+                            .unwrap_or_default(),
+                        _ => String::new(),
+                    };
+                    if !name.is_empty() {
+                        out.call_sites.push(CallSite {
+                            rel_path: rel_path.to_string(),
+                            line: node.start_position().row + 1,
+                            name,
                         });
                     }
                 }

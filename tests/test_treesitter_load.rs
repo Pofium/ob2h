@@ -958,3 +958,38 @@ Future<User> fetchUser(api) => api.get('/users/1');
         "stub-режим не должен строить ROUTE"
     );
 }
+
+// ——— Ф71.1: CST-извлечение вызовов ———
+
+/// Цепочки a.b().c() дают каждое звено; ключевые слова отсекаются структурно;
+/// дедуп CST+line-based не даёт дублей.
+#[test]
+fn cst_call_sites_chains_and_methods() {
+    let src = r#"pub fn run() {
+    let v = vec![1, 2, 3];
+    let x = build_cache(&cfg).len();
+    let y = store.fetch("t").unwrap();
+    if x > 0 {
+        log::info!("x={}", x);
+    }
+}
+"#;
+    let mut out = AstScanResult::default();
+    ts::parse_source("c.rs", src, "rust", &mut out).expect("разбор");
+    let names: Vec<&str> = out.call_sites.iter().map(|s| s.name.as_str()).collect();
+    for want in ["build_cache", "len", "fetch", "unwrap"] {
+        assert!(
+            names.contains(&want),
+            "звено цепочки {want} не найдено; sites: {names:?}"
+        );
+    }
+    assert!(!names.contains(&"if"), "ключевое слово не должно быть вызовом");
+    assert!(!names.contains(&"let"), "ключевое слово не должно быть вызовом");
+    assert!(!names.contains(&"vec"), "макрос не должен быть вызовом");
+    // дедуп: нет полных дублей мест вызовов
+    let mut sorted = out.call_sites.clone();
+    sorted.sort();
+    let before = sorted.len();
+    sorted.dedup();
+    assert_eq!(before, sorted.len(), "дубли мест вызовов");
+}
