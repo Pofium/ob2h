@@ -60,6 +60,17 @@
   Tombstone-записи верифицируются наравне с живыми; отсутствие метаданных — честный
   `provenance: none`, не ошибка. Аннотация readOnlyHint.
 
+- **Аудит-леджер (Фаза 68):** 1 новый MCP-инструмент (**контракт 54 → 55**):
+  `memory_audit(operation?, limit=50)` — просмотр append-only журнала операций
+  (actor/action/targets/details, аннотация readOnlyHint); CLI `ob2h audit [--action …]`.
+  Инструментированы: `memory_forget` (**новый опциональный аргумент `reason`** —
+  governance-семантика, контракт аддитивен), `memory_feedback`, `memory_merge`,
+  `slot_*`/`lesson_*` (с Ф64/65), `workspace_write` (имя файла и размер, контент — нет),
+  `secrets_set/get/delete` (**только имена** — значения секретов в леджер не пишутся
+  никогда, ADR-21). Запись fail-open (ошибка аудита не валит операцию). Ретеншн:
+  недельная ротация в autodream — записи старше 90 дней вычищаются (курсор kv
+  `audit_prune_last_ts`); в бандлы синка audit_log не входит (как и раньше).
+
 ## [1.9.2] - 2026-11-03
 
 ### Added

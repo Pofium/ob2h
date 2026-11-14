@@ -306,10 +306,10 @@ Seed-дефолты слотов OB2H (создаются лениво при п
 
 ### Фаза 68 — Аудит-леджер (оценка 1 день)
 
-- [ ] **68.1** `src/lifecycle/audit.rs`: единая точка `record_audit(actor, action, targets, details, tool)`; инструментирование существующих операций: `memory_forget` (+ новый опц. аргумент `reason` — governance-семантика, контракт аддитивен), `memory_feedback`, `memory_merge`, `lesson_*`, `slot_*`, `secrets_set/get/delete`, `workspace_write`.
-- [ ] **68.2** MCP `memory_audit(operation?, limit=50)` — просмотр леджера (последние записи, фильтр по action); CLI `ob2h audit [--action …]`.
-- [ ] **68.3** Ретеншн: записи старше 90 дней вычищаются в maintenance (id-шники, не контент); в бандлы синка не входит.
-- **DoD:** 1 инструмент + reason у memory_forget; каждая операция из 68.1 оставляет запись; ротация не трогает свежие.
+- [x] **68.1** `src/lifecycle/audit.rs`: единая точка `record()` (с Ф64) + `AuditEntry`/`list()`/`prune()`; инструментирование: `memory_forget` (**новый опц. аргумент `reason`** — governance, контракт аддитивен), `memory_feedback`, `memory_merge`, `slot_*`/`lesson_*` (с Ф64/65), `secrets_set/get/delete` (только имена, ADR-21), `workspace_write` (имя+размер, контент нет); запись fail-open (helper `audit_op` в server.rs).
+- [x] **68.2** MCP `memory_audit(operation?, limit=50, readOnly)` (контракт 54 → 55); CLI `ob2h audit [--action …]` (через call_tool).
+- [x] **68.3** Ретеншн: недельная ротация в autodream — старше 90 дней вычищаются (порог в том же RFC3339-формате, лексикографическое сравнение); в бандлы синка audit_log не входит (проверено — sync экспортирует только memories/nodes/edges/projects/links/lessons/slots).
+- **DoD:** 1 инструмент + reason у memory_forget; каждая операция из 68.1 оставляет запись; ротация не трогает свежие — **выполнено** (3 теста: инструментирование+reason+утечка-контента-нет, secrets-имена-без-значений, ротация 120-дневной записи при живой свежей).
 
 ### Фаза 69 — Скрабинг секретов, bench-метрики recall-all/any-hit (оценка 1 день)
 
