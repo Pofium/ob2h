@@ -15,7 +15,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use super::audit;
+use super::timeline::SessionEntry;
 use crate::db::{utcnow, Database};
+use crate::workspace::Workspace;
 
 /// Дефолтный лимит содержимого слота (символов).
 pub const DEFAULT_SIZE_LIMIT: i64 = 2000;
@@ -445,4 +447,107 @@ impl SlotsService {
         )?;
         Ok(true)
     }
+}
+
+/// Ф66.4 (OB2H_DREAM_SLOTS, дефолт off): dream-слот-рефлекс — порт
+/// `slot-reflect` agentmemory (§3.3). Свежие TODO из daily-логов текущего дня
+/// → global `pending_items` (append недостающих, cap 20 строк); счётчики дня
+/// (пары диалога, строки с ошибками) → global `session_guidance` (replace).
+/// Global-скоуп — у дрима нет проектного контекста (осознанно; записано в
+/// PLAN.md §6).
+pub fn dream_reflect(ws: &Workspace, db: &Database) -> anyhow::Result<serde_json::Value> {
+    let svc = SlotsService::new(db.clone());
+    let entries = crate::lifecycle::timeline::load_entries(ws)?;
+    let today = utcnow()[..10].to_string();
+    let todays: Vec<&SessionEntry> = entries
+        .iter()
+        .filter(|e| e.timestamp.starts_with(&today))
+        .collect();
+
+    let mut todos: Vec<String> = Vec::new();
+    let mut error_lines = 0usize;
+    for e in &todays {
+        for text in [&e.user_text, &e.assistant_text] {
+            for line in text.lines() {
+                let lower = line.to_lowercase();
+                if lower.contains("todo") {
+                    todos.push(line.trim().chars().take(200).collect());
+                }
+                if lower.contains("ошибка") || lower.contains("error") {
+                    error_lines += 1;
+                }
+            }
+        }
+    }
+    todos.sort();
+    todos.dedup();
+
+    // pending_items: append недостающих строк (глобальный скоуп, создаётся при нужде)
+    let mut appended = 0usize;
+    let existing = svc
+        .get("pending_items", None)
+        .ok()
+        .map(|s| s.content)
+        .unwrap_or_default();
+    let fresh: Vec<String> = todos
+        .iter()
+        .filter(|t| !existing.contains(t.as_str()))
+        .take(20)
+        .cloned()
+        .collect();
+    if !fresh.is_empty() {
+        let add = fresh.join("\n");
+        let res = if existing.trim().is_empty() {
+            svc.create(
+                "pending_items",
+                &add,
+                None,
+                Some("Незавершённые задачи, обещания, TODO"),
+                true,
+                "global",
+                None,
+                "dream",
+                "dream_reflect",
+            )
+            .map(|_| ())
+        } else {
+            svc.append("pending_items", None, &add, "dream", "dream_reflect")
+                .map(|_| ())
+        };
+        // переполнение слота не роняет рефлекс: остальное доедет в следующий дрим
+        if res.is_ok() {
+            appended = fresh.len();
+        }
+    }
+
+    // session_guidance: replace со счётчиками дня (глобальный скоуп)
+    let summary = format!(
+        "последний рефлекс: {}\n- пар диалога сегодня: {}\n- строк с упоминанием ошибок: {}\n- TODO найдено: {}",
+        utcnow(),
+        todays.len(),
+        error_lines,
+        todos.len()
+    );
+    let guided = if svc.get("session_guidance", None).is_ok() {
+        svc.replace("session_guidance", None, &summary, "dream", "dream_reflect")
+    } else {
+        svc.create(
+            "session_guidance",
+            &summary,
+            None,
+            Some("Счётчики паттернов дня (из дрима)"),
+            true,
+            "global",
+            None,
+            "dream",
+            "dream_reflect",
+        )
+    };
+
+    Ok(serde_json::json!({
+        "entries_scanned": todays.len(),
+        "todos_found": todos.len(),
+        "todos_appended": appended,
+        "guidance_updated": guided.is_ok(),
+    }))
 }

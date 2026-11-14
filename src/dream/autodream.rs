@@ -120,6 +120,14 @@ impl AutoDreamWorker {
                 // в отчёте, БЕЗ удалений — ADR-11)
                 let _ = self.lessons.decay_sweep("dream");
 
+                // Ф66.4: dream-слот-рефлекс (TODO/паттерны дня → слоты), OB2H_DREAM_SLOTS
+                if std::env::var("OB2H_DREAM_SLOTS")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false)
+                {
+                    let _ = crate::lifecycle::slots::dream_reflect(&self.workspace, &self.db);
+                }
+
                 self.prune_daily();
                 self.release_lock();
 
