@@ -84,6 +84,29 @@ pub mod ts {
 
     use tree_sitter::{Node, Parser};
 
+    /// Ф70.9 (PLAN_v2.0): порог доли ERROR-узлов в CST, выше которого файл
+    /// уходит в regex (tree-sitter на частично битых файлах работает толерантно —
+    /// fallback только для сильно сломанных).
+    pub const ERROR_FALLBACK_FRACTION: f64 = 0.10;
+
+    /// Доля ERROR-узлов в CST: (error_nodes, total_nodes).
+    fn error_fraction(root: Node) -> (usize, usize) {
+        fn count(node: Node, errors: &mut usize, total: &mut usize) {
+            if node.is_error() {
+                *errors += 1;
+            }
+            *total += 1;
+            let mut c = node.walk();
+            for child in node.children(&mut c) {
+                count(child, errors, total);
+            }
+        }
+        let mut errors = 0usize;
+        let mut total = 0usize;
+        count(root, &mut errors, &mut total);
+        (errors, total)
+    }
+
     use crate::project::ast::{
         collect_call_sites_standalone, split_rust_use, AstEdge, AstNode, AstScanResult,
     };
@@ -218,10 +241,13 @@ pub mod ts {
             anyhow::bail!("parser.parse вернул None для {rel_path}");
         };
         let root = tree.root_node();
-        // 70.9: регламент fallback — ERROR-узлы в CST уводят файл в regex.
-        // Долевой порог (>10% ERROR) — точная политика 70.9; пока строгий вариант.
-        if root.has_error() {
-            anyhow::bail!("CST `{rel_path}` содержит ERROR-узлы — fallback на regex");
+        // 70.9: регламент fallback — доля ERROR-узлов > 10% уводит файл в regex;
+        // меньшая доля допустима (tree-sitter парсит толерантно).
+        let (err_nodes, total_nodes) = error_fraction(root);
+        if total_nodes > 0 && err_nodes as f64 / total_nodes as f64 > ERROR_FALLBACK_FRACTION {
+            anyhow::bail!(
+                "CST `{rel_path}`: {err_nodes}/{total_nodes} ERROR-узлов (> {ERROR_FALLBACK_FRACTION}) — fallback на regex"
+            );
         }
         match lang {
             "rust" => {

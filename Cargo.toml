@@ -63,6 +63,9 @@ tree-sitter-dart = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tempfile = "3.17"
+# Ф70.10 (PLAN_v2.0): fuzz-гарантия отсутствия паник маппера CST→AST
+# на синтаксически некорректном коде (только dev, в рантайм не попадает).
+proptest = "1"
 
 # Ф70.1: проверка живости pid для lockfile viewer. Оба крейта уже в дереве
 # как транзитивные (Cargo.lock) — новых скачиваний не добавляют.
