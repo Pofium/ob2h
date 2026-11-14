@@ -1,0 +1,4 @@
+- CLI commands are organized as subcommands under a single `ob2h` binary rather than separate executables, with `serve`, `bench`, `doctor`, `sync`, `plugin`, `skill`, `secrets`, `update`, and `ralph` as top-level groups.
+- Configuration flows through environment variables prefixed with `OB2H_` (see README table) read via dotenvy, with sensible defaults so the tool runs zero-config.
+- All persistent state lives under `data/` (SQLite DB, memory files, logs, backups, sync inbox/outbox) controlled by `OB2H_DATA_DIR`, never touching the repository tree.
+- Cross-language consumers (Hermes, DSH/cordis) interact exclusively through the Rust binary's CLI/MCP surface — no direct database access from Python.

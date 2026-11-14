@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: docs_architecture
+title: OB2H Architecture Documentation & Design Records
+scope:
+    - docs/
+source_files: []
+depends_on: []
+related_to:
+    - path: core_engine

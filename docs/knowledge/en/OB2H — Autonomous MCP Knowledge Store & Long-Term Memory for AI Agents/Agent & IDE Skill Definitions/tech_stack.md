@@ -1,0 +1,1 @@
+Markdown with YAML frontmatter; not a buildable package — content is consumed as agent skills.

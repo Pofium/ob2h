@@ -1,0 +1,1 @@
+Node tests run via `npm test` inside `plugin/dsh-ob2h/` (`node --test "tests/*.test.js"`); the Python plugin expects an `ob2h` binary discoverable via `PATH`, `OB2H_BIN`, or `$HERMES_HOME/ob2h.json` and reads LLM keys from `HERMES_HOME/.env` / `DEEPSEEK_API_KEY`.

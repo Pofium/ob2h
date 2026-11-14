@@ -1,0 +1,1 @@
+Dual-language plugins that wrap the Rust ob2h binary as a long-term memory provider for both the Hermes Python agent and the DeepSeek Harness cordis plugin.

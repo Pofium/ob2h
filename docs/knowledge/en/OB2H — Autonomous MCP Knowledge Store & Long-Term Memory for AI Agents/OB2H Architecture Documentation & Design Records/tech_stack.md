@@ -1,0 +1,1 @@
+Plain Markdown documentation; no framework. The documents themselves reference the project's Rust/Candle/SQLite stack, OpenAI-compatible LLM API, and scp-based SSH transport for sync.

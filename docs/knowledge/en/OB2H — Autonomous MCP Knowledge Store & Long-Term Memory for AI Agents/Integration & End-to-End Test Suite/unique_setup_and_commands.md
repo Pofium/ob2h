@@ -1,0 +1,1 @@
+Tests run via `cargo test --test <name>` or `cargo test`; they require no external services because embedding uses `FakeEmbedding` (see `test_bench.rs` comment referencing §7 AGENTS.md) and all persistence goes to in-memory or temp-directory SQLite databases created by `tempfile::tempdir()`.

@@ -1,0 +1,4 @@
+- Versioned evolution is recorded as additive addendums appended to `ARCHITECTURE.md` (v1.3/v1.4/v1.5/v1.7 sections) rather than rewriting prior text, preserving the base v0.9 description.
+- Schema changes are described alongside their migration label (M1–M7+) and explicitly marked as additive/downgrade-safe (new columns with DEFAULTs), mirroring the actual `src/db/schema.rs` migration strategy.
+- Cross-documentation uses relative Markdown headings and file paths (e.g. `PLAN.md §6`, `HERMES_INTEGRATION.md`) instead of absolute URLs, keeping links valid inside the repo tree.
+- Draft GitHub issues in `issues/DRAFT_ISSUES.md` follow a fixed template: **Labels**, **Title**, **Что происходит**, **Почему это важно**, **Причина**, **Ожидаемое поведение**, **Как воспроизвести**, **Возможное решение**.

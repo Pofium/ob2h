@@ -1,0 +1,4 @@
+- Each agent directory contains exactly one `SKILL.md` with a YAML frontmatter block declaring `name` and `description` fields before any prose.
+- Files follow a fixed section order: Installation/Environment, OB2H Integration, Key skill commands, and Pitfalls/Notes.
+- OB2H integration entries consistently reference the MCP server registration under `mcpServers.ob2h` pointing at `ob2h.exe serve`, plus the `ob2h agent install --agent <name>` and `ob2h agent status` commands.
+- Paths are written relative to the user home (`~/.claude/`, `~/.zcode/`, `~/.codeium/windsurf/`) rather than absolute Windows paths, except when documenting the actual installed binary locations.

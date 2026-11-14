@@ -1,0 +1,1 @@
+Rust `cargo test` with `tokio::test` for async cases; `rusqlite` for raw SQL assertions inside tests; `tempfile` for isolated filesystem fixtures; `flate2` for crafting malformed sync bundles; `serde_json` for MCP tool payloads.

@@ -1,0 +1,4 @@
+- Config mutation scripts back up the target file to `<path>.bak` before reading/writing, preserving the original on failure.
+- YAML editing is done line-by-line using indentation-aware state flags (`inOb2h`) rather than a YAML parser, matching both bare keys and quoted variants of the `ob2h:` block.
+- Scripts set `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` and use `Write-Host` with explicit foreground colors to produce consistent console output across locales.
+- Cross-platform orchestration goes through thin wrappers: CMD `.bat` files delegate to PowerShell, and the PowerShell update script delegates to a Python SSH bridge instead of invoking SSH directly.

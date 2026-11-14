@@ -1,0 +1,5 @@
+- Every runtime setting is loaded in `Settings::from_env()` as `env::var("OB2H_<NAME>").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT)`, keeping a single source of truth for all `OB2H_*` knobs.
+- Feature modules are declared once in `lib.rs` via `pub mod <name>;` and consumed from `main.rs` through the `ob2h::` crate prefix rather than direct paths.
+- Subcommand handlers in `main.rs` follow a uniform shape: match on `Commands::*`, delegate to `ob2h::cli::<module>::*` functions, and print results via `println!` / `eprintln!` instead of returning values.
+- Long-running side effects (update check on start, AutoDream, AutoSync) are launched as detached `tokio::spawn` tasks so they do not block the main serve loop.
+- Hermes integration code uses `include_str!("../plugin/..." | "../skills/...")` to bake plugin Python sources and skill templates directly into the binary, then writes them to `$HERMES_HOME` during install.

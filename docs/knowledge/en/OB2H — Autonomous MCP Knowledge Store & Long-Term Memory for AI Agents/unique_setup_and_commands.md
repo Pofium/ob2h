@@ -1,0 +1,1 @@
+Root-level `install.bat` builds the optimized `ob2h.exe`, backs up Hermes config, and registers the MCP server; `cargo build --release` produces the single ~15 MB binary; `--features gui` enables the native PIN/viewer window (headless falls back to terminal). Agent onboarding is unified via `ob2h agent install --agent all` followed by `ob2h doctor --fix`.

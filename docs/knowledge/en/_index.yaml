@@ -1,0 +1,110 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: en-US
+branch: main
+nodes_managed: true
+exported_at: "2026-11-14T12:47:38Z"
+modules:
+    "":
+        dir_name: OB2H — Autonomous MCP Knowledge Store & Long-Term Memory for AI Agents
+        title: OB2H — Autonomous MCP Knowledge Store & Long-Term Memory for AI Agents
+        scope:
+            - README.md
+            - Cargo.toml
+            - AGENTS.md
+            - PLAN.md
+            - .gitignore
+            - 2_analisis.md
+            - CHANGELOG.md
+            - LICENSE
+            - PLAN_v1.0.md
+            - PLAN_v1.2.md
+            - PLAN_v1.3.md
+            - PLAN_v1.4.md
+            - PLAN_v1.6.md
+            - PLAN_v1.7.md
+            - PLAN_v1.9.9.md
+            - PLAN_v1.9.md
+            - PLAN_v2.0.md
+            - Ralph Knowledge Layer (ob2h)_v1.2.3.md
+            - walkthrough.md
+        source_files: []
+        children:
+            - core_engine
+            - docs_architecture
+            - integration_tests
+            - plugins
+            - scripts_deploy
+            - skills_catalog
+        depends_on: []
+        related_to: []
+    core_engine:
+        dir_name: OB2H Core Engine — Binary Entry Point, App Context & Settings
+        title: OB2H Core Engine — Binary Entry Point, App Context & Settings
+        scope:
+            - src/lib.rs
+            - src/main.rs
+            - src/config.rs
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: docs_architecture
+            - path: integration_tests
+            - path: plugins
+            - path: scripts_deploy
+            - path: skills_catalog
+    docs_architecture:
+        dir_name: OB2H Architecture Documentation & Design Records
+        title: OB2H Architecture Documentation & Design Records
+        scope:
+            - docs/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: core_engine
+    integration_tests:
+        dir_name: Integration & End-to-End Test Suite
+        title: Integration & End-to-End Test Suite
+        scope:
+            - tests/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: core_engine
+    plugins:
+        dir_name: OB2H Long-Term Memory Plugins (Hermes & DeepSeek Harness)
+        title: OB2H Long-Term Memory Plugins (Hermes & DeepSeek Harness)
+        scope:
+            - plugin/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: core_engine
+            - path: scripts_deploy
+    scripts_deploy:
+        dir_name: OB2H Deployment & Sync Scripts
+        title: OB2H Deployment & Sync Scripts
+        scope:
+            - scripts/
+            - install.bat
+            - uninstall.bat
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: core_engine
+            - path: plugins
+    skills_catalog:
+        dir_name: Agent & IDE Skill Definitions
+        title: Agent & IDE Skill Definitions
+        scope:
+            - skills/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: core_engine

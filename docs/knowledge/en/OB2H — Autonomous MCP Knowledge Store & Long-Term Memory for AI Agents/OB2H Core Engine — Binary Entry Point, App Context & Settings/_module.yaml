@@ -1,0 +1,15 @@
+schema_version: 1
+module_path: core_engine
+title: OB2H Core Engine — Binary Entry Point, App Context & Settings
+scope:
+    - src/lib.rs
+    - src/main.rs
+    - src/config.rs
+source_files: []
+depends_on: []
+related_to:
+    - path: docs_architecture
+    - path: integration_tests
+    - path: plugins
+    - path: scripts_deploy
+    - path: skills_catalog

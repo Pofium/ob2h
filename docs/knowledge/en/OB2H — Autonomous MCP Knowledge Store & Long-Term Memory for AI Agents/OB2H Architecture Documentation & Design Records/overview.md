@@ -1,0 +1,1 @@
+Authoritative design documentation for the OB2H Rust MCP knowledge store — architecture, sync protocol, Hermes integration, AST scanner registry, and draft GitHub issues.

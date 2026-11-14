@@ -1,0 +1,1 @@
+Rust binary built with `tokio` async runtime, `clap` for CLI parsing, `tracing` + `tracing-subscriber`/`tracing-appender` for logging, `dotenvy` for `.env` loading, `anyhow` for error propagation; integrates with an external Python-based Hermes agent via embedded plugin assets (`include_str!` of `../plugin/ob2h/*`) and a templated skill markdown.

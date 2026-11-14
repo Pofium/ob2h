@@ -1,0 +1,1 @@
+No build/test commands live here. To materialize the draft issues into GitHub, run the `gh issue create` or `curl` snippets at the bottom of `docs/issues/DRAFT_ISSUES.md` (requires `gh auth login` or a `repo`-scoped token).

@@ -1,0 +1,26 @@
+schema_version: 1
+module_path: ""
+title: OB2H — Autonomous MCP Knowledge Store & Long-Term Memory for AI Agents
+scope:
+    - README.md
+    - Cargo.toml
+    - AGENTS.md
+    - PLAN.md
+    - .gitignore
+    - 2_analisis.md
+    - CHANGELOG.md
+    - LICENSE
+    - PLAN_v1.0.md
+    - PLAN_v1.2.md
+    - PLAN_v1.3.md
+    - PLAN_v1.4.md
+    - PLAN_v1.6.md
+    - PLAN_v1.7.md
+    - PLAN_v1.9.9.md
+    - PLAN_v1.9.md
+    - PLAN_v2.0.md
+    - Ralph Knowledge Layer (ob2h)_v1.2.3.md
+    - walkthrough.md
+source_files: []
+depends_on: []
+related_to: []

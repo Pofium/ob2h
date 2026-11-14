@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: plugins
+title: OB2H Long-Term Memory Plugins (Hermes & DeepSeek Harness)
+scope:
+    - plugin/
+source_files: []
+depends_on: []
+related_to:
+    - path: core_engine
+    - path: scripts_deploy

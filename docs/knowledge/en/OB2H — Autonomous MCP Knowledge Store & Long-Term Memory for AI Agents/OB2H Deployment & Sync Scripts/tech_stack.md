@@ -1,0 +1,1 @@
+PowerShell (Windows installer + scheduled task), bash (VPS update bridge), systemd (timer+service unit), and a Python SSH bridge (`hermes/vps_bridge.py`) invoked from the update script.

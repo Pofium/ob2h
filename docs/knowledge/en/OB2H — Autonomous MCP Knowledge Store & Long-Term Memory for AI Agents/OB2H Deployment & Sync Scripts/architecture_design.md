@@ -1,0 +1,6 @@
+The module is organized by target platform:
+- Root `install.bat` / `uninstall.bat` are thin CMD wrappers that invoke the PowerShell installers under `scripts/`, setting UTF-8 codepage and bypassing execution policy.
+- `scripts/install_hermes.ps1` and `scripts/uninstall_hermes.ps1` edit a Hermes `config.yaml` (default `%USERPROFILE%\AppData\Local\hermes\config.yaml`) by stripping any existing `ob2h:` block and re-inserting it with `serve` args plus `OB2H_*` environment variables; they back up the config to `.bak` before mutating it.
+- `scripts/pc/sync-task.ps1` registers a Windows Scheduled Task (`ob2h-sync`, daily at 05:30) that runs `ob2h sync push/pull/status --peer vps`; `scripts/pc/peers.example.json` provides the peer definition used by the sync pair.
+- `scripts/pc/update_vps_ob2h.sh` is a one-shot bridge script that uses a Python `vps_bridge.py` over SSH to stop the running `ob2h serve`, install a freshly built binary into `/usr/local/bin/ob2h`, and verify the version — designed to run from MSYS Git Bash on Windows.
+- `scripts/vps/` contains the systemd side: `ob2h-sync.service` (oneshot, applies inbox bundles then exports to peer `pc`) and `ob2h-sync.timer` (daily at 04:30), driven by the README's installation instructions. Dependency direction is strictly PC-initiated: the VPS never initiates connections because it sits behind NAT.

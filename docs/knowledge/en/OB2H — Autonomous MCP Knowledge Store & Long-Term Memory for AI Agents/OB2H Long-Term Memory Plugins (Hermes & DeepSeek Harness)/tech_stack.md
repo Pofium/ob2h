@@ -1,0 +1,1 @@
+Python plugin uses only stdlib (`threading`, `queue`, `subprocess`-via `_rpc.py`) and targets the `agent.memory_provider.MemoryProvider` interface; Node.js plugin is ESM-only (`"type": "module"`, `engines.node >= 20`) and depends solely on built-in `node:` modules (`crypto`, `fs`, `path`).

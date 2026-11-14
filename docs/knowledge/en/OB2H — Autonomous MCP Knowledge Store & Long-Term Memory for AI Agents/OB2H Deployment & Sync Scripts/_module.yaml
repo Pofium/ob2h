@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: scripts_deploy
+title: OB2H Deployment & Sync Scripts
+scope:
+    - scripts/
+    - install.bat
+    - uninstall.bat
+source_files: []
+depends_on: []
+related_to:
+    - path: core_engine
+    - path: plugins

@@ -1,0 +1,1 @@
+Platform-specific deployment and synchronization scripts for OB2H, covering Windows Hermes integration, PC-to-VPS sync scheduling, and systemd service definitions.

@@ -1,0 +1,1 @@
+Rust integration and end-to-end tests exercising ob2h's database, memory, graph, sync, MCP tooling, secrets, lifecycle, and CLI features against real SQLite and temp directories.

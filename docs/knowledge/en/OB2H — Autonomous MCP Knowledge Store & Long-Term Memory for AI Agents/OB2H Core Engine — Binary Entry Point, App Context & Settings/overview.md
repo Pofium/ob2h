@@ -1,0 +1,1 @@
+Rust binary entry point for the ob2h CLI that wires configuration, application context, background workers, and all subcommands (serve, bench, doctor, sync, vec0, update, plugin/skill install).

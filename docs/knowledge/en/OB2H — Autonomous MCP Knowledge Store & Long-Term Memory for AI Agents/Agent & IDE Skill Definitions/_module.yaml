@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: skills_catalog
+title: Agent & IDE Skill Definitions
+scope:
+    - skills/
+source_files: []
+depends_on: []
+related_to:
+    - path: core_engine

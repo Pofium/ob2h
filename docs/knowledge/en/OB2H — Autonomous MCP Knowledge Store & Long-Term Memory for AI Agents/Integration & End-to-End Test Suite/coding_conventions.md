@@ -1,0 +1,6 @@
+- Each test file is a standalone Cargo test binary importing `ob2h::...` directly rather than sharing a common test harness.
+- Async tests are annotated with `#[tokio::test]` and use `.await` on service methods like `memory.save`, `sync.import_file`, and `server.call_tool`.
+- Isolation is achieved by creating a fresh `tempfile::tempdir()` per test and passing its path into `Settings::from_env()` before calling `init_app`.
+- MCP tool testing goes through `McpServer::call_tool` with JSON payloads built via `serde_json::json!` and asserts on the returned string (e.g. `starts_with("saved key=")`, `contains("nodes=")`).
+- Database state is verified both through public APIs and raw SQL via `db.with_conn(|conn| ...)` using `rusqlite` for precise schema/row checks.
+- Feature flags gate platform-specific behavior with `#[cfg(feature = "gui")]` blocks around viewer-related assertions.

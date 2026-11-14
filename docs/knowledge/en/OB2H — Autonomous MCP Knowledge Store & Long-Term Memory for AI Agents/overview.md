@@ -1,0 +1,1 @@
+Rust workspace that ships a single `ob2h` binary exposing an MCP knowledge store, long-term memory, AST graph, sync, secrets vault, and agent integrations consumed by Python agents via plugins.

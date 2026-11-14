@@ -1,0 +1,5 @@
+- Each plugin implements its own `Ob2hRpc` transport over stdio JSON-RPC rather than sharing code between Python and JS, keeping the two hosts decoupled.
+- Child-process failures are treated as non-fatal: prefetch/write paths catch exceptions, log warnings, and continue (fail-open design).
+- Turn capture accumulates full message prefixes keyed by `session_id` so the server deduplicates writes by position instead of re-sending entire histories.
+- Configuration is resolved through a priority chain of sources (explicit config → env vars → file → PATH/default) in both the Python `_binary_candidates`/`_llm_child_env` helpers and the JS `resolveOptions` defaults.
+- Tests mock the child process via a local `fake_server` script and assert against it, avoiding any real `ob2h` binary during unit runs.

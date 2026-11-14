@@ -1,0 +1,1 @@
+Per-agent SKILL.md documentation files describing OB2H MCP integration, environment setup, and skill commands for each supported coding agent/IDE.
