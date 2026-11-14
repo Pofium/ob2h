@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -449,6 +449,145 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS audit_log_action_idx ON audit_log(action, id);
 "#;
 
+/// M12 (v2.0, Фазы 71.3/72b.2/72b.5/73.9 — вся схема v12 в одной транзакции):
+/// (1) словарь provenance v2.0 — EXTRACTED/ast → SYNTAX, INFERRED → HEURISTIC
+///     (аддитивные GIT_HISTORY/manual не трогаются); (2) `graph_nodes.kind_detail`
+///     (тестовые узлы 71.2 и прочие detail); (3) `graph_edges.confidence` — колонка
+///     УЖЕ есть с M3 (REAL NOT NULL DEFAULT 1.0), эвристики 71.x ставят <1.0;
+///     (4) `graph_nodes.subtokens` — саб-токеновая
+///     декомпозиция идентификаторов для FTS5 (73.9, Zulip/GitHub-стиль);
+///     (5) `bq_mask BLOB` — битовые маски бинарного квантования рядом с
+///     вектором (72b.2, mean-centered BQ, 48/96 байт); (6) `file_blobs` —
+///     content-addressed кэш парсинга/векторизации (72b.5, blake3).
+///     (7) перестройка graph_nodes_fts с колонкой subtokens (external content —
+///     колонки маппятся по имени), заполнение подтокенов — Rust-проход после SQL.
+pub const MIGRATION_V12: &str = r#"
+BEGIN;
+UPDATE graph_edges SET provenance='SYNTAX' WHERE provenance IN ('EXTRACTED', 'ast');
+UPDATE graph_edges SET provenance='HEURISTIC' WHERE provenance='INFERRED';
+UPDATE graph_nodes SET provenance='SYNTAX' WHERE provenance IN ('EXTRACTED', 'ast');
+UPDATE graph_nodes SET provenance='HEURISTIC' WHERE provenance='INFERRED';
+ALTER TABLE graph_nodes ADD COLUMN kind_detail TEXT;
+ALTER TABLE graph_nodes ADD COLUMN subtokens TEXT NOT NULL DEFAULT '';
+ALTER TABLE graph_nodes ADD COLUMN bq_mask BLOB;
+ALTER TABLE memories ADD COLUMN bq_mask BLOB;
+CREATE TABLE IF NOT EXISTS file_blobs (
+    blake3_hash TEXT PRIMARY KEY,
+    rel_path TEXT NOT NULL,
+    project_id TEXT,
+    parser_version TEXT NOT NULL DEFAULT '',
+    embedding_fingerprint TEXT NOT NULL DEFAULT '',
+    ast_json TEXT NOT NULL DEFAULT '',
+    vector_ids TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+DROP TRIGGER IF EXISTS graph_nodes_fts_ai;
+DROP TRIGGER IF EXISTS graph_nodes_fts_ad;
+DROP TRIGGER IF EXISTS graph_nodes_fts_au;
+DROP TABLE IF EXISTS graph_nodes_fts;
+CREATE VIRTUAL TABLE graph_nodes_fts USING fts5(
+  label, description, subtokens, content='graph_nodes', content_rowid='id', tokenize='trigram'
+);
+COMMIT;
+"#;
+
+/// M12, шаг 3 (после Rust-прохода подтокенов): официальный full rebuild
+/// external-content FTS (индекс согласован по построению) + возврат триггеров.
+/// Порядок критичен: 'delete'-команды триггеров по пустому индексу коррумпируют
+/// external content — поэтому триггеры создаются только после rebuild.
+pub const MIGRATION_V12_FTS_REBUILD: &str = r#"
+INSERT INTO graph_nodes_fts (graph_nodes_fts) VALUES ('rebuild');
+CREATE TRIGGER graph_nodes_fts_ai AFTER INSERT ON graph_nodes BEGIN
+  INSERT INTO graph_nodes_fts (rowid, label, description, subtokens)
+    VALUES (new.id, new.label, new.description, new.subtokens);
+END;
+CREATE TRIGGER graph_nodes_fts_ad AFTER DELETE ON graph_nodes BEGIN
+  INSERT INTO graph_nodes_fts (graph_nodes_fts, rowid, label, description, subtokens)
+    VALUES ('delete', old.id, old.label, old.description, old.subtokens);
+END;
+CREATE TRIGGER graph_nodes_fts_au AFTER UPDATE ON graph_nodes BEGIN
+  INSERT INTO graph_nodes_fts (graph_nodes_fts, rowid, label, description, subtokens)
+    VALUES ('delete', old.id, old.label, old.description, old.subtokens);
+  INSERT INTO graph_nodes_fts (rowid, label, description, subtokens)
+    VALUES (new.id, new.label, new.description, new.subtokens);
+END;
+"#;
+
+/// Ф73.9: саб-токеновая декомпозиция идентификатора (snake_case/camelCase/
+/// kebab/точки) — колонка `graph_nodes.subtokens` и декомпозиция запросов
+/// (поиск «worker pool» находит `EmbeddingWorkerPool` без смены токенизатора).
+pub fn decompose_identifier(s: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for chunk in s.split(['_', '-', '.', ' ']) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let chars: Vec<char> = chunk.chars().collect();
+        let mut cur = String::new();
+        for (i, ch) in chars.iter().enumerate() {
+            // Границы: (1) upper после lower/digit — «workerPool»;
+            // (2) lower после акронима («HTTPServer») — последний upper акронима
+            // остаётся в новой части («s» → «server»).
+            let boundary_kind = if i == 0 {
+                None
+            } else {
+                let prev = chars[i - 1];
+                if ch.is_ascii_uppercase() && (prev.is_ascii_lowercase() || prev.is_ascii_digit())
+                {
+                    Some(false) // смена части целиком
+                } else if ch.is_ascii_lowercase()
+                    && prev.is_ascii_uppercase()
+                    && i >= 2
+                    && chars[i - 2].is_ascii_uppercase()
+                {
+                    Some(true) // хвост акронима переносится в новую часть
+                } else {
+                    None
+                }
+            };
+            if let Some(keep_last) = boundary_kind {
+                if !cur.is_empty() {
+                    let head = if keep_last && cur.chars().count() > 1 {
+                        cur.chars().take(cur.chars().count() - 1).collect()
+                    } else {
+                        cur.clone()
+                    };
+                    if !head.is_empty() {
+                        parts.push(head.to_lowercase());
+                    }
+                    cur = String::new();
+                    if keep_last {
+                        cur.push(chars[i - 1]); // «S» уходит в «server»
+                    }
+                }
+            }
+            cur.push(*ch);
+        }
+        if !cur.is_empty() {
+            parts.push(cur.to_lowercase());
+        }
+    }
+    parts.join(" ")
+}
+
+/// M12: заполнить `graph_nodes.subtokens` декомпозицией label для всех узлов
+/// (один раз при миграции; новые узлы заполняются при вставке — 73.9).
+fn populate_fts_subtokens(conn: &Connection) -> Result<()> {
+    let rows: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare("SELECT id, label FROM graph_nodes")?;
+        let it = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        it.collect::<std::result::Result<_, _>>()?
+    };
+    for (id, label) in rows {
+        let sub = decompose_identifier(&label);
+        conn.execute(
+            "UPDATE graph_nodes SET subtokens = ?1 WHERE id = ?2",
+            params![sub, id],
+        )?;
+    }
+    Ok(())
+}
+
 pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;"
@@ -474,6 +613,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V9)?;
         conn.execute_batch(MIGRATION_V10)?;
         conn.execute_batch(MIGRATION_V11)?;
+        conn.execute_batch(MIGRATION_V12)?;
+        populate_fts_subtokens(conn)?;
+        conn.execute_batch(MIGRATION_V12_FTS_REBUILD)?;
     } else {
         if current_version < 2 {
             conn.execute_batch(MIGRATION_V2)?;
@@ -505,6 +647,11 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         if current_version < 11 {
             conn.execute_batch(MIGRATION_V11)?;
         }
+        if current_version < 12 {
+            conn.execute_batch(MIGRATION_V12)?;
+            populate_fts_subtokens(conn)?;
+            conn.execute_batch(MIGRATION_V12_FTS_REBUILD)?;
+        }
     }
 
     if current_version < SCHEMA_VERSION {
@@ -515,4 +662,22 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod subtoken_tests {
+    use super::decompose_identifier;
+
+    #[test]
+    fn decompose_snake_camel_kebab() {
+        assert_eq!(decompose_identifier("parse_source_file"), "parse source file");
+        assert_eq!(decompose_identifier("EmbeddingWorkerPool"), "embedding worker pool");
+        assert_eq!(decompose_identifier("HTTPServer"), "http server");
+        assert_eq!(decompose_identifier("FTS5Table"), "fts5 table");
+        assert_eq!(decompose_identifier("user-profile-url"), "user profile url");
+        assert_eq!(decompose_identifier("ob2h.db-wal"), "ob2h db wal");
+        assert_eq!(decompose_identifier("lower"), "lower");
+        assert_eq!(decompose_identifier("x"), "x");
+        assert_eq!(decompose_identifier(""), "");
+    }
 }
