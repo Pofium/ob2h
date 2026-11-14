@@ -677,6 +677,70 @@ fn incremental_lru_capacity_never_breaks() {
     }
 }
 
+// ——— Ф70.13: макрос-эвристика — нераскрытие тел + резолв handler'ов ———
+
+/// Обязательный тест 70.13: тела макросов НЕ раскрываются в символы —
+/// содержимое token_tree не порождает узлов (только места вызовов через
+/// line-based проход, type-pass резолвит handler'ы).
+#[test]
+fn rust_macros_body_not_expanded() {
+    let src = r#"macro_rules! make_fn {
+    ($name:ident) => {
+        pub fn $name() {}
+    };
+}
+
+make_fn!(generated_fn);
+
+fn real() {}
+"#;
+    let mut out = AstScanResult::default();
+    ts::parse_source("m.rs", src, "rust", &mut out).expect("разбор");
+    assert!(
+        out.nodes.iter().any(|n| n.label == "real" && n.node_type == "Function"),
+        "реальная функция потеряна"
+    );
+    assert!(
+        !out.nodes
+            .iter()
+            .any(|n| n.label == "generated_fn" || n.label.contains('$')),
+        "тело макроса раскрыто в символы — нарушение 70.13"
+    );
+}
+
+/// Идентификаторы в телах макросов работают как места вызовов:
+/// type-pass резолвит handler'ы (axum/tokio-кейсы) в CALLS-рёбра.
+#[test]
+fn rust_macro_identifiers_resolve_as_calls() {
+    let src = r#"pub fn handler() {}
+
+fn build() {
+    tokio::select! {
+        _ = handler() => {},
+    }
+}
+"#;
+    let mut out = AstScanResult::default();
+    ts::parse_source("m.rs", src, "rust", &mut out).expect("разбор");
+    ob2h::project::ast::resolve_calls(&mut out);
+    let handler_id = out
+        .nodes
+        .iter()
+        .find(|n| n.label == "handler")
+        .map(|n| n.node_id.clone())
+        .expect("handler должен быть узлом");
+    assert!(
+        out.edges
+            .iter()
+            .any(|e| e.label == "CALLS" && e.target_node_id == handler_id),
+        "handler из тела макроса не резолвится; рёбра: {:?}",
+        out.edges
+            .iter()
+            .map(|e| format!("{}:{}->{}", e.label, e.source_node_id, e.target_node_id))
+            .collect::<Vec<_>>()
+    );
+}
+
 // ——— Ф70.4: TS/JS mapper (CST → AstScanResult) ———
 
 /// TS: эталонные символы + superset (метод класса) + вызовы.
