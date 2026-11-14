@@ -2095,6 +2095,12 @@ impl AstParserDispatcher {
         }
         #[cfg(feature = "treesitter")]
         if self.ts_enabled {
+            // 71.5: SFC (Vue/Svelte) — гибрид: regex-мосты (STYLES/BINDS_CLASS/
+            // template-IMPORTS + regex-скрипт) + tree-sitter разбор `<script>`
+            // с дедупом по node_id (CST superset: стрелки/методы/вызовы)
+            if rel_path.ends_with(".vue") || rel_path.ends_with(".svelte") {
+                return self.parse_sfc_hybrid(rel_path, content, out);
+            }
             if let Some(lang) = lang_for_path(rel_path) {
                 if has_mapper(lang) {
                     // 70.8: инкрементальный парсинг (LRU-кэш деревьев + Tree::edit);
@@ -2108,6 +2114,65 @@ impl AstParserDispatcher {
         }
         self.regex.parse_source(rel_path, content, out);
         "regex".to_string()
+    }
+
+    /// 71.5: гибридный разбор Single File Component (Vue/Svelte): полный
+    /// regex-проход (мосты Ф48.3: STYLES/BINDS_CLASS/template-IMPORTS и
+    /// regex-разбор скрипта) + tree-sitter разбор каждого `<script>`-блока
+    /// через TS-грамматику со смещением строк; дедуп по node_id (CST-символы
+    /// — superset regex: стрелки/методы; одинаковые node_id не дублируются).
+    /// Ошибка tree-sitter — тихий fallback на regex-результат (70.9).
+    #[cfg(feature = "treesitter")]
+    fn parse_sfc_hybrid(&self, rel_path: &str, content: &str, out: &mut AstScanResult) -> String {
+        // 1. Полный regex-проход (все мосты + regex-скрипт)
+        self.regex.parse_source(rel_path, content, out);
+
+        // 2. tree-sitter поверх: каждый <script>-блок через TS-грамматику.
+        // Скрипт-блоки не кэшируются в LRU (это часть файла, а не файл).
+        let spans = self.regex.extractor().sfc_script_spans(content);
+        if spans.is_empty() {
+            return "treesitter:sfc".to_string();
+        }
+        let mut seen_nodes: std::collections::HashSet<String> = out
+            .nodes
+            .iter()
+            .map(|n| n.node_id.clone())
+            .collect();
+        let edge_key = |e: &AstEdge| format!("{}|{}|{}", e.source_node_id, e.target_node_id, e.label);
+        let mut seen_edges: std::collections::HashSet<String> =
+            out.edges.iter().map(&edge_key).collect();
+
+        for (offset, script) in spans {
+            let mut block = AstScanResult::default();
+            if ts::parse_source(rel_path, &script, "ts", &mut block).is_err() {
+                continue; // 70.9: fallback — остаётся regex-результат
+            }
+            // смещение строк: символы и места вызовов — относительно всего SFC
+            for mut n in block.nodes {
+                n.line_start += offset;
+                n.line_end += offset;
+                if seen_nodes.insert(n.node_id.clone()) {
+                    out.nodes.push(n);
+                }
+            }
+            out.edges.extend(
+                block
+                    .edges
+                    .into_iter()
+                    .filter(|e| seen_edges.insert(edge_key(e))),
+            );
+            for mut c in block.call_sites {
+                c.line += offset;
+                out.call_sites.push(c);
+            }
+            out.imports.extend(block.imports);
+            out.test_node_ids.extend(block.test_node_ids);
+        }
+        let before = out.call_sites.len();
+        out.call_sites.sort();
+        out.call_sites.dedup();
+        let _ = before;
+        "treesitter:sfc".to_string()
     }
 
     /// Ф70.15: stub-режим генерированного кода — символы из .scm-запроса

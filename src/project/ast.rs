@@ -2057,8 +2057,7 @@ impl AstCodeExtractor {
             label: file_label,
             node_type: "File".to_string(),
             description: format!("Исходный файл проекта: {}", rel_path),
-            file_path: rel_path.to_string(),
-            line_start: 1,
+            file_path: rel_path.to_string(),            line_start: 1,
             line_end: content.lines().count().max(1),
         });
 
@@ -4063,6 +4062,20 @@ impl AstCodeExtractor {
                 }
             }
         }
+    }
+
+    /// 71.5: span'ы `<script>`-блоков SFC (Vue/Svelte) для гибридного разбора:
+    /// (смещение строк, текст блока). Публичный — вызывается диспетчером
+    /// ast_backend (tree-sitter слой) поверх regex-прохода parse_sfc.
+    pub fn sfc_script_spans(&self, content: &str) -> Vec<(usize, String)> {
+        self.sfc_script_re
+            .captures_iter(content)
+            .filter_map(|cap| {
+                let m = cap.get(1)?;
+                let offset = content[..m.start()].matches('\n').count();
+                Some((offset, m.as_str().to_string()))
+            })
+            .collect()
     }
 
     /// Vue/Svelte SFC: содержимое `<script>`-блоков переиспользует TS/JS-парсер.

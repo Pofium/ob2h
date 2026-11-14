@@ -409,6 +409,110 @@ fn impact_tested_by_and_confidence_filter() -> anyhow::Result<()> {
     Ok(())
 }
 
+// ——— 71.5: SFC Vue/Svelte — tree-sitter инъекции `<script>` ———
+
+/// Гибридный разбор .vue: regex-мосты (BINDS_CLASS из template) сохраняются,
+/// скрипт-блок разбирается tree-sitter'ом (строки — относительно всего SFC),
+/// вызовы из скрипта резолвятся по таблице импортов в helper-файл.
+#[cfg(feature = "treesitter")]
+#[test]
+fn sfc_hybrid_vue_script_and_imports() {
+    use ob2h::project::ast_backend::AstParserDispatcher;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(
+        root.join("format.ts"),
+        "export function formatLabel(s: string): string {\n  return s.trim();\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("Card.vue"),
+        "<template>\n  <div class=\"card-title\">x</div>\n</template>\n\n<script setup lang=\"ts\">\nimport { formatLabel } from './format';\n\nexport function render(v: string): string {\n  return formatLabel(v);\n}\n</script>\n",
+    )
+    .unwrap();
+
+    let disp = AstParserDispatcher::new();
+    let mut res = AstScanResult::default();
+    // helper-файл тоже разбираем — без его File-узла таблице импортов
+    // некуда резолвить './format'
+    disp.parse_source(
+        "format.ts",
+        &std::fs::read_to_string(root.join("format.ts")).unwrap(),
+        &mut res,
+    );
+    let backend = disp.parse_source("Card.vue", &std::fs::read_to_string(root.join("Card.vue")).unwrap(), &mut res);
+
+    // под treesitter — гибридный бэкенд; regex-мосты на месте
+    assert_eq!(backend, "treesitter:sfc");
+    assert!(
+        res.edges.iter().any(|e| e.label == "BINDS_CLASS" && e.target_node_id == "cssclass:card-title"),
+        "мост BINDS_CLASS из template потерян; рёбра: {:?}",
+        res.edges.iter().map(|e| &e.label).collect::<Vec<_>>()
+    );
+    // символ из скрипта — tree-sitter (строка относительно всего файла:
+    // render на 8-й строке SFC)
+    let render = res.nodes.iter().find(|n| n.label == "render");
+    assert!(render.is_some(), "символ render из <script> не найден");
+    assert_eq!(render.unwrap().line_start, 8);
+
+    // вызов formatLabel резолвится по таблице импортов скрипта
+    resolve_calls(&mut res);
+    let edge = res.edges.iter().find(|e| {
+        e.label == "CALLS"
+            && e.source_node_id == "fn:Card.vue:render"
+            && e.target_node_id == "fn:format.ts:formatLabel"
+    });
+    assert!(
+        edge.is_some(),
+        "вызов formatLabel не разрешён; рёбра: {:?}",
+        res.edges
+            .iter()
+            .map(|e| format!("{}:{}:{}", e.label, e.source_node_id, e.target_node_id))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(edge.unwrap().provenance, "RESOLVED");
+}
+
+/// Svelte: тот же гибридный путь (backend treesitter:sfc).
+#[cfg(feature = "treesitter")]
+#[test]
+fn sfc_hybrid_svelte() {
+    use ob2h::project::ast_backend::AstParserDispatcher;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(
+        root.join("Widget.svelte"),
+        "<script lang=\"ts\">\nexport function widgetFn(): number {\n  return 42;\n}\n</script>\n\n<h1>hi</h1>\n",
+    )
+    .unwrap();
+
+    let disp = AstParserDispatcher::new();
+    let mut res = AstScanResult::default();
+    let backend = disp.parse_source(
+        "Widget.svelte",
+        &std::fs::read_to_string(root.join("Widget.svelte")).unwrap(),
+        &mut res,
+    );
+    assert_eq!(backend, "treesitter:sfc");
+    let f = res.nodes.iter().find(|n| n.label == "widgetFn");
+    assert!(f.is_some(), "символ widgetFn не найден");
+    assert_eq!(f.unwrap().line_start, 2);
+}
+
+/// Без фичи treesitter SFC идёт регулярным путём (v1.x поведение).
+#[cfg(not(feature = "treesitter"))]
+#[test]
+fn sfc_regex_fallback() {
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    let backend = ob2h::project::ast_backend::AstParserDispatcher::new()
+        .parse_source("Card.vue", "<script>\nexport function render() {}\n</script>\n", &mut res);
+    assert_eq!(backend, "regex");
+    assert!(res.nodes.iter().any(|n| n.label == "render"));
+}
+
 // ——— 71.7: F1-метрики golden — вспомогательные функции ———
 
 /// Достать SYNTAX-символы (словарь SYMBOL_TYPES) как (label, node_type).
