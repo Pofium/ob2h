@@ -3,6 +3,7 @@
 pub mod autodream;
 pub mod bench_gate;
 pub mod consolidate;
+pub mod golden;
 
 use std::collections::HashMap;
 use std::sync::Arc;

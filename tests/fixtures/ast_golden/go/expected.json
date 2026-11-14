@@ -1,0 +1,14 @@
+{
+  "language": "go",
+  "fixture": "source.go",
+  "call_extraction": "target",
+  "required_symbols": [
+    { "name": "CacheConfig", "kind": "Struct" },
+    { "name": "LoadSettings", "kind": "Function" },
+    { "name": "RunPipeline", "kind": "Function" }
+  ],
+  "required_calls": [
+    { "from": "RunPipeline", "to": "LoadSettings" }
+  ],
+  "notes": "Рёбра вызовов для go — цель tree-sitter (Фаза 70.6): call_sites в regex-парсере не собираются; проверяется целостность эталона и полнота символов."
+}

@@ -1,0 +1,14 @@
+{
+  "language": "python",
+  "fixture": "source.py",
+  "call_extraction": "current",
+  "required_symbols": [
+    { "name": "TokenCache", "kind": "Class" },
+    { "name": "load_settings", "kind": "Function" },
+    { "name": "run_pipeline", "kind": "Function" }
+  ],
+  "required_calls": [
+    { "from": "run_pipeline", "to": "load_settings" }
+  ],
+  "notes": "Прямой вызов верхнеуровневой функции — резолвится type-pass'ом; cache.refresh() — вызов метода, разрешается только если методы класса попадают в таблицу символов (в эталон не входит — фиксируем при усилении парсера)."
+}

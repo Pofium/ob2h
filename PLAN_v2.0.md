@@ -172,11 +172,13 @@
 #### Фаза 69 — Стабилизация базы и Quality Harness (оценка: 2.5 дня)
 - [x] **69.1** Фиксация базового состояния репозитория: сверка опубликованного **v1.9.9** с ветками `v1.9`/`main`, исправление дефолтного репозитория обновления (`Pofium/ob2h`), стабилизация release-workflow в GitHub Actions. *(Выполнено: теги v1.9.9/v1.9.10 на месте, main = v1.9.10; ветки `v1.9` не существует, слитая `feat/ast-incremental-fix` удалена; дефолт `update_repo` в `src/config.rs` уже совпадает с remote; release.yml — guard «тег == Cargo.toml» и dispatch-дефолт 1.8.0 → 1.9.10.)*
 - [x] **69.2** Устранение противоречий в документации: унификация политики разрешения конфликтов синхронизации (LWW vs field-merge) между `README.md` и `docs/SYNC.md`. *(Выполнено: README, `skills/ob2h/SKILL.md` и `docs/HERMES_INTEGRATION.md` выровнены с источником истины `docs/SYNC.md` — LWW по `updated_at` для `content` (tie-break по `priority`, журнал `conflicts.jsonl`, losers за флагом) + поле-уровневый merge метаданных (deep merge `meta`, `access_count` = max, trust/feedback — суммирование).)*
-- [ ] **69.3** Формирование Golden-наборов для автоматической валидации:
+- [x] **69.3** Формирование Golden-наборов для автоматической валидации:
   - `memory_golden` (вопрос $\to$ релевантные факты);
   - `graph_golden` (многошаговые запросы multi-hop);
   - `ast_golden` для Rust, Python, TS, Go, **Dart** (эталонные деревья символов и вызовов; Dart обязателен как эталон для 70.12, иначе Dart-парсер останется без регрессионного гейта);
   - `contradiction_golden` (пары: строгое противоречие, уточнение, контекстное различие).
+
+  *(Выполнено: `tests/fixtures/` — `ast_golden/<rust|python|ts|go|dart>/` (source + expected.json; загрузчик `src/project/ast_golden.rs`; `call_extraction: current|target` фиксирует рёбра вызовов TS/Go/Dart как цель tree-sitter, Rust/Python — гарантированный уровень type-pass), `graph_golden.jsonl` (4 кейса: прямые сиды, 1-hop, 2-hop через CALLS), `contradiction_golden.jsonl` (12 пар strict/refinement/coexistence; загрузчик `src/dream/golden.rs` валидирует инварианты kind↔expect_conflict). Тесты: `test_ast_golden.rs` (целостность, гарантированный уровень парсера, parity-детерминизм node_id/рёбер), `test_graph_golden.rs` (multi-hop recall@10=1.0 через ppr_search). memory_golden — существующий персональный `data/bench/golden.jsonl`.)*
 - [ ] **69.4** Сводный раннер бенчмарков `ob2h bench all` с единым JSON-отчетом и порогами регрессии (ADR-13 gate) в CI.
 
 #### Фаза 70 — Фундамент гибридного AST (Tree-sitter Core) (оценка: 5–7 дней)

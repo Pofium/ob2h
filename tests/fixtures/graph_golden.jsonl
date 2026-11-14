@@ -1,0 +1,4 @@
+{"query": "run_server запуск HTTP-сервера api", "expect_keys": ["fn:src/api.rs:run_server"], "note": "прямой сид: FTS-совпадение с узлом"}
+{"query": "run_server api роутинг", "expect_keys": ["fn:src/parser.rs:parse_source", "fn:src/validate.rs:validate_token"], "note": "multi-hop: run_server → parse_source → validate_token (2 hops по CALLS)"}
+{"query": "parse_source разбор запроса parser", "expect_keys": ["fn:src/parser.rs:parse_source", "fn:src/validate.rs:validate_token"], "note": "1-hop: parse_source → validate_token"}
+{"query": "validate_token проверка токена", "expect_keys": ["fn:src/validate.rs:validate_token"], "note": "лист графа: прямой сид"}

@@ -1,6 +1,7 @@
 //! Сервис управления проектами и проектной памятью (Фаза 10, Фаза 11).
 
 pub mod ast;
+pub mod ast_golden;
 pub mod hooks;
 pub mod scanjob;
 pub mod watcher;

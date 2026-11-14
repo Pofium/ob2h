@@ -2,7 +2,8 @@
 //! Прогон golden-набора через `memory_search` (гибрид) или `memory_context`
 //! (build_context) с метриками recall@k, MRR, долей пустых выдач и латентностью.
 //! Golden set — `data/bench/golden.jsonl`: персональные данные, в git не входит
-//! (в репо — синтетический `tests/fixtures/golden_synthetic.jsonl`).
+//! (в репо — синтетические эталоны Ф69.3: `tests/fixtures/graph_golden.jsonl`,
+//! `tests/fixtures/ast_golden/`, `tests/fixtures/contradiction_golden.jsonl`).
 
 use std::collections::HashSet;
 use std::path::Path;

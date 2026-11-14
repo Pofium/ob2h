@@ -1,0 +1,14 @@
+{
+  "language": "dart",
+  "fixture": "source.dart",
+  "call_extraction": "target",
+  "required_symbols": [
+    { "name": "TokenCache", "kind": "Class" },
+    { "name": "loadSettings", "kind": "Function" },
+    { "name": "runPipeline", "kind": "Function" }
+  ],
+  "required_calls": [
+    { "from": "runPipeline", "to": "loadSettings" }
+  ],
+  "notes": "Dart — первая очередь v2.0 (70.12): эталон обязателен, иначе Dart-парсер останется без регрессионного гейта. Рёбра вызовов — цель tree-sitter; сейчас call_sites для Dart не собираются."
+}

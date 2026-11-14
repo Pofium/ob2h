@@ -1,0 +1,15 @@
+{
+  "language": "rust",
+  "fixture": "source.rs",
+  "call_extraction": "current",
+  "required_symbols": [
+    { "name": "CacheConfig", "kind": "Struct" },
+    { "name": "TokenStore", "kind": "Trait" },
+    { "name": "build_cache", "kind": "Function" },
+    { "name": "run_pipeline", "kind": "Function" }
+  ],
+  "required_calls": [
+    { "from": "run_pipeline", "to": "build_cache" }
+  ],
+  "notes": "Прямой вызов в том же файле — резолвится type-pass'ом (resolve_calls, provenance=RESOLVED); store.fetch — вызов метода трейта, без receiver-типов не резолвится и в эталон не входит."
+}
