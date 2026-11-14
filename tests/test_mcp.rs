@@ -4,8 +4,9 @@ use ob2h::mcp::McpServer;
 use ob2h::mcp::tools::list_tools;
 use tempfile::tempdir;
 
-/// Снапшот контракта: 55 инструментов (v1.9.9: +4 lesson_* Ф64, +6 slot_* Ф65,
-/// +memory_timeline/session_recap Ф66, +memory_verify Ф67, +memory_audit Ф68)
+/// Снапшот контракта: 56 инструментов (v1.9.9: +4 lesson_* Ф64, +6 slot_* Ф65,
+/// +memory_timeline/session_recap Ф66, +memory_verify Ф67, +memory_audit Ф68,
+/// +viewer_open Ф72)
 /// (41 v1.9: 26 базовых v1.3 + 7 Ralph + memory_merge + project_scan_status + 5 secrets_*).
 #[test]
 fn test_tools_list_contract_snapshot() {
@@ -78,6 +79,8 @@ fn test_tools_list_contract_snapshot() {
         "memory_verify",
         // v1.9.9: аудит-леджер (Фаза 68)
         "memory_audit",
+        // v1.9.9: окно просмотра (Фаза 72)
+        "viewer_open",
     ];
     assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.9.9.md");
 }
@@ -240,6 +243,30 @@ async fn test_mcp_all_tools_dispatch() {
         )
         .await;
     assert!(p_rep_out.contains("Архитектурный дайджест проекта: My Project"));
+
+    // 12. viewer_open (Ф72.1): headless — честная ошибка; gui — already_running
+    // по живому lockfile (окно в тесте не спавним).
+    let viewer_out = {
+        #[cfg(feature = "gui")]
+        {
+            std::fs::write(tmp.path().join("viewer.lock"), std::process::id().to_string())
+                .expect("lockfile");
+            let out = server.call_tool("viewer_open", serde_json::json!({})).await;
+            std::fs::remove_file(tmp.path().join("viewer.lock")).ok();
+            out
+        }
+        #[cfg(not(feature = "gui"))]
+        {
+            server.call_tool("viewer_open", serde_json::json!({})).await
+        }
+    };
+    #[cfg(feature = "gui")]
+    assert!(viewer_out.contains("already_running"), "got: {viewer_out}");
+    #[cfg(not(feature = "gui"))]
+    {
+        assert!(viewer_out.starts_with("[Error]"), "got: {viewer_out}");
+        assert!(viewer_out.contains("gui") && viewer_out.contains("[Подсказка]"), "got: {viewer_out}");
+    }
 }
 
 #[tokio::test]

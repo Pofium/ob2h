@@ -1,5 +1,5 @@
-//! 55 инструментов MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
-//! Ralph, секреты, уроки, слоты, хронология/рекап, провенанс, аудит).
+//! 56 инструментов MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
+//! Ralph, секреты, уроки, слоты, хронология/рекап, провенанс, аудит, просмотр).
 
 use super::protocol::McpToolDef;
 
@@ -797,6 +797,15 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "operation": { "type": "string", "description": "Фильтр по action (memory_forget, secrets_get, slot_append, …) (опционально)" },
                     "limit": { "type": "integer", "description": "Максимум записей (дефолт 50, макс 200)" }
                 }
+            }),
+        },
+        // v1.9.9: окно просмотра (Фаза 72)
+        McpToolDef {
+            name: "viewer_open".to_string(),
+            description: "Открыть локальное окно просмотра хранилища (память/граф/сессии/уроки/слоты/статистика/секреты). Окно — отдельный detached-процесс, переживает завершение MCP-сессии; повторный вызов при живом окне → already_running. Сборка без feature gui → честная ошибка с подсказкой (CLI: ob2h viewer).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
             }),
         },
     ]

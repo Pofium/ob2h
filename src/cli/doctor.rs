@@ -136,6 +136,22 @@ impl Doctor {
             });
         }
 
+        // 3.7 v1.9.9 (Ф72.2): доступность окна просмотра
+        results.push(DoctorItem {
+            category: "Окно просмотра (Viewer)".to_string(),
+            name: "Viewer".to_string(),
+            status: if cfg!(feature = "gui") { DoctorStatus::Ok } else { DoctorStatus::Warn },
+            details: if cfg!(feature = "gui") {
+                if crate::viewer::lock::ViewerLock::is_running(&self.settings.data_dir) {
+                    "доступен; окно уже открыто (lockfile)".to_string()
+                } else {
+                    "доступен; запуск: 'ob2h viewer' или MCP viewer_open".to_string()
+                }
+            } else {
+                "сборка без gui; пересоберите с --features gui либо используйте CLI: ob2h stats".to_string()
+            },
+        });
+
         // 4. Проверка подключения AI-агентов
         self.check_agents(&mut results);
 

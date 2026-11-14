@@ -2367,6 +2367,22 @@ impl McpServer {
                     Err(e) => format!("[Error] {e}"),
                 }
             }
+            // v1.9.9: окно просмотра (Фаза 72) — detached-процесс, не блокирует сервер.
+            "viewer_open" => match crate::viewer::open_detached(&self.ctx.settings.data_dir) {
+                Ok(crate::viewer::OpenStatus::Opened) => {
+                    serde_json::json!({ "status": "opened" }).to_string()
+                }
+                Ok(crate::viewer::OpenStatus::AlreadyRunning) => {
+                    serde_json::json!({ "status": "already_running" }).to_string()
+                }
+                Ok(crate::viewer::OpenStatus::GuiUnavailable) => {
+                    "[Error] сборка без gui: окно просмотра недоступно \
+                     [Подсказка] пересоберите ob2h с --features gui либо откройте данные через CLI: \
+                     ob2h stats, ob2h audit, ob2h secrets status"
+                        .to_string()
+                }
+                Err(e) => format!("[Error] {e}"),
+            },
             other => format!("[Error] Unknown tool {other}"),
         }
     }
