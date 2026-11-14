@@ -82,7 +82,7 @@ pub fn lang_for_path(rel_path: &str) -> Option<&'static str> {
 pub mod ts {
     use std::collections::HashMap;
 
-    use tree_sitter::{Node, Parser};
+    use tree_sitter::{Node, Parser, Tree};
 
     /// Ф70.9 (PLAN_v2.0): порог доли ERROR-узлов в CST, выше которого файл
     /// уходит в regex (tree-sitter на частично битых файлах работает толерантно —
@@ -225,12 +225,24 @@ pub mod ts {
     /// Маппинг по языкам — Ф70.3 (rust), Ф70.4 (ts/js), Ф70.5 (python),
     /// Ф70.6 (go), Ф70.12 (dart); до реализации соответствующего маппера
     /// возвращается Err — диспетчер уходит в regex (70.9).
+    /// Разобрать файл tree-sitter'ом (cold, без LRU-кэша) и смаппить в
+    /// `AstScanResult` — тест-путь; боевой путь диспетчера — через
+    /// [`IncrementalParser`] (70.8) с кэш-хитами и Tree::edit.
     pub fn parse_source(
         rel_path: &str,
         content: &str,
         lang: &str,
         out: &mut AstScanResult,
     ) -> anyhow::Result<()> {
+        let tree = cold_parse_tree(rel_path, content, lang)?;
+        let root = tree.root_node();
+        check_error_fraction(rel_path, root)?;
+        map_tree(lang, rel_path, content, root, out);
+        Ok(())
+    }
+
+    /// Cold-парсинг дерева без кэша (тест-путь и основа инкрементального).
+    fn cold_parse_tree(rel_path: &str, content: &str, lang: &str) -> anyhow::Result<Tree> {
         let grammar =
             language_for(lang).ok_or_else(|| anyhow::anyhow!("нет грамматики `{lang}`"))?;
         let mut parser = Parser::new();
@@ -240,38 +252,171 @@ pub mod ts {
         let Some(tree) = parser.parse(content, None) else {
             anyhow::bail!("parser.parse вернул None для {rel_path}");
         };
-        let root = tree.root_node();
-        // 70.9: регламент fallback — доля ERROR-узлов > 10% уводит файл в regex;
-        // меньшая доля допустима (tree-sitter парсит толерантно).
+        Ok(tree)
+    }
+
+    /// Ф70.9: доля ERROR-узлов > порога → Err (файл уходит в regex);
+    /// меньшая доля допустима — tree-sitter парсит толерантно.
+    fn check_error_fraction(rel_path: &str, root: Node) -> anyhow::Result<()> {
         let (err_nodes, total_nodes) = error_fraction(root);
         if total_nodes > 0 && err_nodes as f64 / total_nodes as f64 > ERROR_FALLBACK_FRACTION {
             anyhow::bail!(
                 "CST `{rel_path}`: {err_nodes}/{total_nodes} ERROR-узлов (> {ERROR_FALLBACK_FRACTION}) — fallback на regex"
             );
         }
+        Ok(())
+    }
+
+    /// Маппинг разобранного дерева по языку (общий для cold и инкрементального путей).
+    pub fn map_tree(
+        lang: &str,
+        rel_path: &str,
+        content: &str,
+        root: Node,
+        out: &mut AstScanResult,
+    ) {
         match lang {
-            "rust" => {
-                map_rust(rel_path, content, root, out);
-                Ok(())
-            }
-            "python" => {
-                map_python(rel_path, content, root, out);
-                Ok(())
-            }
-            "go" => {
-                map_go(rel_path, content, root, out);
-                Ok(())
-            }
-            "dart" => {
-                map_dart(rel_path, content, root, out);
-                Ok(())
-            }
-            "ts" | "tsx" => {
-                map_ts_js(rel_path, content, root, out);
-                Ok(())
-            }
-            _ => Err(anyhow::anyhow!("маппинг `{lang}` не поддерживается")),
+            "rust" => map_rust(rel_path, content, root, out),
+            "python" => map_python(rel_path, content, root, out),
+            "go" => map_go(rel_path, content, root, out),
+            "dart" => map_dart(rel_path, content, root, out),
+            "ts" | "tsx" => map_ts_js(rel_path, content, root, out),
+            _ => {} // has_mapper не пропускает прочие языки
         }
+    }
+
+    /// Ф70.8 (PLAN_v2.0): инкрементальный парсер — LRU-кэш деревьев последних
+    /// изменённых файлов (64 записи; тотальное хранение деревьев противоречит
+    /// NFR по RAM). Хит с тем же контентом → clone дерева без парсинга;
+    /// изменённый файл → Tree::edit по префикс/суффикс-диффу + reparse со
+    /// старым деревом (tree-sitter переиспользует поддеревья).
+    pub struct IncrementalParser {
+        cache: std::sync::Mutex<lru::LruCache<String, Entry>>,
+    }
+
+    struct Entry {
+        tree: Tree,
+        content: String,
+    }
+
+    impl IncrementalParser {
+        pub fn new() -> Self {
+            Self {
+                cache: std::sync::Mutex::new(lru::LruCache::new(
+                    std::num::NonZeroUsize::new(64).unwrap(),
+                )),
+            }
+        }
+
+        /// Разобрать файл: хит+тот же контент → дерево из кэша; хит+изменение →
+        /// Tree::edit + reparse со старым деревом; промах → cold-парсинг.
+        /// ERROR-доля сверх порога (70.9) → Err без кэширования.
+        pub fn parse_tree(
+            &self,
+            rel_path: &str,
+            content: &str,
+            lang: &str,
+        ) -> anyhow::Result<Tree> {
+            let mut cache = self.cache.lock().expect("lru cache lock");
+            if let Some(entry) = cache.get(rel_path) {
+                if entry.content == content {
+                    return Ok(entry.tree.clone());
+                }
+            }
+            let grammar =
+                language_for(lang).ok_or_else(|| anyhow::anyhow!("нет грамматики `{lang}`"))?;
+            let mut parser = Parser::new();
+            parser
+                .set_language(&grammar)
+                .map_err(|e| anyhow::anyhow!("set_language `{lang}`: {e}"))?;
+            let cached = cache.get(rel_path).map(|e| (e.content.clone(), e.tree.clone()));
+            let tree = if let Some((old_content, mut old_tree)) = cached {
+                // Инкрементальный путь: дифф префикс/суффикс → InputEdit
+                if let Some(edit) = compute_edit(&old_content, content) {
+                    old_tree.edit(&edit);
+                }
+                parser.parse(content, Some(&old_tree)).ok_or_else(|| {
+                    anyhow::anyhow!("parser.parse вернул None для {rel_path}")
+                })?
+            } else {
+                parser.parse(content, None)
+                    .ok_or_else(|| anyhow::anyhow!("parser.parse вернул None для {rel_path}"))?
+            };
+            let root = tree.root_node();
+            let (err_nodes, total_nodes) = error_fraction(root);
+            if total_nodes > 0 && err_nodes as f64 / total_nodes as f64 > ERROR_FALLBACK_FRACTION {
+                anyhow::bail!(
+                    "CST `{rel_path}`: {err_nodes}/{total_nodes} ERROR-узлов — fallback на regex"
+                );
+            }
+            cache.put(
+                rel_path.to_string(),
+                Entry {
+                    tree: tree.clone(),
+                    content: content.to_string(),
+                },
+            );
+            Ok(tree)
+        }
+    }
+
+    impl Default for IncrementalParser {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    /// Префикс/суффикс-дифф старого и нового контента → tree_sitter::InputEdit.
+    /// None — контент идентичен.
+    fn compute_edit(old: &str, new: &str) -> Option<tree_sitter::InputEdit> {
+        use tree_sitter::{InputEdit, Point};
+        let (ob, nb) = (old.as_bytes(), new.as_bytes());
+        if old == new {
+            return None;
+        }
+        let min_len = ob.len().min(nb.len());
+        let mut start = 0usize;
+        while start < min_len && ob[start] == nb[start] {
+            start += 1;
+        }
+        while start > 0 && !old.is_char_boundary(start) {
+            start -= 1;
+        }
+        // Суффикс: от концов назад, не заходя в общий префикс
+        let mut end_old = ob.len();
+        let mut end_new = nb.len();
+        while end_old > start && end_new > start && ob[end_old - 1] == nb[end_new - 1] {
+            end_old -= 1;
+            end_new -= 1;
+        }
+        while !old.is_char_boundary(end_old) || !new.is_char_boundary(end_new) {
+            end_old = end_old.saturating_sub(1);
+            end_new = end_new.saturating_sub(1);
+        }
+        let point_at = |s: &str, byte: usize| -> Point {
+            let mut row = 0usize;
+            let mut col = 0usize;
+            for (i, ch) in s.char_indices() {
+                if i >= byte {
+                    break;
+                }
+                if ch == '\n' {
+                    row += 1;
+                    col = 0;
+                } else {
+                    col += ch.len_utf16();
+                }
+            }
+            Point { row, column: col }
+        };
+        Some(InputEdit {
+            start_byte: start,
+            old_end_byte: end_old,
+            new_end_byte: end_new,
+            start_position: point_at(old, start),
+            old_end_position: point_at(old, end_old),
+            new_end_position: point_at(new, end_new),
+        })
     }
 
     /// Ф70.3 (PLAN_v2.0): CST→AST маппинг Rust (tree-sitter-rust).
@@ -1441,6 +1586,8 @@ pub struct AstParserDispatcher {
     regex: RegexBackend,
     #[cfg(feature = "treesitter")]
     ts_enabled: bool,
+    #[cfg(feature = "treesitter")]
+    incremental: ts::IncrementalParser,
 }
 
 /// Tree-sitter включён: фича собрана и env-kill-switch не запрещает.
@@ -1459,6 +1606,8 @@ impl AstParserDispatcher {
             regex: RegexBackend::new(),
             #[cfg(feature = "treesitter")]
             ts_enabled: Self::ts_enabled(),
+            #[cfg(feature = "treesitter")]
+            incremental: ts::IncrementalParser::new(),
         }
     }
 
@@ -1476,8 +1625,10 @@ impl AstParserDispatcher {
         if self.ts_enabled {
             if let Some(lang) = lang_for_path(rel_path) {
                 if has_mapper(lang) {
-                    // 70.9: ошибка tree-sitter (в т.ч. ERROR-узлы) — fallback на regex
-                    if let Ok(()) = ts::parse_source(rel_path, content, lang, out) {
+                    // 70.8: инкрементальный парсинг (LRU-кэш деревьев + Tree::edit);
+                    // 70.9: ошибка (в т.ч. доля ERROR > порога) — fallback на regex
+                    if let Ok(tree) = self.incremental.parse_tree(rel_path, content, lang) {
+                        ts::map_tree(lang, rel_path, content, tree.root_node(), out);
                         return format!("treesitter:{lang}");
                     }
                 }

@@ -597,6 +597,86 @@ fn dispatcher_routes_go_and_dart_to_treesitter() {
     }
 }
 
+// ——— Ф70.8: инкрементальный парсинг (LRU-кэш + Tree::edit) ———
+
+use ob2h::project::ast_backend::ts::IncrementalParser;
+
+/// Последовательность узлов (kind + байтовый диапазон) — для структурного
+/// сравнения инкрементального и cold разбора.
+fn flatten(node: tree_sitter::Node, out: &mut Vec<(String, usize, usize)>) {
+    out.push((
+        node.kind().to_string(),
+        node.start_byte(),
+        node.end_byte(),
+    ));
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        flatten(child, out);
+    }
+}
+
+#[test]
+fn incremental_cache_hit_and_edit_equivalence() {
+    let parser = IncrementalParser::new();
+    let v1 = "pub fn one() -> u64 {\n    1\n}\n\npub fn two() -> u64 {\n    2\n}\n";
+    let v2 = "pub fn one() -> u64 {\n    1\n}\n\npub fn two() -> u64 {\n    22 // changed\n}\n";
+
+    // 1-й разбор — cold; повтор с тем же контентом — кэш-хит (дерево валидно)
+    let t1a = parser.parse_tree("a.rs", v1, "rust").expect("cold parse");
+    let t1b = parser.parse_tree("a.rs", v1, "rust").expect("cache hit");
+    assert_eq!(
+        t1a.root_node().byte_range(),
+        t1b.root_node().byte_range(),
+        "кэш-хит должен возвращать то же дерево"
+    );
+
+    // Изменение файла → Tree::edit + reparse со старым деревом
+    let t2 = parser.parse_tree("a.rs", v2, "rust").expect("incremental parse");
+    assert_eq!(
+        t2.root_node().end_byte(),
+        v2.len(),
+        "дерево должно покрывать новый контент целиком"
+    );
+
+    // Инкрементальный разбор структурно эквивалентен cold-разбору нового контента
+    let fresh = IncrementalParser::new();
+    let t2_cold = fresh.parse_tree("b.rs", v2, "rust").expect("cold parse of v2");
+    let mut seq_inc = Vec::new();
+    let mut seq_cold = Vec::new();
+    flatten(t2.root_node(), &mut seq_inc);
+    flatten(t2_cold.root_node(), &mut seq_cold);
+    assert_eq!(seq_inc, seq_cold, "Tree::edit путь должен давать структуру cold-разбора");
+}
+
+#[test]
+fn incremental_dispatcher_sequential_edits() {
+    let disp = AstParserDispatcher::new();
+    let v1 = "pub fn run_pipeline() { let x = build_cache(); }\n";
+    let v2 = "pub fn run_pipeline() { let x = build_cache(); build_cache(); }\n";
+    let mut out1 = AstScanResult::default();
+    let b1 = disp.parse_source("a.rs", v1, &mut out1);
+    assert_eq!(b1, "treesitter:rust");
+    assert!(out1.nodes.iter().any(|n| n.label == "run_pipeline"));
+
+    let mut out2 = AstScanResult::default();
+    let b2 = disp.parse_source("a.rs", v2, &mut out2);
+    assert_eq!(b2, "treesitter:rust", "после правки файл не должен сваливаться в regex");
+    assert!(out2.nodes.iter().any(|n| n.label == "run_pipeline"));
+}
+
+#[test]
+fn incremental_lru_capacity_never_breaks() {
+    // > 64 файлов: первые записи вытесняются, повторный разбор корректен (cold)
+    let parser = IncrementalParser::new();
+    for i in 0..70usize {
+        let src = format!("pub fn f_{i}() -> u64 {{ {i} }}\n");
+        let tree = parser
+            .parse_tree(&format!("f_{i}.rs"), &src, "rust")
+            .expect("parse");
+        assert_eq!(tree.root_node().end_byte(), src.len());
+    }
+}
+
 // ——— Ф70.4: TS/JS mapper (CST → AstScanResult) ———
 
 /// TS: эталонные символы + superset (метод класса) + вызовы.
