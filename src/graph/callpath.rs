@@ -25,8 +25,9 @@ pub const USAGE_EDGE_LABELS: &[&str] = &["CALLS", "IMPORTS", "IMPLEMENTS", "DEPE
 /// **Ф47.4 (ADR-AST-5): расширяется только осознанно.** Инфраструктурные типы
 /// v1.7 (`Route`, `Endpoint`, `Service`, `K8sResource`, `CssClass`,
 /// `ExternalPackage`…) не включены: их использование — не вызовы. Общий
-/// словарь символов с type-pass'ом (`project::ast::resolve_calls`).
-pub(crate) const SYMBOL_TYPES: &[&str] = &[
+/// словарь символов с type-pass'ом (`project::ast::resolve_calls`); с 71.7 —
+/// словарь предсказанных символов для F1-метрик golden.
+pub const SYMBOL_TYPES: &[&str] = &[
     "Function",
     "Struct",
     "Class",

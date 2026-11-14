@@ -715,20 +715,42 @@ pub mod ts {
                 // (obj.method()); цепочки a.b().c() дают каждое звено. Ключевые
                 // слова (if/match/…) не являются call_expression — отсекаются
                 // структурно, skip-списки regex-пути не нужны.
+                // 71.4: qualifier — приёмник вызова (scoped path `helpers::run`,
+                // простой идентификатор `store.fetch`) для file-scope резолва.
                 if let Some(f) = node.child_by_field_name("function") {
-                    let name = match f.kind() {
-                        "identifier" => text_of(f),
-                        "field_expression" => f
-                            .child_by_field_name("field")
-                            .map(|n| text_of(n))
-                            .unwrap_or_default(),
-                        _ => String::new(),
+                    let (name, qualifier) = match f.kind() {
+                        "identifier" => (text_of(f), None),
+                        "field_expression" => {
+                            let name = f
+                                .child_by_field_name("field")
+                                .map(|n| text_of(n))
+                                .unwrap_or_default();
+                            let q = f
+                                .child_by_field_name("object")
+                                .filter(|o| o.kind() == "identifier")
+                                .map(|o| text_of(o));
+                            (name, q)
+                        }
+                        "scoped_identifier" => {
+                            // `helpers::run()` / `Type::method()` — path целиком
+                            let name = f
+                                .child_by_field_name("name")
+                                .map(|n| text_of(n))
+                                .unwrap_or_default();
+                            let q = f
+                                .child_by_field_name("path")
+                                .map(|p| text_of(p))
+                                .unwrap_or_default();
+                            (name, if q.is_empty() { None } else { Some(q) })
+                        }
+                        _ => (String::new(), None),
                     };
                     if !name.is_empty() {
                         out.call_sites.push(CallSite {
                             rel_path: rel_path.to_string(),
                             line: node.start_position().row + 1,
                             name,
+                            qualifier,
                         });
                     }
                 }
@@ -1077,21 +1099,29 @@ pub mod ts {
             }
             "call" => {
                 // 71.1: function — identifier (прямые) или attribute.attribute
-                // (obj.method())
+                // (obj.method()); 71.4: qualifier — простой object идентификатор
                 if let Some(f) = node.child_by_field_name("function") {
-                    let name = match f.kind() {
-                        "identifier" => text_of(f),
-                        "attribute" => f
-                            .child_by_field_name("attribute")
-                            .map(|n| text_of(n))
-                            .unwrap_or_default(),
-                        _ => String::new(),
+                    let (name, qualifier) = match f.kind() {
+                        "identifier" => (text_of(f), None),
+                        "attribute" => {
+                            let name = f
+                                .child_by_field_name("attribute")
+                                .map(|n| text_of(n))
+                                .unwrap_or_default();
+                            let q = f
+                                .child_by_field_name("object")
+                                .filter(|o| o.kind() == "identifier")
+                                .map(|o| text_of(o));
+                            (name, q)
+                        }
+                        _ => (String::new(), None),
                     };
                     if !name.is_empty() {
                         out.call_sites.push(CallSite {
                             rel_path: rel_path.to_string(),
                             line: node.start_position().row + 1,
                             name,
+                            qualifier,
                         });
                     }
                 }
@@ -1296,27 +1326,35 @@ pub mod ts {
                      }
                  }
              }
-             "call_expression" => {
-                 // 71.1: function — identifier или selector_expression.sel
-                 // (pkg.Func / obj.Method)
-                 if let Some(f) = node.child_by_field_name("function") {
-                     let name = match f.kind() {
-                         "identifier" => text_of(f),
-                         "selector_expression" => f
-                             .child_by_field_name("sel")
-                             .map(|n| text_of(n))
-                             .unwrap_or_default(),
-                         _ => String::new(),
-                     };
-                     if !name.is_empty() {
-                         out.call_sites.push(CallSite {
-                             rel_path: rel_path.to_string(),
-                             line: node.start_position().row + 1,
-                             name,
-                         });
-                     }
-                 }
-             }
+            "call_expression" => {
+                // 71.1: function — identifier или selector_expression.sel
+                // (pkg.Func / obj.Method); 71.4: qualifier — операнд селектора
+                if let Some(f) = node.child_by_field_name("function") {
+                    let (name, qualifier) = match f.kind() {
+                        "identifier" => (text_of(f), None),
+                        "selector_expression" => {
+                            let name = f
+                                .child_by_field_name("sel")
+                                .map(|n| text_of(n))
+                                .unwrap_or_default();
+                            let q = f
+                                .child_by_field_name("operand")
+                                .filter(|o| o.kind() == "identifier")
+                                .map(|o| text_of(o));
+                            (name, q)
+                        }
+                        _ => (String::new(), None),
+                    };
+                    if !name.is_empty() {
+                        out.call_sites.push(CallSite {
+                            rel_path: rel_path.to_string(),
+                            line: node.start_position().row + 1,
+                            name,
+                            qualifier,
+                        });
+                    }
+                }
+            }
              _ => {}
          }
          let mut c = node.walk();
@@ -1506,14 +1544,20 @@ pub mod ts {
             }
             "method_invocation" => {
                 // 71.1: поле method — прямые вызовы и obj.method() (цепочки
-                // a.b().c() дают каждое звено); конструкторы без поля пропускаем
+                // a.b().c() дают каждое звено); конструкторы без поля пропускаем.
+                // 71.4: qualifier — target-приёмник (простой идентификатор)
                 if let Some(m) = node.child_by_field_name("method") {
                     let name = text_of(m);
+                    let qualifier = node
+                        .child_by_field_name("target")
+                        .filter(|t| t.kind() == "simple_identifier")
+                        .map(|t| text_of(t));
                     if !name.is_empty() {
                         out.call_sites.push(CallSite {
                             rel_path: rel_path.to_string(),
                             line: node.start_position().row + 1,
                             name,
+                            qualifier,
                         });
                     }
                 }
@@ -1574,6 +1618,53 @@ pub mod ts {
                             context: format!("import from '{module}'"),
                             provenance: "EXTRACTED".to_string(),
                         });
+                        // 71.4: ImportRef — named/namespace импорты для
+                        // file-scope таблицы импортов (type-pass)
+                        let mut c = node.walk();
+                        for child in node.children(&mut c) {
+                            if child.kind() != "import_clause" {
+                                continue;
+                            }
+                            let mut cc = child.walk();
+                            for spec in child.children(&mut cc) {
+                                match spec.kind() {
+                                    "import_specifier" => {
+                                        let item = spec
+                                            .child_by_field_name("name")
+                                            .map(text_of)
+                                            .unwrap_or_default();
+                                        let alias = spec
+                                            .child_by_field_name("alias")
+                                            .map(text_of)
+                                            .filter(|s| !s.is_empty());
+                                        if !item.is_empty() {
+                                            out.imports.push(crate::project::ast::ImportRef {
+                                                rel_path: rel_path.to_string(),
+                                                module: module.to_string(),
+                                                item: Some(item),
+                                                alias,
+                                            });
+                                        }
+                                    }
+                                    "namespace_import" => {
+                                        // `import * as Utils from './utils'`
+                                        let alias = spec
+                                            .child_by_field_name("name")
+                                            .map(text_of)
+                                            .filter(|s| !s.is_empty());
+                                        if let Some(alias) = alias {
+                                            out.imports.push(crate::project::ast::ImportRef {
+                                                rel_path: rel_path.to_string(),
+                                                module: module.to_string(),
+                                                item: None,
+                                                alias: Some(alias),
+                                            });
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1757,21 +1848,30 @@ pub mod ts {
             }
             "call_expression" => {
                 // 71.1: function — identifier или member_expression.property
-                // (obj.method()); property_identifier/private_property_identifier
+                // (obj.method()); property_identifier/private_property_identifier.
+                // 71.4: qualifier — простой object-идентификатор
                 if let Some(f) = node.child_by_field_name("function") {
-                    let name = match f.kind() {
-                        "identifier" => text_of(f),
-                        "member_expression" => f
-                            .child_by_field_name("property")
-                            .map(|n| text_of(n))
-                            .unwrap_or_default(),
-                        _ => String::new(),
+                    let (name, qualifier) = match f.kind() {
+                        "identifier" => (text_of(f), None),
+                        "member_expression" => {
+                            let name = f
+                                .child_by_field_name("property")
+                                .map(|n| text_of(n))
+                                .unwrap_or_default();
+                            let q = f
+                                .child_by_field_name("object")
+                                .filter(|o| o.kind() == "identifier")
+                                .map(|o| text_of(o));
+                            (name, q)
+                        }
+                        _ => (String::new(), None),
                     };
                     if !name.is_empty() {
                         out.call_sites.push(CallSite {
                             rel_path: rel_path.to_string(),
                             line: node.start_position().row + 1,
                             name,
+                            qualifier,
                         });
                     }
                 }

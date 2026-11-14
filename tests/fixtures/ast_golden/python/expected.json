@@ -4,11 +4,13 @@
   "call_extraction": "current",
   "required_symbols": [
     { "name": "TokenCache", "kind": "Class" },
+    { "name": "refresh", "kind": "Function" },
     { "name": "load_settings", "kind": "Function" },
     { "name": "run_pipeline", "kind": "Function" }
   ],
   "required_calls": [
-    { "from": "run_pipeline", "to": "load_settings" }
+    { "from": "run_pipeline", "to": "load_settings" },
+    { "from": "run_pipeline", "to": "TokenCache" }
   ],
-  "notes": "Прямой вызов верхнеуровневой функции — резолвится type-pass'ом; cache.refresh() — вызов метода, разрешается только если методы класса попадают в таблицу символов (в эталон не входит — фиксируем при усилении парсера)."
+  "notes": "Списки исчерпывающие (71.7, F1-гейт). Прямой вызов и инстанцирование класса — type-pass (RESOLVED); cache.refresh() — вызов по receiver-переменной: эвристика виртуального вызова (HEURISTIC, 71.4) в не-эвристический эталон не входит."
 }

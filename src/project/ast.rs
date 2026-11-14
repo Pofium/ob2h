@@ -53,11 +53,14 @@ pub struct AstEdge {
 
 /// Ф39.1: замеченное место вызова (для последующего резолва type-pass'ом).
 /// Ord — для дедупа после CST+line-based проходов (71.1).
+/// 71.4: `qualifier` — приёмник квалифицированного вызова (`helpers::run`,
+/// `mod.fn`, `pkg.Func`, `obj.method`) или `self`/`cls`; None — голый вызов.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CallSite {
     pub rel_path: String,
     pub line: usize,
     pub name: String,
+    pub qualifier: Option<String>,
 }
 
 /// Ф39.1: импорт с элементом и алиасом (use/import ... as ...).
@@ -1570,6 +1573,9 @@ pub struct AstCodeExtractor {
     ts_class_re: Regex,
     ts_interface_re: Regex,
     ts_fn_re: Regex,
+    /// 71.7: методы классов TS/JS (`refresh(): void {`) — тот же node_id
+    /// `fn:rel:name`, что у CST method_definition (паритет направления).
+    ts_method_re: Regex,
     ts_import_re: Regex,
 
     go_fn_re: Regex,
@@ -1770,6 +1776,9 @@ impl AstCodeExtractor {
             ts_class_re: Regex::new(r"(?m)^\s*(?:export\s+)?(?:default\s+)?class\s+([a-zA-Z0-9_]+)(?:\s+extends\s+([a-zA-Z0-9_]+))?(?:\s+implements\s+([a-zA-Z0-9_, ]+))?").unwrap(),
             ts_interface_re: Regex::new(r"(?m)^\s*(?:export\s+)?(?:interface|type)\s+([a-zA-Z0-9_]+)").unwrap(),
             ts_fn_re: Regex::new(r"(?m)^\s*(?:export\s+)?(?:async\s+)?(?:function\s+([a-zA-Z0-9_]+)|(?:const|let|var)\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>)").unwrap(),
+            // 71.7: сигнатуры методов классов (в т.ч. с модификаторами);
+            // имя-ключевое слово и тест-харнесс отсекаются в проходе
+            ts_method_re: Regex::new(r"^\s*(?:(?:public|private|protected|static|readonly|async|get|set)\s+)*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*(?:<[^>()]*>)?\s*\([^;{}]*\)[^;{}]*\{").unwrap(),
             ts_import_re: Regex::new(r#"(?m)^\s*import\s+(?:(?:\{([^}]+)\}|\*\s+as\s+([a-zA-Z0-9_]+)|([a-zA-Z0-9_]+))\s+from\s+)?['"]([^'"]+)['"]"#).unwrap(),
 
             // Go patterns
@@ -2540,6 +2549,41 @@ impl AstCodeExtractor {
                     context: format!("from '{}'", mod_name),
                     provenance: "EXTRACTED".to_string(),
                 });
+                // 71.4: ImportRef (named/namespace/default) для таблицы импортов
+                if let Some(named) = cap.get(1) {
+                    for it in named.as_str().split(',') {
+                        let it = it.trim();
+                        if it.is_empty() {
+                            continue;
+                        }
+                        let (item, alias) = match it.split_once(" as ") {
+                            Some((n, a)) => (n.trim().to_string(), Some(a.trim().to_string())),
+                            None => (it.to_string(), None),
+                        };
+                        out.imports.push(ImportRef {
+                            rel_path: rel_path.to_string(),
+                            module: mod_name.to_string(),
+                            item: Some(item),
+                            alias,
+                        });
+                    }
+                }
+                if let Some(ns) = cap.get(2) {
+                    out.imports.push(ImportRef {
+                        rel_path: rel_path.to_string(),
+                        module: mod_name.to_string(),
+                        item: None,
+                        alias: Some(ns.as_str().to_string()),
+                    });
+                }
+                if let Some(dflt) = cap.get(3) {
+                    out.imports.push(ImportRef {
+                        rel_path: rel_path.to_string(),
+                        module: mod_name.to_string(),
+                        item: None,
+                        alias: Some(dflt.as_str().to_string()),
+                    });
+                }
             }
         }
 
@@ -2610,6 +2654,47 @@ impl AstCodeExtractor {
                         label: fn_name.to_string(),
                         node_type: "Function".to_string(),
                         description: format!("Функция `{}` в {}", fn_name, rel_path),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1 + line_offset,
+                        line_end,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: line.trim().to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+            }
+        }
+
+        // 4. 71.7: методы классов — тот же node_id `fn:rel:name`, что у
+        // CST method_definition (паритет regex ⊆ tree-sitter). Ключевые слова
+        // и вызовы тест-харнесса (describe/it) структурно отсечены.
+        const TS_METHOD_SKIP: &[&str] = &[
+            "if", "for", "while", "switch", "catch", "return", "function", "else", "try", "do",
+            "describe", "it", "test", "beforeEach", "afterEach", "beforeAll", "afterAll", "expect",
+        ];
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(cap) = self.ts_method_re.captures(line) {
+                if let Some(name_m) = cap.get(1) {
+                    let name = name_m.as_str();
+                    if TS_METHOD_SKIP.contains(&name) || TS_CALL_SKIP.contains(&name) {
+                        continue;
+                    }
+                    let node_id = format!("fn:{}:{}", rel_path, name);
+                    // дедуп: функция с тем же node_id уже извлечена ts_fn_re
+                    if out.nodes.iter().any(|n| n.node_id == node_id) {
+                        continue;
+                    }
+                    let line_end = ts_body_end(&lines, i) + 1 + line_offset;
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.to_string(),
+                        node_type: "Function".to_string(),
+                        description: format!("Метод `{}` в {}", name, rel_path),
                         file_path: rel_path.to_string(),
                         line_start: i + 1 + line_offset,
                         line_end,
@@ -7737,10 +7822,14 @@ pub(crate) fn collect_call_sites(
             if start > 0 && bytes[start - 1] == b'!' {
                 continue; // AMBIGUOUS: макрос
             }
+            let mut qualifier: Option<String> = None;
             if start > 0 && bytes[start - 1] == b'.' {
                 // Ф42 (issue 14): `self.method()` / `cls.method()` резолвим в
-                // метод того же файла; произвольный receiver — по-прежнему
-                // AMBIGUOUS. Граница слова: `myself.` не считается `self.`.
+                // метод того же файла; 71.4: простой идентификатор-приёмник —
+                // квалифицированный вызов (импорт-модуль, статика типа,
+                // эвристика виртуального вызова). Сложный receiver (`a.b().`,
+                // `foo()[].`) — по-прежнему AMBIGUOUS. Граница слова:
+                // `myself.` не считается `self.`.
                 let recv = line[..start - 1].trim_end();
                 let is_self = recv == "self"
                     || recv == "cls"
@@ -7748,23 +7837,82 @@ pub(crate) fn collect_call_sites(
                     || recv.ends_with(" cls")
                     || recv.ends_with("(self")
                     || recv.ends_with("(cls");
-                if !is_self {
-                    continue;
+                if is_self {
+                    qualifier = Some("self".to_string());
+                } else {
+                    // хвост-идентификатор receiver'а (`let v = store.` → "store");
+                    // сложный receiver (`a.b().`, `os.environ.`) — AMBIGUOUS
+                    let recv_ident: &str = recv
+                        .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .next()
+                        .unwrap_or("");
+                    let ok_ident = !recv_ident.is_empty()
+                        && recv_ident
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_alphabetic() || c == '_');
+                    // идентификатор — начало receiver-выражения (перед ним
+                    // не точка и не буква), иначе это часть цепочки
+                    let starts_expr = recv_ident.len() == recv.len()
+                        || recv[..recv.len() - recv_ident.len()]
+                            .chars()
+                            .last()
+                            .is_some_and(|c| !(c.is_alphanumeric() || c == '_' || c == '.'));
+                    if ok_ident && starts_expr {
+                        qualifier = Some(recv_ident.to_string());
+                    } else {
+                        continue;
+                    }
                 }
             }
             out.call_sites.push(CallSite {
                 rel_path: rel_path.to_string(),
                 line: i + 1 + line_offset,
                 name: name.to_string(),
+                qualifier,
             });
         }
     }
 }
 
-/// Ф39.1: лёгкий semantic pass (Rust + Python) — резолв простых вызовов:
-/// same-file и по импортам (алиасы учитываются, receiver-типы — нет).
+/// 71.4 (PLAN_v2.0): запись file-scope таблицы импортов для type-pass.
+/// `paths` — кандидаты-файлы модуля импорта (module_to_paths + резолв
+/// относительных TS-путей через resolve_module_file).
+struct ImportEntry {
+    module: String,
+    item: Option<String>,
+    alias: Option<String>,
+    paths: Vec<String>,
+}
+
+/// Совпадает ли квалификатор вызова с записью таблицы импортов:
+/// алиас, полное имя модуля, импортированный элемент (`import { Store }` →
+/// `Store.doThing()`) или последний сегмент (`helpers` у `crate::helpers` /
+/// `github.com/x/helpers`).
+fn qualifier_matches_import(q: &str, e: &ImportEntry) -> bool {
+    if e.alias.as_deref() == Some(q) {
+        return true;
+    }
+    if e.module == q {
+        return true;
+    }
+    if e.item.as_deref() == Some(q) {
+        return true;
+    }
+    e.module
+        .rsplit([':', '.'])
+        .next()
+        .is_some_and(|head| head == q)
+}
+
+/// Ф39.1 + 71.4: лёгкий semantic pass — резолв простых и квалифицированных
+/// вызовов по file-scope таблице импортов и same-file. Порядок:
+/// алиас-импорт → квалификатор (импорт-модуль, статика `Type::m()`,
+/// go-пакет по каталогу) → bare (same-file, импорт-пути). Нераспознанный
+/// receiver-переменная: единственный одноимённый символ того же файла —
+/// эвристика виртуального вызова (provenance=HEURISTIC, 2_analisis.md).
 /// Нерезолвленное остаётся без ребра (AMBIGUOUS — не выдумываем).
-/// Возвращает число добавленных CALLS-рёбер (provenance = RESOLVED).
+/// Возвращает число добавленных CALLS-рёбер.
 pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
     // Ф47.4: единый словарь символов с dead-code/callpath (crate::graph::callpath)
     use crate::graph::callpath::SYMBOL_TYPES;
@@ -7777,20 +7925,63 @@ pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
         }
     }
 
-    // 2. Импорты и диапазоны символов по файлам
-    let mut imports_by_file: HashMap<&str, Vec<&ImportRef>> = HashMap::new();
-    for imp in &scan.imports {
-        imports_by_file
-            .entry(imp.rel_path.as_str())
-            .or_default()
-            .push(imp);
+    // 2. 71.4: file-scope таблица импортов и диапазоны символов по файлам
+    let files: HashSet<String> = {
+        let mut f: HashSet<String> = scan.file_hashes.keys().cloned().collect();
+        f.extend(
+            scan.nodes
+                .iter()
+                .filter(|n| n.node_type == "File")
+                .map(|n| n.file_path.clone()),
+        );
+        f
+    };
+    let mut imports_by_file: HashMap<String, Vec<ImportEntry>> = HashMap::new();
+    {
+        // группировка O(импорты), а не O(файлы × импорты)
+        let mut grouped: HashMap<&str, Vec<&ImportRef>> = HashMap::new();
+        for imp in &scan.imports {
+            grouped.entry(imp.rel_path.as_str()).or_default().push(imp);
+        }
+        for (rel, imps) in grouped {
+            imports_by_file.insert(
+                rel.to_string(),
+                imps.iter().map(|imp| {
+                    let mut paths = module_to_paths(&imp.module, rel);
+                    // Rust `use crate::helpers;` даёт module="crate",
+                    // item="helpers" — путь модуля надо строить и по
+                    // полному module::item (элемент может быть модулем)
+                    if rel.ends_with(".rs") {
+                        if let Some(item) = &imp.item {
+                            let full = format!("{}::{}", imp.module, item);
+                            for p in module_to_paths(&full, rel) {
+                                if !paths.contains(&p) {
+                                    paths.push(p);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(f) = resolve_module_file(&imp.module, rel, &files) {
+                        if !paths.contains(&f) {
+                            paths.push(f);
+                        }
+                    }
+                    ImportEntry {
+                        module: imp.module.clone(),
+                        item: imp.item.clone(),
+                        alias: imp.alias.clone(),
+                        paths,
+                    }
+                }).collect(),
+            );
+        }
     }
     let mut syms_by_file: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, n) in scan.nodes.iter().enumerate() {
         if SYMBOL_TYPES.contains(&n.node_type.as_str()) {
             syms_by_file
                 .entry(n.file_path.as_str())
-                .or_default()
+            .or_default()
                 .push(i);
         }
     }
@@ -7800,7 +7991,12 @@ pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
 
     // 3. Резолв каждого места вызова
     let mut added = 0usize;
-    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut seen: HashSet<(String, String)> = HashSet::from_iter(
+        scan.edges
+            .iter()
+            .filter(|e| e.label == "CALLS")
+            .map(|e| (e.source_node_id.clone(), e.target_node_id.clone())),
+    );
     for site in &scan.call_sites {
         // Python: вызов вне тела функции не должен приписываться предыдущей функции.
         let is_python = site.rel_path.ends_with(".py") || site.rel_path.ends_with(".ipynb");
@@ -7828,7 +8024,7 @@ pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
         let mut alias_module: Option<String> = None;
         if let Some(imps) = imports_by_file.get(site.rel_path.as_str()) {
             for imp in imps {
-                if imp.alias.as_deref() == Some(site.name.as_str()) {
+                if imp.alias.as_deref() == Some(site.name.as_str()) && site.qualifier.is_none() {
                     if let Some(item) = &imp.item {
                         name = item.clone();
                         alias_module = Some(imp.module.clone());
@@ -7842,43 +8038,144 @@ pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
 
         let import_paths: Vec<String> = imports_by_file
             .get(site.rel_path.as_str())
-            .map(|v| {
-                v.iter()
-                    .flat_map(|imp| module_to_paths(&imp.module, &imp.rel_path))
-                    .collect()
-            })
+            .map(|v| v.iter().flat_map(|imp| imp.paths.iter().cloned()).collect())
             .unwrap_or_default();
 
-        let mut target: Option<(usize, String)> = None;
-        if let Some(am) = &alias_module {
-            let paths = module_to_paths(am, site.rel_path.as_str());
-            for &ti in cands {
-                let tn = &scan.nodes[ti];
-                if tn.node_id != scan.nodes[ci].node_id && paths.iter().any(|p| p == &tn.file_path)
-                {
-                    target = Some((ti, format!("typepass:import-alias:{}", tn.file_path)));
-                    break;
+        // target: (индекс цели, контекст, эвристика?) — RESOLVED vs HEURISTIC
+        let mut target: Option<(usize, String, bool)> = None;
+
+        if let Some(q) = site.qualifier.as_deref() {
+            if q == "self" || q == "cls" {
+                // Ф42: self.method()/cls.method() — метод того же файла
+                for &ti in cands {
+                    let tn = &scan.nodes[ti];
+                    if tn.node_id != scan.nodes[ci].node_id && tn.file_path == site.rel_path {
+                        target = Some((ti, format!("typepass:self:{}", name), false));
+                        break;
+                    }
+                }
+            } else {
+                // — 71.4 (a1): квалификатор — импорт-модуль/алиас/элемент —
+                if let Some(entries) = imports_by_file.get(site.rel_path.as_str()) {
+                    for e in entries {
+                        if !qualifier_matches_import(q, e) {
+                            continue;
+                        }
+                        for &ti in cands {
+                            let tn = &scan.nodes[ti];
+                            if tn.node_id != scan.nodes[ci].node_id
+                                && e.paths.iter().any(|p| p == &tn.file_path)
+                            {
+                                target = Some((
+                                    ti,
+                                    format!("typepass:qualified:{} ({})", tn.file_path, e.module),
+                                    false,
+                                ));
+                                break;
+                            }
+                        }
+                        if target.is_some() {
+                            break;
+                        }
+                    }
+                }
+                // — 71.4 (a2): статика `Type::method()` / `Type.method()` —
+                // тип объявлен в этом же файле (структурно точный путь)
+                if target.is_none() {
+                    let q_head = q.rsplit("::").next().unwrap_or(q);
+                    let static_ty = scan.nodes.iter().position(|n| {
+                        n.file_path == site.rel_path
+                            && matches!(
+                                n.node_type.as_str(),
+                                "Struct" | "Class" | "Trait" | "Interface"
+                            )
+                            && (n.label == q
+                                || (q.contains("::") && n.label == q_head))
+                    });
+                    if let Some(sty) = static_ty {
+                        let ty_label = scan.nodes[sty].label.clone();
+                        for &ti in cands {
+                            let tn = &scan.nodes[ti];
+                            if tn.node_id != scan.nodes[ci].node_id && tn.file_path == site.rel_path
+                            {
+                                target = Some((
+                                    ti,
+                                    format!("typepass:static:{}::{}", ty_label, name),
+                                    false,
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                }
+                // — 71.4 (a3): Go `pkg.Func()` — символы каталога-пакета —
+                if target.is_none() && site.rel_path.ends_with(".go") {
+                    for &ti in cands {
+                        let tn = &scan.nodes[ti];
+                        let dir_ok = tn
+                            .file_path
+                            .split('/')
+                            .rev()
+                            .nth(1)
+                            .is_some_and(|d| d == q);
+                        if tn.node_id != scan.nodes[ci].node_id
+                            && tn.file_path != site.rel_path
+                            && dir_ok
+                        {
+                            target = Some((ti, format!("typepass:gopkg:{}", tn.file_path), false));
+                            break;
+                        }
+                    }
+                }
+                // — 71.4/71.6 (a4): receiver-переменная → эвристика виртуального
+                // вызова: единственный одноимённый символ того же файла
+                // (несколько кандидатов — AMBIGUOUS, ребро не выдумываем)
+                if target.is_none() {
+                    let same_file: Vec<usize> = cands
+                        .iter()
+                        .copied()
+                        .filter(|&ti| {
+                            scan.nodes[ti].file_path == site.rel_path
+                                && scan.nodes[ti].node_id != scan.nodes[ci].node_id
+                        })
+                        .collect();
+                    if same_file.len() == 1 {
+                        target = Some((same_file[0], format!("typepass:virtual:{}", name), true));
+                    }
                 }
             }
-        }
-        if target.is_none() {
-            for &ti in cands {
-                let tn = &scan.nodes[ti];
-                if tn.node_id == scan.nodes[ci].node_id {
-                    continue; // рекурсия не даёт ребра в самого себя
+        } else {
+            // — (b) bare-вызов: алиас-модуль → same-file → файлы импортов —
+            if let Some(am) = &alias_module {
+                let paths = module_to_paths(am, site.rel_path.as_str());
+                for &ti in cands {
+                    let tn = &scan.nodes[ti];
+                    if tn.node_id != scan.nodes[ci].node_id && paths.iter().any(|p| p == &tn.file_path)
+                    {
+                        target = Some((ti, format!("typepass:import-alias:{}", tn.file_path), false));
+                        break;
+                    }
                 }
-                if tn.file_path == site.rel_path {
-                    target = Some((ti, "typepass:same-file".to_string()));
-                    break;
-                }
-                if import_paths.iter().any(|p| p == &tn.file_path) {
-                    target = Some((ti, format!("typepass:import:{}", tn.file_path)));
-                    break;
+            }
+            if target.is_none() {
+                for &ti in cands {
+                    let tn = &scan.nodes[ti];
+                    if tn.node_id == scan.nodes[ci].node_id {
+                        continue; // рекурсия не даёт ребра в самого себя
+                    }
+                    if tn.file_path == site.rel_path {
+                        target = Some((ti, "typepass:same-file".to_string(), false));
+                        break;
+                    }
+                    if import_paths.iter().any(|p| p == &tn.file_path) {
+                        target = Some((ti, format!("typepass:import:{}", tn.file_path), false));
+                        break;
+                    }
                 }
             }
         }
 
-        if let Some((ti, ctx)) = target {
+        if let Some((ti, ctx, heuristic)) = target {
             let src = scan.nodes[ci].node_id.clone();
             let dst = scan.nodes[ti].node_id.clone();
             if seen.insert((src.clone(), dst.clone())) {
@@ -7888,7 +8185,7 @@ pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
                     label: "CALLS".to_string(),
                     weight: 1.0,
                     context: ctx,
-                    provenance: "RESOLVED".to_string(),
+                    provenance: if heuristic { "HEURISTIC" } else { "RESOLVED" }.to_string(),
                 });
                 added += 1;
             }

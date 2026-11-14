@@ -3,6 +3,7 @@
 pub mod ast;
 pub mod ast_backend;
 pub mod ast_golden;
+pub mod cochange;
 pub mod hooks;
 pub mod scanjob;
 pub mod watcher;
@@ -542,6 +543,8 @@ impl ProjectService {
                             rel_path,
                             line,
                             name,
+                            // 71.4: qualifier вызова хранится в колонке module
+                            qualifier: module,
                         });
                     } else if kind == "import" {
                         scan_res.imports.push(crate::project::ast::ImportRef {
@@ -794,7 +797,9 @@ impl ProjectService {
                         site.line as i64,
                         "call",
                         site.name,
-                        None::<String>,
+                        // 71.4: qualifier вызова (`helpers`, `self`) — в колонке
+                        // module (для kind='call' она была всегда NULL), схема не меняется
+                        site.qualifier,
                         None::<String>,
                         None::<String>,
                         now
@@ -850,6 +855,67 @@ impl ProjectService {
             "UPDATE projects SET last_scanned_at = ?1, updated_at = ?1 WHERE id = ?2",
             params![now, project_id],
         )?;
+
+        // 71.8: co-change рёбра (GIT_HISTORY) — идемпотентная достройка при
+        // каждом скане; только между существующими file:-узлами (висячих нет)
+        let co_pairs = if crate::project::cochange::is_git_repo(Path::new(&project.root_path)) {
+            crate::project::cochange::compute_pairs(Path::new(&project.root_path))
+        } else {
+            Vec::new()
+        };
+        let mut co_added = 0usize;
+        for pair in &co_pairs {
+            let a_pk: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM graph_nodes WHERE node_id = ?1",
+                    params![format!("file:{}", pair.a)],
+                    |r| r.get(0),
+                )
+                .optional()
+                .unwrap_or(None);
+            let b_pk: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM graph_nodes WHERE node_id = ?1",
+                    params![format!("file:{}", pair.b)],
+                    |r| r.get(0),
+                )
+                .optional()
+                .unwrap_or(None);
+            if let (Some(src_pk), Some(dst_pk)) = (a_pk, b_pk) {
+                tx.execute(
+                    r#"
+                    INSERT INTO graph_edges (
+                        source_id, target_id, label, weight, contexts, created_at,
+                        project_id, provenance, confidence, updated_at
+                    )
+                    VALUES (?1, ?2, 'CO_CHANGES_WITH', ?3, ?4, ?5, ?6, 'GIT_HISTORY', ?3, ?5)
+                    ON CONFLICT(source_id, target_id, label) DO UPDATE SET
+                        weight = excluded.weight,
+                        contexts = excluded.contexts,
+                        updated_at = excluded.updated_at,
+                        provenance = 'GIT_HISTORY',
+                        confidence = excluded.confidence
+                    "#,
+                    params![
+                        src_pk,
+                        dst_pk,
+                        pair.confidence(),
+                        format!(
+                            "вместе в {} коммитах (последние {}, ≤{} файлов)",
+                            pair.count,
+                            crate::project::cochange::MAX_COMMITS,
+                            crate::project::cochange::MAX_COMMIT_FILES
+                        ),
+                        now,
+                        project_id,
+                    ],
+                )?;
+                co_added += 1;
+            }
+        }
+        if co_added > 0 {
+            info!("Co-change: добавлено/обновлено {co_added} рёбер CO_CHANGES_WITH (GIT_HISTORY)");
+        }
 
         tx.commit()?;
 
