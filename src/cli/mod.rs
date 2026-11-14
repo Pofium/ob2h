@@ -59,6 +59,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: LessonsCommands,
     },
+    /// Аудит-леджер: последние операции над памятью/секретами (v1.9.9, Фаза 68)
+    Audit {
+        /// Фильтр по action (memory_forget, secrets_get, slot_append, …)
+        #[arg(short, long)]
+        action: Option<String>,
+    },
     /// Вывести статистику хранилища
     Stats,
     /// Установить и зарегистрировать OB2H в Hermes (config.yaml)

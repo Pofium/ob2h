@@ -1,5 +1,5 @@
-//! 54 инструмента MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
-//! Ralph, секреты, уроки, слоты, хронология/рекап, провенанс).
+//! 55 инструментов MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
+//! Ralph, секреты, уроки, слоты, хронология/рекап, провенанс, аудит).
 
 use super::protocol::McpToolDef;
 
@@ -33,6 +33,7 @@ pub fn annotations_for(name: &str) -> Option<serde_json::Value> {
         "slot_get",
         "memory_timeline",
         "memory_verify",
+        "memory_audit",
     ];
     const DESTRUCTIVE: &[&str] = &[
         "memory_forget",
@@ -105,11 +106,12 @@ pub fn list_tools() -> Vec<McpToolDef> {
         // 4. memory_forget
         McpToolDef {
             name: "memory_forget".to_string(),
-            description: "Удалить воспоминание по ключу.".to_string(),
+            description: "Удалить воспоминание по ключу (tombstone). reason попадает в аудит-леджер (governance-семантика, Ф68).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "key": { "type": "string", "description": "Ключ воспоминания" }
+                    "key": { "type": "string", "description": "Ключ воспоминания" },
+                    "reason": { "type": "string", "description": "Причина удаления — пишется в audit_log (опционально)" }
                 },
                 "required": ["key"]
             }),
@@ -783,6 +785,18 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "memory_id": { "type": "string", "description": "Числовой id записи или key из memory_save" }
                 },
                 "required": ["memory_id"]
+            }),
+        },
+        // v1.9.9: аудит-леджер (Фаза 68)
+        McpToolDef {
+            name: "memory_audit".to_string(),
+            description: "Просмотр аудит-леджера: последние операции над памятью/слотами/уроками/секретами (actor, action, targets, details). Значения секретов в леджере не хранятся — только имена.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "operation": { "type": "string", "description": "Фильтр по action (memory_forget, secrets_get, slot_append, …) (опционально)" },
+                    "limit": { "type": "integer", "description": "Максимум записей (дефолт 50, макс 200)" }
+                }
             }),
         },
     ]

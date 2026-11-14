@@ -112,6 +112,19 @@ impl McpServer {
             })
     }
 
+    /// Ф68: fail-open запись в аудит-леджер — ошибка аудита не валит операцию.
+    fn audit_op(
+        &self,
+        action: &str,
+        targets: Vec<String>,
+        details: serde_json::Value,
+        tool: &str,
+    ) {
+        let _ = self.ctx.db.with_conn(|conn| {
+            crate::lifecycle::audit::record(conn, "agent", action, &targets, details, tool)
+        });
+    }
+
     pub fn truncate(&self, text: &str) -> String {
         let max_chars = self.ctx.settings.max_tool_output_chars;
         if text.chars().count() <= max_chars {
@@ -819,8 +832,21 @@ impl McpServer {
                     Some(k) => k,
                     None => return "[Error] key is required".to_string(),
                 };
+                // Ф68: governance-семантика — причина удаления попадает в audit_log
+                let reason = args
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("не указана");
                 match self.ctx.memory.forget(key) {
-                    Ok(true) => format!("forgotten key={key}"),
+                    Ok(true) => {
+                        self.audit_op(
+                            "memory_forget",
+                            vec![key.to_string()],
+                            serde_json::json!({ "reason": reason }),
+                            "memory_forget",
+                        );
+                        format!("forgotten key={key}")
+                    }
                     Ok(false) => format!("not found key={key}"),
                     Err(e) => format!("[Error] {e}"),
                 }
@@ -839,7 +865,15 @@ impl McpServer {
                 };
                 let note = args.get("note").and_then(|v| v.as_str());
                 match self.ctx.memory.record_feedback(key, verdict, note) {
-                    Ok(Some(trust)) => format!("feedback recorded key={key} trust={trust:.2}"),
+                    Ok(Some(trust)) => {
+                        self.audit_op(
+                            "memory_feedback",
+                            vec![key.to_string()],
+                            serde_json::json!({ "verdict": verdict, "trust": trust, "note": note }),
+                            "memory_feedback",
+                        );
+                        format!("feedback recorded key={key} trust={trust:.2}")
+                    }
                     Ok(None) => format!("not found key={key}"),
                     Err(e) => format!("[Error] {e}"),
                 }
@@ -861,7 +895,15 @@ impl McpServer {
                 let canonical = args.get("canonical_key").and_then(|v| v.as_str());
                 let note = args.get("note").and_then(|v| v.as_str());
                 match self.ctx.memory.merge_records(&keys, canonical, note) {
-                    Ok(report) => report,
+                    Ok(report) => {
+                        self.audit_op(
+                            "memory_merge",
+                            keys.clone(),
+                            serde_json::json!({ "canonical": canonical, "note": note }),
+                            "memory_merge",
+                        );
+                        report
+                    }
                     Err(e) => format!("[Error] {e} [Подсказка] проверьте, что ключи живые (не tombstone) — memory_search или memory dedup"),
                 }
             }
@@ -1059,6 +1101,13 @@ impl McpServer {
 
                 match self.ctx.workspace.write_file(file, content) {
                     Ok(_) => {
+                        // Ф68: аудит записи воркспейса — имя файла и размер, контент не пишется
+                        self.audit_op(
+                            "workspace_write",
+                            vec![file.to_string()],
+                            serde_json::json!({ "bytes": content.len(), "commit_message": msg }),
+                            "workspace_write",
+                        );
                         let commit_msg = if msg.is_empty() {
                             format!("agent write: {file}")
                         } else {
@@ -2015,7 +2064,16 @@ impl McpServer {
                 let hint = args.get("hint").and_then(|v| v.as_str());
 
                 match self.ctx.secrets.set(name, value, hint) {
-                    Ok(()) => format!("✓ Секрет \"{name}\" успешно зашифрован и сохранен"),
+                    Ok(()) => {
+                        // Ф68: в аудит — только имя (значение не пишется НИКОГДА, ADR-21)
+                        self.audit_op(
+                            "secrets_set",
+                            vec![name.to_string()],
+                            serde_json::json!({ "hint": hint }),
+                            "secrets_set",
+                        );
+                        format!("✓ Секрет \"{name}\" успешно зашифрован и сохранен")
+                    }
                     Err(e) => format!("{e}"),
                 }
             }
@@ -2026,7 +2084,16 @@ impl McpServer {
                 };
 
                 match self.ctx.secrets.get(name) {
-                    Ok(val) => val.to_string(),
+                    Ok(val) => {
+                        // Ф68: фиксация доступа к значению секрета (имя, не значение)
+                        self.audit_op(
+                            "secrets_get",
+                            vec![name.to_string()],
+                            serde_json::json!({}),
+                            "secrets_get",
+                        );
+                        val.to_string()
+                    }
                     Err(e) => format!("{e}"),
                 }
             }
@@ -2037,7 +2104,15 @@ impl McpServer {
                 };
 
                 match self.ctx.secrets.delete(name) {
-                    Ok(true) => format!("✓ Секрет \"{name}\" успешно удален"),
+                    Ok(true) => {
+                        self.audit_op(
+                            "secrets_delete",
+                            vec![name.to_string()],
+                            serde_json::json!({}),
+                            "secrets_delete",
+                        );
+                        format!("✓ Секрет \"{name}\" успешно удален")
+                    }
                     Ok(false) => format!("[Error] секрет \"{name}\" не найден"),
                     Err(e) => format!("{e}"),
                 }
@@ -2268,6 +2343,20 @@ impl McpServer {
                 match crate::lifecycle::timeline::verify_memory(&self.ctx.workspace, &self.ctx.db, memory_id) {
                     Ok(v) => serde_json::to_string(&v).unwrap_or_else(|e| format!("[Error] {e}")),
                     Err(e) => format!("{e}"),
+                }
+            }
+            // Ф68: просмотр аудит-леджера — контракт 54 → 55
+            "memory_audit" => {
+                let operation = args.get("operation").and_then(|v| v.as_str());
+                let limit = args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50)
+                    .clamp(1, 200) as usize;
+                match crate::lifecycle::audit::list(&self.ctx.db, operation, limit) {
+                    Ok(entries) => serde_json::json!({ "entries": entries, "count": entries.len() })
+                        .to_string(),
+                    Err(e) => format!("[Error] {e}"),
                 }
             }
             other => format!("[Error] Unknown tool {other}"),

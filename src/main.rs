@@ -185,6 +185,15 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         },
+        Some(Commands::Audit { action }) => {
+            let output = McpServer::new(ctx.clone())
+                .call_tool(
+                    "memory_audit",
+                    serde_json::json!({ "operation": action, "limit": 50 }),
+                )
+                .await;
+            println!("{output}");
+        }
         Some(Commands::Ralph { command }) => match command {
             ob2h::cli::RalphCommands::Debt {
                 project,
