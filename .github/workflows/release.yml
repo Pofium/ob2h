@@ -9,7 +9,7 @@ on:
       version:
         description: "Версия для сборки (tag-semver, без v)"
         required: true
-        default: "1.8.0"
+        default: "1.9.10"
 
 env:
   CARGO_TERM_COLOR: always
@@ -79,6 +79,14 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           if [[ -z "$VERSION" || "$VERSION" == refs/* ]]; then VERSION="${{ github.event.inputs.version }}"; fi
           echo "VERSION=$VERSION" >> $GITHUB_ENV
+          # Guard 69.1: тег должен совпадать с версией в Cargo.toml (артефакт именуется по VERSION)
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            CARGO_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
+            if [[ "$CARGO_VERSION" != "$VERSION" ]]; then
+              echo "::error::Тег v$VERSION не совпадает с Cargo.toml (version = $CARGO_VERSION)"
+              exit 1
+            fi
+          fi
           STAGE="target/stage/${BIN_NAME}-${VERSION}"
           mkdir -p "$STAGE"
           EXE=""
