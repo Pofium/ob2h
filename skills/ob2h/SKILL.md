@@ -177,6 +177,23 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
    skill-install): при переезде репо/store правь пути exe и env `OB2H_DATA_DIR` в каждом
    варианте И в живых MCP-конфигах агентов, учитывая оба написания: `X:\...\target\release\ob2h.exe`
    и `X:/.../data` (прямой слеш в env-примерах).
+16. **lesson_save vs memory_save (v1.9.9):** урок — процедурный опыт («что делать / чего
+   избегать / когда применимо», confidence, дедуп по fingerprint — повтор укрепляет, а не
+   плодит дубли); факт о пользователе/проекте — по-прежнему `memory_save`. Не путать:
+   «всегда запускай тесты перед коммитом» → урок; «проект X на Rust» → память.
+   Слоты (`slot_*`) — редактируемый рабочий контекст агента, не факты: лимит размера
+   1..20000 символов, append при переполнении — ошибка 413 с подсказкой (заменить через
+   `slot_replace`); в контекст.injectятся только pinned+непустые в бюджете
+   `OB2H_SLOTS_MAX_CHARS` (дефолт 1500).
+17. **Показать память владельцу → `viewer_open` (v1.9.9):** локальное окно просмотра
+   (память/граф/сессии/уроки/слоты/статистика/секреты), read-only, отдельный detached-процесс.
+   Headless/SSH/сборка без gui — окно недоступно: сообщить честно (`[Error] … [Подсказка]`),
+   фолбэк — CLI (`ob2h stats`, `ob2h audit`, `ob2h secrets status`). Если harness убивает
+   job-дерево и окно не выживает — владелец запускает вручную: `ob2h viewer`.
+18. **Секреты во viewer (v1.9.9):** вкладка «Секреты» в окне просмотра — init («Начать
+   сохранять», PIN дважды), unlock (4 цифры, Enter), список/добавление/reveal (авто-скрытие
+   15 с)/копирование/удаление. PIN вводится ТОЛЬКО владельцем в окне — правило 1 ниже
+   действует и здесь; агент не запрашивает PIN в чате никогда.
 
 ## Проверка работоспособности (read-only, без LLM)
 `memory_search`, `memory_context`, `omnes_stats`, `graph_stats`, `dream_status`,
@@ -211,3 +228,24 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
 - **Правило 2 (Явный запрос):** Доступ к секрету (`secrets_get(name)`) вызывается только при явной команде пользователя («используй токен X для вызова API»).
 - **Правило 3 (Изоляция):** Модели строго ЗАПРЕЩЕНО сохранять расшифрованные секреты в память (`memory_save`), заметки (`workspace_write`) или выводить их в открытый чат без необходимости.
 - Инструменты MCP: `secrets_status`, `secrets_set`, `secrets_get`, `secrets_delete`, `secrets_lock`.
+
+## Жизненный цикл памяти и окно просмотра (v1.9.9)
+- **Уроки (lessons):** `lesson_save` (content, context?, confidence?, project?, tags?, source?)
+  → created|strengthened; `lesson_recall` (FTS × confidence × recency), `lesson_list`,
+  `lesson_delete` (tombstone). Дрим делает недельный decay-sweep БЕЗ автоудалений.
+- **Слоты (slots):** `slot_list/get/create/append/replace/delete`; project-слот затеняет
+  global; `memory_context` и ресурс `memory://context` добавляют блок `<agent_slots>`
+  (pinned+непустые, алфавит, бюджет `OB2H_SLOTS_MAX_CHARS=1500` по границе целого слота).
+- **Хронология/рекап/провенанс/аудит:** `memory_timeline` (окно daily-логов вокруг якоря),
+  `session_recap` (инкрементальный дайджест; save=true → память с meta.source_ids),
+  `memory_verify` (трассировка факта к цитатам daily-логов), `memory_audit` (леджер операций;
+  значения секретов в леджере не хранятся — только имена). CLI: `ob2h audit`, `ob2h lessons`.
+- **Скрабинг:** `session_log`/`session_ingest` маскируют токены/ключи и имена записей сейфа
+  перед daily-логом (`OB2H_REDACT=0` — выкл).
+- **Окно просмотра (viewer):** MCP `viewer_open` (56-й инструмент; статусы opened /
+  already_running / gui_unavailable) либо CLI `ob2h viewer [--data-dir …]`. Окно read-only
+  («ни одной записи»; единственное исключение — вкладка «Секреты» по локальному PIN),
+  single-instance (lockfile `data/viewer.lock`), авто-обновление 2 с + F5, RU/EN
+  (`OB2H_UI_LANG`), тёмная/светлая тема. Сборка: `cargo build --release --features gui`;
+  headless-сборка отвечает честным `[Error] … [Подсказка]`. `ob2h doctor` показывает
+  «Viewer: доступен / сборка без gui».

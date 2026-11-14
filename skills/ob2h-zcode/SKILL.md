@@ -41,7 +41,7 @@ description: "Долговременная память, граф знаний, 
   с чужого origin не существуют локально — используй их как контекст, а не как цели
   для файловых операций.
 
-## Инструменты (36 шт, префикс `mcp__ob2h__`)
+## Инструменты (56 шт, префикс `mcp__ob2h__`)
 - **Память**: `memory_save` (`content`, опц. `key`, `importance` 0..1, `project_id`, `tags`) /
   `memory_search` (`mode`: hybrid — дефолт FTS+вектор RRF | fts | vector |
   graph — PPR-расширение по memory_links; `project_id`) / `memory_update` / `memory_forget` /
@@ -76,6 +76,17 @@ description: "Долговременная память, граф знаний, 
 - **Workspace и дриминг**: `workspace_read` / `workspace_write` (memory|soul|user|history; запись = git-коммит) /
   `session_log` / `session_ingest` (bulk-транскрипт) / `dream_run` / `dream_status` / `dream_log` / `dream_restore`
 - **Служебные**: `omnes_stats`, `omnes_backup` (VACUUM INTO + workspace, ротация 14)
+- **Секреты (Secrets Vault, v1.9)**: `secrets_status/set/get/delete/lock` — сейф
+  Argon2id + XChaCha20-Poly1305; PIN (4 цифры) вводится владельцем локально (окно PIN/терминал),
+  агенту ЗАПРЕЩЕНО запрашивать PIN в чате; `secrets_get` — только по явной команде владельца.
+- **Уроки/слоты/хронология (v1.9.9)**: `lesson_save/recall/list/delete` (процедурный опыт,
+  дедуп-укрепление) / `slot_list/get/create/append/replace/delete` (рабочий контекст, лимит
+  1..20000, блок `<agent_slots>` в memory_context) / `memory_timeline` / `session_recap` /
+  `memory_verify` (провенанс факта) / `memory_audit` (леджер операций).
+- **Окно просмотра (v1.9.9)**: `viewer_open` — локальное read-only окно
+  (память/граф/сессии/уроки/слоты/статистика/секреты), detached-процесс; статусы
+  opened / already_running / gui_unavailable; headless — честный `[Error] … [Подсказка]`,
+  фолбэк CLI `ob2h viewer` / `ob2h stats`.
 
 Детерминированный AST-граф: `project_scan` извлекает классы, функции, трейты и связи со 100%
 точностью (Graphify-подход) без LLM; `project_report`/`project_context` выделяют хабы (God Nodes).
@@ -147,6 +158,15 @@ AutoDreamWorker: гейты ≥4ч и ≥10 событий, lock, git-истор
 12. **При импорте на другой стороне через scp** — файл кладётся в inbox пира,
     применяется его `sync apply-inbox`; прямой `sync import <файл>` на удалённой машине
     тоже работает.
+13. **lesson_save vs memory_save (v1.9.9):** урок — процедурный опыт («что делать / чего
+    избегать», confidence, повтор укрепляет существующий); факт о пользователе/проекте —
+    `memory_save`. Слоты — рабочий контекст агента (не факты): append при переполнении —
+    ошибка 413, заменять через `slot_replace`.
+14. **Показать память владельцу → `viewer_open` (v1.9.9).** Headless/SSH/сборка без gui —
+    окно недоступно, сообщить честно; фолбэк — CLI (`ob2h stats`, `ob2h audit`). Если
+    harness убивает job-дерево и окно не выживает — владелец запускает `ob2h viewer` вручную.
+15. **Секреты во viewer:** вкладка «Секреты» окна просмотра (init/unlock/список/reveal с
+    авто-скрытием 15 с) — PIN вводит ТОЛЬКО владелец в окне; в чате PIN не запрашивать никогда.
 
 ## Проверка работоспособности (read-only, без LLM)
 `memory_search`, `memory_context`, `omnes_stats`, `graph_stats`, `dream_status`, `workspace_read`,
@@ -157,5 +177,7 @@ AutoDreamWorker: гейты ≥4ч и ≥10 событий, lock, git-истор
 `ob2h stats | doctor [--fix] | dream run/status/log/restore | bench [--mode history] |
 backup [--scope quick] [verify <path>] | db quantize-embeddings | memory dedup [--dry-run] |
 project init/scan/list/report/dead-code/repo-map | ralph findings-to-memory [--dry-run] |
-sync status/verify/export/import/apply-inbox/push/pull`. Агенту почти всё это доступно
+sync status/verify/export/import/apply-inbox/push/pull | viewer [--data-dir …] |
+audit [--action …] | lessons list/decay | secrets init/unlock/lock/status/list/show`.
+Агенту почти всё это доступно
 через MCP — CLI нужен для скриптов и диагностики вне сессии.

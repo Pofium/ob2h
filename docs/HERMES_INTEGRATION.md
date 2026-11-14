@@ -135,5 +135,44 @@ cp ob2h-sync.service ob2h-sync.timer /etc/systemd/system/ && systemctl enable --
   маркер truncated); блок `[related]`/`[ppr]` — соседи памяти (1-hop / PPR); блок
   `[conflicts]` — обе стороны известного противоречия с trust; warn-блок
   `<blast_radius>` — свежие правки кода (флаг `OB2H_EDIT_BLAST=warn`, дефолт off).
-- **Валидация провайдера**: контракт-тест — 41 инструмент, handshake, roundtrip
+- **Валидация провайдера**: контракт-тест — 56 инструментов (v1.9.9), handshake, roundtrip
   (`plugin/tests/test_integration.py`).
+
+---
+
+## Аддендум v1.9.9 (2026-11-14): жизненный цикл памяти и окно просмотра
+
+Дельта к тексту выше (контракт 41 → **56** MCP-инструментов, схема M11):
+
+- **Разделение ролей хранилищ** (§5.3 спеки v1.9.9):
+  - `memories` — декларативные факты («проект X на Rust», предпочтения владельца);
+  - `lessons` — процедурный опыт («что делать / чего избегать / когда применимо»):
+    `lesson_save/recall/list/delete`, confidence, дедуп по fingerprint (повтор укрепляет
+    существующий урок, а не плодит дубли), недельный decay-sweep дрима БЕЗ автоудалений;
+  - `slots` — редактируемый агентом рабочий контекст (заметки, TODO, правила):
+    `slot_list/get/create/append/replace/delete`, лимит 1..20000 символов, project-слот
+    затеняет global, append при переполнении — ошибка 413 с подсказкой.
+- **`<agent_slots>` в контексте**: `memory_context` и ресурс `memory://context` добавляют
+  блок слотов после памяти — pinned+непустые, алфавитный порядок, бюджет
+  `OB2H_SLOTS_MAX_CHARS` (дефолт 1500) по границе целого слота; блок отдаётся и при пустой
+  памяти. Плагин Hermes/DSH не меняется — слоты доезжают через существующий prefetch.
+- **Хронология/рекап/провенанс/аудит**: `memory_timeline` (окно daily-логов вокруг якоря),
+  `session_recap` (инкрементальный дайджест сессии, кэш без LLM на неизменённой сессии;
+  `save=true` → память с `meta.source_ids`), `memory_verify` (трассировка факта к цитатам
+  daily-логов), `memory_audit` (леджер операций; значения секретов не пишутся — только имена).
+  Скрабинг: `session_log`/`session_ingest` маскируют токены/ключи перед daily-логом.
+- **Окно просмотра (viewer)**: `viewer_open` (56-й инструмент) открывает нативное окно
+  просмотра detached-процессом — память/граф/сессии/уроки/слоты/статистика/секреты.
+  Окно переживает обычное завершение MCP-сессии — проверено вживую (сервер остановлен,
+  окно живо; Windows: `CREATE_BREAKAWAY_FROM_JOB` + `DETACHED_PROCESS`, фолбэк без
+  breakaway; Unix: своя process-group). Принудительное убийство всего дерева процессов
+  (`taskkill /T`, job-дерево harness'а) окно не переживает: breakaway защищает только от
+  job-object kill-on-close, не от обхода PPID-дерева — владелец запускает окно вручную:
+  `ob2h viewer`. Статусы: `opened` /
+  `already_running` (single-instance lockfile) / `gui_unavailable` (сборка без `gui` —
+  честный `[Error] … [Подсказка]`, фолбэк CLI). Окно строго read-only; вкладка «Секреты» —
+  единственное исключение: init/unlock/операции по локальному PIN владельца (ADR-18),
+  ключ затирается при lock/TTL/закрытии окна. Сборка с окном: `cargo build --release
+  --features gui`; `ob2h doctor` показывает «Viewer: доступен / сборка без gui».
+- **Синк**: lessons/slots в дельта-бандлах (LWW, монотонный reinforcements); audit_log и
+  secrets вне бандлов — подробности в `docs/SYNC.md`.
