@@ -182,7 +182,7 @@
 - [x] **69.4** Сводный раннер бенчмарков `ob2h bench all` с единым JSON-отчетом и порогами регрессии (ADR-13 gate) в CI. *(Выполнено: режим `all` в `ob2h bench` — единый JSON-отчет: секция `ast_golden` по вшитым в бинарник эталонам Ф69.3 (parity + присутствие, работает вне репозитория), `search`/`context`/`latency` при наличии `data/bench/golden.jsonl`, `code` при `--project`+`golden_code.jsonl`. Гейт ADR-13: сбой ast_golden или регрессия recall@5/MRR против предыдущей записи `history.jsonl` (`is_degradation`, пороги 0.10/0.15) → exit ≠ 0 для CI; запись в history.jsonl. Дымовой прогон на живой БД: ast_golden 5/5 языков ok, retrieval 36 кейсов, гейт не превышен.)*
 
 #### Фаза 70 — Фундамент гибридного AST (Tree-sitter Core) (оценка: 5–7 дней)
-- [ ] **70.1** Подключение `tree-sitter` (0.27.x) и грамматик через `tree-sitter-language` под опциональную фичу `treesitter`.
+- [x] **70.1** Подключение `tree-sitter` (0.27.x) и грамматик через `tree-sitter-language` под опциональную фичу `treesitter`. *(Выполнено: tree-sitter 0.27.2 + tree-sitter-{rust 0.24.2, python 0.25.0, go 0.25.0, typescript 0.23.2, dart 0.3.0} под фичей `treesitter`, по умолчанию выключена; ABI-совместимость подтверждена smoke-тестом `test_treesitter_load.rs` — 5/5 языков парсят сниппеты без ERROR; запись в PLAN.md §6.)*
 - [ ] **70.2** Абстракция `AstParserTrait`: унифицированный интерфейс разбора `parse_source(path, content) -> AstFileResult` с прозрачным переключением между Tree-sitter и regex.
 - [ ] **70.3** Парсер Rust на `tree-sitter-rust`: разбор `impl`, трейтов, макросов, структур, модулей и `use`-импортов.
 - [ ] **70.4** Парсер TypeScript/JS на `tree-sitter-typescript`: классы, интерфейсы, стрелочные функции, типы, ESM/CJS импорты.

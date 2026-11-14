@@ -51,6 +51,15 @@ sys-locale = { version = "0.3.2", optional = true }
 # Бренд-логотип viewer (PNG из OmnesProducts). Крейт уже транзитивный в дереве
 # (eframe) — новых скачиваний нет; только png-декод, без лишних форматов.
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+# Ф70.1 (PLAN_v2.0): Tree-sitter Hybrid Engine — топ-5 языков под опциональной
+# фичей `treesitter` (по умолчанию ВЫКЛЮЧЕНА: дефолтная сборка — чистый Rust
+# без C-грамматик, zero-dependency; regex-парсер остаётся fallback'ом 70.9).
+tree-sitter = { version = "0.27", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+tree-sitter-dart = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tempfile = "3.17"
@@ -67,5 +76,15 @@ libc = "0.2"
 # Локальное окно ввода PIN (egui/eframe). Опционально: в headless/CI-сборках
 # GUI не собирается, PIN вводится через терминал (rpassword).
 gui = ["dep:eframe", "dep:sys-locale", "dep:image"]
+# Ф70 (PLAN_v2.0): Tree-sitter Hybrid Engine для Rust, TS/JS, Python, Go, Dart.
+# Грамматики — C-исходники, компилируются в бинарник (бюджет 70.11: ≤8 МБ суммарно).
+treesitter = [
+    "dep:tree-sitter",
+    "dep:tree-sitter-rust",
+    "dep:tree-sitter-python",
+    "dep:tree-sitter-go",
+    "dep:tree-sitter-typescript",
+    "dep:tree-sitter-dart",
+]
 
 
