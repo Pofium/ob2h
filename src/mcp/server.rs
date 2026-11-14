@@ -42,6 +42,7 @@ pub struct AppContext {
     pub ralph: Arc<crate::ralph::RalphService>,
     pub secrets: Arc<crate::secrets::SecretsService>,
     pub lessons: Arc<crate::lifecycle::LessonsService>,
+    pub slots: Arc<crate::lifecycle::SlotsService>,
     pub dream_lock: Arc<Mutex<()>>,
     pub active_workspace: Arc<tokio::sync::RwLock<Option<std::path::PathBuf>>>,
     pub active_project_id: Arc<tokio::sync::RwLock<Option<String>>>,
@@ -94,6 +95,21 @@ fn parse_file_uri(uri: &str) -> Option<std::path::PathBuf> {
 impl McpServer {
     pub fn new(ctx: Arc<AppContext>) -> Self {
         Self { ctx }
+    }
+
+    /// Ф65: проект слота — явный аргумент `project` или активный проект сессии.
+    async fn slot_project(&self, args: &serde_json::Value) -> Option<String> {
+        args.get("project")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .or_else(|| {
+                self.ctx
+                    .active_project_id
+                    .try_read()
+                    .ok()
+                    .and_then(|g| g.clone())
+            })
     }
 
     pub fn truncate(&self, text: &str) -> String {
@@ -991,11 +1007,25 @@ impl McpServer {
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
                     .map(String::from);
+                // Ф65.3: проект pinned-слотов — явный project_id или активный проект сессии
+                let project = args
+                    .get("project_id")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .or_else(|| {
+                        self.ctx
+                            .active_project_id
+                            .try_read()
+                            .ok()
+                            .and_then(|g| g.clone())
+                    });
                 let opts = crate::memory::ContextOptions {
                     max_chars,
                     half_life_days: self.ctx.settings.recency_half_life_days,
                     author,
                     trust_weight: self.ctx.settings.context_trust_weight,
+                    project,
                     ..Default::default()
                 };
                 match self.ctx.memory.build_context(limit, query, &opts).await {
@@ -2095,6 +2125,98 @@ impl McpServer {
                     Err(e) => format!("{e}"),
                 }
             }
+            // v1.9.9 Ф65: слоты рабочего контекста — контракт 45 → 51
+            "slot_list" => {
+                let project = self.slot_project(&args).await;
+                if let Some(p) = project.as_deref() {
+                    let _ = self.ctx.slots.ensure_defaults(p);
+                }
+                match self.ctx.slots.list(project.as_deref()) {
+                    Ok(slots) => serde_json::json!({ "slots": slots }).to_string(),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "slot_get" => {
+                let label = match args.get("label").and_then(|v| v.as_str()) {
+                    Some(l) => l,
+                    None => return "[Error] label обязателен [Подсказка: имя слота вида pending_items]".to_string(),
+                };
+                let project = self.slot_project(&args).await;
+                match self.ctx.slots.get(label, project.as_deref()) {
+                    Ok(slot) => serde_json::to_string(&slot).unwrap_or_else(|e| format!("[Error] {e}")),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "slot_create" => {
+                let label = match args.get("label").and_then(|v| v.as_str()) {
+                    Some(l) => l,
+                    None => return "[Error] label обязателен [Подсказка: lowercase, начинается с буквы, [a-z0-9_]]".to_string(),
+                };
+                let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                let size_limit = args.get("size_limit").and_then(|v| v.as_i64());
+                let description = args.get("description").and_then(|v| v.as_str());
+                let pinned = args.get("pinned").and_then(|v| v.as_bool()).unwrap_or(true);
+                let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("project");
+                let project = self.slot_project(&args).await;
+                match self.ctx.slots.create(
+                    label,
+                    content,
+                    size_limit,
+                    description,
+                    pinned,
+                    scope,
+                    project.as_deref(),
+                    "agent",
+                    "slot_create",
+                ) {
+                    Ok(slot) => serde_json::to_string(&slot).unwrap_or_else(|e| format!("[Error] {e}")),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "slot_append" => {
+                let (label, text) = match (
+                    args.get("label").and_then(|v| v.as_str()),
+                    args.get("text").and_then(|v| v.as_str()),
+                ) {
+                    (Some(l), Some(t)) => (l, t),
+                    _ => return "[Error] label и text обязательны".to_string(),
+                };
+                let project = self.slot_project(&args).await;
+                match self.ctx.slots.append(label, project.as_deref(), text, "agent", "slot_append") {
+                    Ok(slot) => serde_json::to_string(&slot).unwrap_or_else(|e| format!("[Error] {e}")),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "slot_replace" => {
+                let (label, content) = match (
+                    args.get("label").and_then(|v| v.as_str()),
+                    args.get("content").and_then(|v| v.as_str()),
+                ) {
+                    (Some(l), Some(c)) => (l, c),
+                    _ => return "[Error] label и content обязательны".to_string(),
+                };
+                let project = self.slot_project(&args).await;
+                match self
+                    .ctx
+                    .slots
+                    .replace(label, project.as_deref(), content, "agent", "slot_replace")
+                {
+                    Ok(slot) => serde_json::to_string(&slot).unwrap_or_else(|e| format!("[Error] {e}")),
+                    Err(e) => format!("{e}"),
+                }
+            }
+            "slot_delete" => {
+                let label = match args.get("label").and_then(|v| v.as_str()) {
+                    Some(l) => l,
+                    None => return "[Error] label обязателен".to_string(),
+                };
+                let project = self.slot_project(&args).await;
+                match self.ctx.slots.delete(label, project.as_deref(), "agent", "slot_delete") {
+                    Ok(true) => format!("✓ Слот \"{label}\" удалён"),
+                    Ok(false) => "[Error] слот не найден".to_string(),
+                    Err(e) => format!("{e}"),
+                }
+            }
             other => format!("[Error] Unknown tool {other}"),
         }
     }
@@ -2212,6 +2334,7 @@ impl McpServer {
                     max_chars: Some(self.ctx.settings.prefetch_max_chars),
                     half_life_days: self.ctx.settings.recency_half_life_days,
                     trust_weight: self.ctx.settings.context_trust_weight,
+                    project: active_proj.map(String::from),
                     ..Default::default()
                 };
                 match self.ctx.memory.build_context(20, None, &opts).await {

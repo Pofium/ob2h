@@ -1,5 +1,5 @@
-//! 45 инструментов MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
-//! Ralph, секреты, уроки).
+//! 51 инструмент MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
+//! Ralph, секреты, уроки, слоты).
 
 use super::protocol::McpToolDef;
 
@@ -29,12 +29,15 @@ pub fn annotations_for(name: &str) -> Option<serde_json::Value> {
         "secrets_get",
         "lesson_recall",
         "lesson_list",
+        "slot_list",
+        "slot_get",
     ];
     const DESTRUCTIVE: &[&str] = &[
         "memory_forget",
         "dream_restore",
         "secrets_delete",
         "lesson_delete",
+        "slot_delete",
     ];
 
     if READ_ONLY.contains(&name) {
@@ -664,6 +667,84 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "lesson_id": { "type": "string", "description": "ID урока (lsn_…)" }
                 },
                 "required": ["lesson_id"]
+            }),
+        },
+        // v1.9.9: слоты рабочего контекста (Фаза 65) — budgeted-буферы агента
+        McpToolDef {
+            name: "slot_list".to_string(),
+            description: "Список слотов (project-слоты затеняют global с тем же label). Слоты — редактируемые агентом единицы рабочего контекста с жёстким лимитом размера; pinned-слоты инъектируются в каждый ход блоком <agent_slots>.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "Проект (дефолт: активный проект сессии)" }
+                }
+            }),
+        },
+        McpToolDef {
+            name: "slot_get".to_string(),
+            description: "Прочитать слот по label (project-слот затеняет global).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "label": { "type": "string", "description": "Имя слота (lowercase, [a-z0-9_], начинается с буквы)" },
+                    "project": { "type": "string", "description": "Проект (дефолт: активный проект сессии)" }
+                },
+                "required": ["label"]
+            }),
+        },
+        McpToolDef {
+            name: "slot_create".to_string(),
+            description: "Создать слот. Дубликат label в том же скоупе запрещён; содержимое не должно превышать size_limit.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "label": { "type": "string", "description": "Имя слота (lowercase, [a-z0-9_], начинается с буквы)" },
+                    "content": { "type": "string", "description": "Начальное содержимое (дефолт: пусто)" },
+                    "size_limit": { "type": "integer", "description": "Максимум символов (дефолт 2000, потолок 20000)" },
+                    "description": { "type": "string", "description": "Назначение слота" },
+                    "pinned": { "type": "boolean", "description": "Инъектировать в контекст (дефолт true)" },
+                    "scope": { "type": "string", "enum": ["project", "global"], "description": "Скоуп (дефолт project)" },
+                    "project": { "type": "string", "description": "Проект для scope=project (дефолт: активный проект сессии)" }
+                },
+                "required": ["label"]
+            }),
+        },
+        McpToolDef {
+            name: "slot_append".to_string(),
+            description: "Дописать текст в слот. При переполнении size_limit — отказ с текущим размером; сначала скомпактируйте через slot_replace.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "label": { "type": "string", "description": "Имя слота" },
+                    "text": { "type": "string", "description": "Добавляемый текст" },
+                    "project": { "type": "string", "description": "Проект (дефолт: активный проект сессии)" }
+                },
+                "required": ["label", "text"]
+            }),
+        },
+        McpToolDef {
+            name: "slot_replace".to_string(),
+            description: "Заменить содержимое слота целиком (компактизация). Лимит size_limit соблюдается.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "label": { "type": "string", "description": "Имя слота" },
+                    "content": { "type": "string", "description": "Новое полное содержимое" },
+                    "project": { "type": "string", "description": "Проект (дефолт: активный проект сессии)" }
+                },
+                "required": ["label", "content"]
+            }),
+        },
+        McpToolDef {
+            name: "slot_delete".to_string(),
+            description: "Удалить слот (read_only-слоты защищены).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "label": { "type": "string", "description": "Имя слота" },
+                    "project": { "type": "string", "description": "Проект (дефолт: активный проект сессии)" }
+                },
+                "required": ["label"]
             }),
         },
     ]

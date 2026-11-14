@@ -233,7 +233,7 @@ impl LessonsService {
                     conn,
                     &req.actor,
                     "lesson_strengthen",
-                    &[fp.clone()],
+                    std::slice::from_ref(&fp),
                     serde_json::json!({ "from": conf, "to": new_conf }),
                     &req.tool,
                 )?;
@@ -264,7 +264,7 @@ impl LessonsService {
                     conn,
                     &req.actor,
                     "lesson_save",
-                    &[fp.clone()],
+                    std::slice::from_ref(&fp),
                     serde_json::json!({ "confidence": confidence, "source": source }),
                     &req.tool,
                 )?;
@@ -364,27 +364,24 @@ impl LessonsService {
                  ORDER BY bm25(lessons_fts) LIMIT ?2"
             );
             let mut out = Vec::new();
-            match conn.prepare(&sql) {
-                Ok(mut stmt) => {
-                    let rows = stmt.query_map(params![query, fetch as i64], |r| {
-                        let l = Self::row_to_lesson(r)?;
-                        let bm: f64 = r.get(15)?;
-                        Ok((l, -bm))
-                    })?;
-                    for r in rows.flatten() {
-                        out.push(r);
-                    }
+            // Невалидный MATCH-синтаксис или отсутствие индекса → пусто,
+            // recall() уйдёт в LIKE-фолбэк (как search_fts в memory).
+            if let Ok(mut stmt) = conn.prepare(&sql) {
+                let rows = stmt.query_map(params![query, fetch as i64], |r| {
+                    let l = Self::row_to_lesson(r)?;
+                    let bm: f64 = r.get(15)?;
+                    Ok((l, -bm))
+                })?;
+                for r in rows.flatten() {
+                    out.push(r);
                 }
-                // Невалидный MATCH-синтаксис или отсутствие индекса → пусто,
-                // recall() уйдёт в LIKE-фолбэк (как search_fts в memory).
-                Err(_) => {}
             }
             Ok(out)
         })
     }
 
     fn recall_like(&self, query: &str, fetch: usize) -> anyhow::Result<Vec<(LessonRecord, f64)>> {
-        let like = format!("%{}%", query.replace('%', "").replace('_', ""));
+        let like = format!("%{}%", query.replace(['%', '_'], ""));
         self.db.with_conn(|conn| {
             let sql = format!(
                 "SELECT {LESSON_COLUMNS} FROM lessons \

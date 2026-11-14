@@ -99,6 +99,8 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
     ));
     // v1.9.9 Ф64: уроки (lessons) — процедурный опыт с confidence/decay
     let lessons = Arc::new(crate::lifecycle::LessonsService::new(db.clone()));
+    // v1.9.9 Ф65: слоты рабочего контекста (pinned-единицы с sizeLimit)
+    let slots = Arc::new(crate::lifecycle::SlotsService::new(db.clone()));
     let scan_jobs = Arc::new(crate::project::ScanJobManager::new(
         project.clone(),
         db.conn_arc(),
@@ -122,6 +124,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         ralph,
         secrets,
         lessons,
+        slots,
         dream_lock,
         active_workspace,
         active_project_id,

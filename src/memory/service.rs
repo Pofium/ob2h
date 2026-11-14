@@ -1344,6 +1344,17 @@ impl MemoryService {
         })
     }
 
+    /// Ф65.3: блок `<agent_slots>` из pinned-слотов проекта (чистое чтение,
+    /// без seed'а и без записи). Пустая строка = слотов нет.
+    fn slots_block(&self, opts: &ContextOptions) -> anyhow::Result<String> {
+        self.db.with_conn(|conn| {
+            Ok::<String, rusqlite::Error>(crate::lifecycle::slots::pinned_context(
+                conn,
+                opts.project.as_deref(),
+            ))
+        })
+    }
+
     /// Сборка контекста `<agent_memory>` для инъекции в системный промпт.
     /// Прежний путь (до Фазы 22): топ по importance + подстрочный overlap.
     /// Fallback для пустых/тривиальных запросов и пустого гибридного пула.
@@ -1352,6 +1363,7 @@ impl MemoryService {
         limit: usize,
         query: Option<&str>,
         opts: &ContextOptions,
+        slots: &str,
     ) -> anyhow::Result<String> {
         let query_words: HashSet<String> = query
             .unwrap_or_default()
@@ -1419,7 +1431,8 @@ impl MemoryService {
         }
 
         if scored.is_empty() {
-            return Ok(String::new());
+            // Ф65.3: памяти нет — отдаём хотя бы pinned-слоты проекта.
+            return Ok(slots.to_string());
         }
 
         let mut out = String::from("<agent_memory>\n");
@@ -1427,6 +1440,10 @@ impl MemoryService {
             out.push_str(&format!("- [{}] {}\n", r.category, r.content));
         }
         out.push_str("</agent_memory>");
+        if !slots.is_empty() {
+            out.push('\n');
+            out.push_str(slots);
+        }
         Ok(out)
     }
 
@@ -1439,15 +1456,18 @@ impl MemoryService {
         query: Option<&str>,
         opts: &ContextOptions,
     ) -> anyhow::Result<String> {
+        // Ф65.3: pinned-слоты проекта — блок `<agent_slots>` после памяти;
+        // при пустой памяти блок слотов отдаётся сам по себе.
+        let slots = self.slots_block(opts)?;
         let q = query.map(str::trim).unwrap_or("");
         if q.is_empty() {
-            return self.build_context_fallback(limit, query, opts);
+            return self.build_context_fallback(limit, query, opts, &slots);
         }
 
         let pool_size = (limit * 2).max(20);
         let hits = match self.search_hybrid_hits(q, pool_size, 0.0, false).await {
             Ok(h) if !h.is_empty() => h,
-            _ => return self.build_context_fallback(limit, query, opts),
+            _ => return self.build_context_fallback(limit, query, opts, &slots),
         };
 
         // Скоринг (§22.2): 0.35*rel + 0.25*importance + W*trust + 0.1*recency + 0.1*log1p(access).
@@ -1548,6 +1568,10 @@ impl MemoryService {
             out.push_str(&line);
         }
         out.push_str("</agent_memory>");
+        if !slots.is_empty() {
+            out.push('\n');
+            out.push_str(&slots);
+        }
         Ok(out)
     }
 }
@@ -1573,11 +1597,13 @@ pub struct ContextOptions {
     /// 0.2 включает слагаемое `trust` (флаг OB2H_CONTEXT_TRUST_WEIGHT,
     /// аудит v1.3: на молодой trust-статистике даёт −27% recall@5 — см. bench_baseline).
     pub trust_weight: f64,
+    /// Ф65.3: проект для инъекции pinned-слотов (блок `<agent_slots>`).
+    pub project: Option<String>,
 }
 
 impl Default for ContextOptions {
     fn default() -> Self {
-        Self { max_chars: None, half_life_days: 90.0, mmr_lambda: 0.7, author: None, trust_weight: 0.0 }
+        Self { max_chars: None, half_life_days: 90.0, mmr_lambda: 0.7, author: None, trust_weight: 0.0, project: None }
     }
 }
 

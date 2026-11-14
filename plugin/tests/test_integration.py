@@ -41,8 +41,8 @@ class TestRealServer(unittest.TestCase):
     def test_handshake_and_contract(self):
         tools = self.rpc.tools_list()
         names = [t["name"] for t in tools]
-        # контракт v1.9.9: 45 инструментов (v1.9: 41 + 4 lesson_* Ф64)
-        self.assertEqual(len(names), 45)
+        # контракт v1.9.9: 51 инструмент (41 v1.9 + 4 lesson_* Ф64 + 6 slot_* Ф65)
+        self.assertEqual(len(names), 51)
         for required in (
             "memory_feedback",
             "memory_merge",
@@ -64,6 +64,12 @@ class TestRealServer(unittest.TestCase):
             "lesson_recall",
             "lesson_list",
             "lesson_delete",
+            "slot_list",
+            "slot_get",
+            "slot_create",
+            "slot_append",
+            "slot_replace",
+            "slot_delete",
         ):
             self.assertIn(required, names)
 

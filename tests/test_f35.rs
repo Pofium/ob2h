@@ -82,8 +82,9 @@ fn tools_list_serialization_contains_annotations() {
         .filter(|t| t["annotations"]["destructiveHint"] == Value::Bool(true))
         .count();
     assert!(read_only >= 10, "read-only инструментов: {read_only}");
-    // v1.9.9 Ф64: +lesson_delete (было 3: memory_forget, dream_restore, secrets_delete)
-    assert_eq!(destructive, 4, "destructive: {destructive}");
+    // v1.9.9: Ф64 +lesson_delete, Ф65 +slot_delete (базовые 3: memory_forget,
+    // dream_restore, secrets_delete)
+    assert_eq!(destructive, 5, "destructive: {destructive}");
     // контракт аргументов не тронут: inputSchema у всех на месте
     assert!(json.iter().all(|t| t["inputSchema"].is_object()));
 }
