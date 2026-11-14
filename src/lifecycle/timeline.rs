@@ -9,6 +9,7 @@
 //! до-суммаризуется только по хвосту. (Фазовый курсор дрима по history.jsonl
 //! уже даёт skip неизменённого префикса для phase1 — дублировать не нужно.)
 
+use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
 
 use crate::db::Database;
@@ -103,6 +104,71 @@ pub fn load_entries(ws: &Workspace) -> anyhow::Result<Vec<SessionEntry>> {
             });
         }
         let _ = fi;
+    }
+    Ok(out)
+}
+
+/// Как `load_entries`, но для скана одной сессии (Ф67): строки без подстроки
+/// session_id отсеиваются до serde-парса — на больших daily-корпусах это ~10×.
+pub fn load_entries_for_session(
+    ws: &Workspace,
+    session_id: &str,
+    cap: usize,
+) -> anyhow::Result<Vec<SessionEntry>> {
+    let dir = ws.daily_dir();
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().map(|e| e == "jsonl").unwrap_or(false)
+                && p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.len() == 10 && s.as_bytes()[4] == b'-' && s.as_bytes()[7] == b'-')
+                    .unwrap_or(false)
+        })
+        .collect();
+    files.sort();
+    let mut out = Vec::new();
+    'files: for f in &files {
+        let rel = format!(
+            "daily/{}",
+            f.file_name().and_then(|s| s.to_str()).unwrap_or("?")
+        );
+        let text = std::fs::read_to_string(f)?;
+        for (li, line) in text.lines().enumerate() {
+            // дешёвый префильтр: без вхождения id строки не парсим вовсе
+            if !line.contains(session_id) {
+                continue;
+            }
+            let Ok(e) = serde_json::from_str::<crate::workspace::DailyLogEntry>(line) else {
+                continue;
+            };
+            let sid = e
+                .meta
+                .as_ref()
+                .and_then(|m| m.get("session_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if sid != session_id {
+                continue;
+            }
+            out.push(SessionEntry {
+                timestamp: e.timestamp,
+                session_id: sid.to_string(),
+                author: e
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.get("author"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
+                user_text: e.user_text,
+                assistant_text: e.assistant_text,
+                source_ref: format!("{rel}#L{}", li + 1),
+            });
+            if out.len() >= cap {
+                break 'files;
+            }
+        }
     }
     Ok(out)
 }
@@ -314,4 +380,159 @@ pub async fn recap_session(
         }
     }
     Ok(out)
+}
+
+/// Символов на фрагмент реплики в цитате провенанса.
+const CITATION_SNIPPET: usize = 160;
+/// Кап цитат по сессионной мете (без явных source_ids).
+const SESSION_CITATIONS_CAP: usize = 20;
+
+/// Цитата из daily-лога по ссылке вида "daily/2026-11-14.jsonl#L12".
+fn citation_from_ref(ws: &Workspace, reference: &str) -> Value {
+    let Some((path_part, line_part)) = reference.split_once("#L") else {
+        return json!({ "ref": reference, "missing": true });
+    };
+    let Ok(line_no) = line_part.trim().parse::<usize>() else {
+        return json!({ "ref": reference, "missing": true });
+    };
+    let path = ws.root().join(path_part);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return json!({ "ref": reference, "missing": true });
+    };
+    let Some(line) = text.lines().nth(line_no.saturating_sub(1)) else {
+        return json!({ "ref": reference, "missing": true });
+    };
+    match serde_json::from_str::<crate::workspace::DailyLogEntry>(line) {
+        Ok(e) => json!({
+            "ref": reference,
+            "timestamp": e.timestamp,
+            "author": e.meta.as_ref().and_then(|m| m.get("author")).cloned(),
+            "session_id": e.meta.as_ref().and_then(|m| m.get("session_id")).cloned(),
+            "user": trim_chars(&e.user_text, CITATION_SNIPPET),
+            "agent": trim_chars(&e.assistant_text, CITATION_SNIPPET),
+        }),
+        Err(_) => json!({ "ref": reference, "missing": true, "reason": "битая строка" }),
+    }
+}
+
+/// Строка memories для провенанса.
+type MemoryRow = (
+    i64,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+);
+
+/// Ф67: провенанс факта — трассировка от записи `memories` к исходным наблюдениям.
+/// Порядок: meta.source_ids (явные ссылки recap/lessons) → meta.session_id (скан
+/// daily-логов сессии). Ни того, ни другого — честный `provenance: none`, не ошибка.
+/// Tombstone-записи верифицируются наравне с живыми (история не теряется).
+pub fn verify_memory(ws: &Workspace, db: &Database, memory_id: &str) -> anyhow::Result<Value> {
+    let lookup = memory_id.trim();
+    if lookup.is_empty() {
+        anyhow::bail!("[Error] memory_id обязателен [Подсказка: числовой id записи или key из memory_save]");
+    }
+    let row: Option<MemoryRow> = db.with_conn(|conn| {
+            let sql = "SELECT id, key, content, category, source, meta, created_at, updated_at, deleted_at \
+                       FROM memories WHERE {cond} LIMIT 1";
+            if let Ok(id) = lookup.parse::<i64>() {
+                conn.query_row(
+                    &sql.replace("{cond}", "id = ?1"),
+                    rusqlite::params![id],
+                    |r| {
+                        Ok((
+                            r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
+                            r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?,
+                        ))
+                    },
+                )
+                .optional()
+            } else {
+                conn.query_row(
+                    &sql.replace("{cond}", "key = ?1"),
+                    rusqlite::params![lookup],
+                    |r| {
+                        Ok((
+                            r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?,
+                            r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?,
+                        ))
+                    },
+                )
+                .optional()
+            }
+        })?;
+
+    let (id, key, content, category, source, meta, created_at, updated_at, deleted_at) =
+        row.ok_or_else(|| {
+            anyhow::anyhow!("[Error] запись \"{lookup}\" не найдена [Подсказка: memory_verify принимает числовой id или key]")
+        })?;
+    let meta_json: Value = meta
+        .as_deref()
+        .and_then(|m| serde_json::from_str(m).ok())
+        .unwrap_or(json!({}));
+
+    let mut citations: Vec<Value> = Vec::new();
+    let mut provenance = "none";
+    let source_ids: Vec<String> = meta_json
+        .get("source_ids")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .take(SOURCE_IDS_CAP)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if !source_ids.is_empty() {
+        // Явные ссылки (recap/lessons) — точные цитаты
+        provenance = "daily";
+        for reference in &source_ids {
+            citations.push(citation_from_ref(ws, reference));
+        }
+    } else {
+        // Сессионная мета: скан daily-логов по session_id
+        let session_id = meta_json
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !session_id.is_empty() {
+            let session_entries = load_entries_for_session(ws, &session_id, SESSION_CITATIONS_CAP)?;
+            if !session_entries.is_empty() {
+                provenance = "daily";
+                for e in session_entries {
+                    citations.push(json!({
+                        "ref": e.source_ref,
+                        "timestamp": e.timestamp,
+                        "author": e.author.clone(),
+                        "session_id": e.session_id,
+                        "user": trim_chars(&e.user_text, CITATION_SNIPPET),
+                        "agent": trim_chars(&e.assistant_text, CITATION_SNIPPET),
+                    }));
+                }
+            }
+        }
+    }
+
+    Ok(json!({
+        "provenance": provenance,
+        "record": {
+            "id": id,
+            "key": key,
+            "category": category,
+            "source": source,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "deleted_at": deleted_at,
+            "content": trim_chars(&content, CITATION_SNIPPET),
+        },
+        "citation_count": citations.len(),
+        "citations": citations,
+    }))
 }

@@ -2259,6 +2259,17 @@ impl McpServer {
                     Err(e) => format!("{e}"),
                 }
             }
+            // v1.9.9 Ф67: провенанс факта — контракт 53 → 54
+            "memory_verify" => {
+                let memory_id = match args.get("memory_id").and_then(|v| v.as_str()) {
+                    Some(m) => m,
+                    None => return "[Error] memory_id обязателен [Подсказка: числовой id или key из memory_save]".to_string(),
+                };
+                match crate::lifecycle::timeline::verify_memory(&self.ctx.workspace, &self.ctx.db, memory_id) {
+                    Ok(v) => serde_json::to_string(&v).unwrap_or_else(|e| format!("[Error] {e}")),
+                    Err(e) => format!("{e}"),
+                }
+            }
             other => format!("[Error] Unknown tool {other}"),
         }
     }

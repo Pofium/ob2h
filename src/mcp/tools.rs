@@ -1,5 +1,5 @@
-//! 53 инструмента MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
-//! Ralph, секреты, уроки, слоты, хронология/рекап).
+//! 54 инструмента MCP (память, воркспейс, сессии, граф, дриминг, бэкапы, проекты,
+//! Ralph, секреты, уроки, слоты, хронология/рекап, провенанс).
 
 use super::protocol::McpToolDef;
 
@@ -32,6 +32,7 @@ pub fn annotations_for(name: &str) -> Option<serde_json::Value> {
         "slot_list",
         "slot_get",
         "memory_timeline",
+        "memory_verify",
     ];
     const DESTRUCTIVE: &[&str] = &[
         "memory_forget",
@@ -770,6 +771,18 @@ pub fn list_tools() -> Vec<McpToolDef> {
                     "session_id": { "type": "string", "description": "ID сессии (дефолт: последняя сессия в логах)" },
                     "save": { "type": "boolean", "description": "Сохранить итог в долгосрочную память (дефолт false)" }
                 }
+            }),
+        },
+        // v1.9.9: провенанс фактов (Фаза 67)
+        McpToolDef {
+            name: "memory_verify".to_string(),
+            description: "Провенанс факта: трассировка от записи памяти к исходным наблюдениям daily-логов (по meta.source_ids либо session_id) с цитатами и счётчиком. Tombstone-записи верифицируются тоже; отсутствие метаданных — честный provenance: none.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": { "type": "string", "description": "Числовой id записи или key из memory_save" }
+                },
+                "required": ["memory_id"]
             }),
         },
     ]
