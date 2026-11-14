@@ -1131,6 +1131,10 @@ impl McpServer {
                     Some(a) => a,
                     None => return "[Error] assistant_text is required".to_string(),
                 };
+                // Ф69.1: скрабинг секретов перед записью в daily-лог и pending-сессию
+                let user_text = crate::lifecycle::redact::redact_for_capture(&self.ctx.db, user_text);
+                let assistant_text =
+                    crate::lifecycle::redact::redact_for_capture(&self.ctx.db, assistant_text);
                 let source = args
                     .get("source")
                     .and_then(|v| v.as_str())
@@ -1148,11 +1152,11 @@ impl McpServer {
                 let _ = self
                     .ctx
                     .workspace
-                    .log_daily_session(user_text, assistant_text, Some(meta));
+                    .log_daily_session(&user_text, &assistant_text, Some(meta));
 
                 let mut session = self.ctx.pending_session.lock().await;
-                session.append("user", user_text);
-                session.append("assistant", assistant_text);
+                session.append("user", &user_text);
+                session.append("assistant", &assistant_text);
 
                 match self.ctx.consolidator.maybe_consolidate(&mut session).await {
                     Ok(res) if res.consolidated => format!("logged +consolidated x{}", res.entries),
@@ -1217,6 +1221,10 @@ impl McpServer {
                     if role != "user" && role != "assistant" {
                         continue;
                     }
+                    // Ф69.1: скрабинг секретов перед записью в daily-лог
+                    let content =
+                        crate::lifecycle::redact::redact_for_capture(&self.ctx.db, content);
+                    let content = content.as_str();
                     if role == "user" {
                         if has_user {
                             pending_user.push('\n');

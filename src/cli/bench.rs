@@ -67,6 +67,20 @@ pub fn mrr(ranked: &[String], expected: &HashSet<String>) -> f64 {
     0.0
 }
 
+/// Ф69.2, recall-all@k (LongMemEval-стиль, strict): ВСЕ ожидаемые ключи кейса
+/// найдены в топ-k. Для одноключевого кейса совпадает с «найден/не найден».
+pub fn recall_all_at_k(ranked: &[String], expected: &HashSet<String>, k: usize) -> bool {
+    !expected.is_empty()
+        && expected
+            .iter()
+            .all(|key| ranked.iter().take(k).any(|rk| rk == key))
+}
+
+/// Ф69.2, any-hit@k: хотя бы один ожидаемый ключ кейса в топ-k.
+pub fn any_hit_at_k(ranked: &[String], expected: &HashSet<String>, k: usize) -> bool {
+    ranked.iter().take(k).any(|key| expected.contains(key))
+}
+
 /// Перцентиль методом nearest-rank (p в процентах: 50, 95).
 pub fn percentile(durations_ms: &mut [f64], p: f64) -> f64 {
     if durations_ms.is_empty() {
@@ -92,6 +106,10 @@ pub struct BenchResult {
     pub cases: usize,
     pub ks: Vec<usize>,
     pub recall: Vec<f64>,
+    /// Ф69.2: доля кейсов, где ВСЕ ожидаемые ключи в топ-k.
+    pub recall_all: Vec<f64>,
+    /// Ф69.2: доля кейсов, где хотя бы один ожидаемый ключ в топ-k.
+    pub any_hit: Vec<f64>,
     pub mrr: f64,
     pub empty_count: usize,
     pub p50_ms: f64,
@@ -151,6 +169,8 @@ pub async fn run_bench(
     }
 
     let mut recalls = vec![0.0f64; ks.len()];
+    let mut recall_all_hits = vec![0.0f64; ks.len()];
+    let mut any_hit_hits = vec![0.0f64; ks.len()];
     let mut mrr_sum = 0.0f64;
     let mut empty_count = 0usize;
     let mut durations = Vec::with_capacity(cases.len());
@@ -198,6 +218,12 @@ pub async fn run_bench(
         }
         for (i, k) in ks.iter().enumerate() {
             recalls[i] += recall_at_k(&ranked, &expected, *k);
+            if recall_all_at_k(&ranked, &expected, *k) {
+                recall_all_hits[i] += 1.0;
+            }
+            if any_hit_at_k(&ranked, &expected, *k) {
+                any_hit_hits[i] += 1.0;
+            }
         }
         mrr_sum += mrr(&ranked, &expected);
     }
@@ -206,12 +232,20 @@ pub async fn run_bench(
     for r in &mut recalls {
         *r /= n;
     }
+    for r in &mut recall_all_hits {
+        *r /= n;
+    }
+    for r in &mut any_hit_hits {
+        *r /= n;
+    }
 
     Ok(BenchResult {
         mode: mode.to_string(),
         cases: scored_cases,
         ks: ks.to_vec(),
         recall: recalls,
+        recall_all: recall_all_hits,
+        any_hit: any_hit_hits,
         mrr: mrr_sum / n,
         empty_count,
         p50_ms: percentile(&mut durations, 50.0),
@@ -504,6 +538,9 @@ pub async fn cli_run(
         "cases": result.cases,
         "recall@5": recall_at(5),
         "recall@10": recall_at(10),
+        // Ф69.2: LongMemEval-стиль — наблюдение; порог гейта ADR-13 не меняется
+        "recall_all@5": result.ks.iter().position(|&x| x == 5).and_then(|i| result.recall_all.get(i).copied()),
+        "any_hit@5": result.ks.iter().position(|&x| x == 5).and_then(|i| result.any_hit.get(i).copied()),
         "mrr": (result.mrr * 1000.0).round() / 1000.0,
         "p95_ms": (result.p95_ms * 10.0).round() / 10.0,
         "db_size_mb": (db_size_mb * 10.0).round() / 10.0,
@@ -536,6 +573,13 @@ fn print_human(result: &BenchResult, golden_path: &Path) {
     println!();
     for (k, r) in result.ks.iter().zip(&result.recall) {
         println!("  recall@{k:<3} {r:.3}");
+    }
+    // Ф69.2: LongMemEval-стиль метрики полноты
+    for (k, r) in result.ks.iter().zip(&result.recall_all) {
+        println!("  recall-all@{k:<3} {r:.3}");
+    }
+    for (k, r) in result.ks.iter().zip(&result.any_hit) {
+        println!("  any-hit@{k:<3} {r:.3}");
     }
     println!("  MRR        {:.3}", result.mrr);
     println!("  пусто      {}/{}", result.empty_count, result.cases);
@@ -833,6 +877,8 @@ async fn run_code_bench(
         .await;
 
     let mut recalls = vec![0.0f64; ks.len()];
+    let mut recall_all_hits = vec![0.0f64; ks.len()];
+    let mut any_hit_hits = vec![0.0f64; ks.len()];
     let mut mrr_sum = 0.0f64;
     let mut empty_count = 0usize;
     let mut durations = Vec::with_capacity(cases.len());
@@ -874,12 +920,26 @@ async fn run_code_bench(
         }
         for (i, &k) in ks.iter().enumerate() {
             recalls[i] += recall_at_k(&ranked, &expected, k);
+            if recall_all_at_k(&ranked, &expected, k) {
+                recall_all_hits[i] += 1.0;
+            }
+            if any_hit_at_k(&ranked, &expected, k) {
+                any_hit_hits[i] += 1.0;
+            }
         }
         mrr_sum += mrr(&ranked, &expected);
     }
 
     let n = scored_cases.max(1) as f64;
     let recalls: Vec<f64> = recalls.iter().map(|r| (r / n * 1000.0).round() / 1000.0).collect();
+    let recall_all: Vec<f64> = recall_all_hits
+        .iter()
+        .map(|r| (r / n * 1000.0).round() / 1000.0)
+        .collect();
+    let any_hit: Vec<f64> = any_hit_hits
+        .iter()
+        .map(|r| (r / n * 1000.0).round() / 1000.0)
+        .collect();
     let mrr = (mrr_sum / n * 1000.0).round() / 1000.0;
     let p50 = percentile(&mut durations, 50.0);
     let p95 = percentile(&mut durations, 95.0);
@@ -889,6 +949,8 @@ async fn run_code_bench(
         cases: scored_cases,
         ks: ks.to_vec(),
         recall: recalls,
+        recall_all,
+        any_hit,
         mrr,
         empty_count,
         p50_ms: p50,

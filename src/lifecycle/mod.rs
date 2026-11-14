@@ -3,6 +3,7 @@
 
 pub mod audit;
 pub mod lessons;
+pub mod redact;
 pub mod slots;
 pub mod timeline;
 
