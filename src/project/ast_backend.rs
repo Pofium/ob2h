@@ -82,7 +82,7 @@ pub fn lang_for_path(rel_path: &str) -> Option<&'static str> {
 pub mod ts {
     use std::collections::HashMap;
 
-    use tree_sitter::{Node, Parser, Tree};
+    use tree_sitter::{Node, Parser, StreamingIterator, Tree};
 
     /// Ф70.9 (PLAN_v2.0): порог доли ERROR-узлов в CST, выше которого файл
     /// уходит в regex (tree-sitter на частично битых файлах работает толерантно —
@@ -111,8 +111,8 @@ pub mod ts {
         collect_call_sites_standalone, split_rust_use, AstEdge, AstNode, AstScanResult,
     };
 
-    /// Грамматика дерева по имени языка.
-    fn language_for(lang: &str) -> Option<tree_sitter::Language> {
+    /// Грамматика дерева по имени языка (pub — кросс-проверки интеграционных тестов).
+    pub fn language_for(lang: &str) -> Option<tree_sitter::Language> {
         Some(match lang {
             "rust" => tree_sitter_rust::LANGUAGE.into(),
             "python" => tree_sitter_python::LANGUAGE.into(),
@@ -1577,10 +1577,113 @@ pub mod ts {
             c.goto_parent();
         }
     }
+
+    /// Ф70.7 (PLAN_v2.0): декларативные .scm-запросы символов (tags.scm-стиль,
+    /// вшитые строки). Назначение — кросс-проверка mapper'ов против
+    /// декларативных определений (тесты на эталонах Ф69.3) и основа для 71.x;
+    /// боевой путь разбора — ручные обходы (provenance и поля грамматик
+    /// требуют контекст, queries не дают tier'ы достоверности).
+    pub fn query_symbols(root: Node, src: &[u8], lang: &str) -> Vec<(String, String)> {
+        let Some(q) = symbol_query(lang) else {
+            return Vec::new();
+        };
+        // Имена захватов → индексы (API 0.27: только capture_index_for_name)
+        let idx_name = q.capture_index_for_name("name");
+        let tags: Vec<(u32, &str)> = [
+            ("fn", "Function"),
+            ("struct", "Struct"),
+            ("trait", "Trait"),
+            ("class", "Class"),
+            ("interface", "Interface"),
+        ]
+        .iter()
+        .filter_map(|(n, t)| q.capture_index_for_name(n).map(|i| (i, *t)))
+        .collect();
+        let mut qc = tree_sitter::QueryCursor::new();
+        let mut out: Vec<(String, String)> = Vec::new();
+        let mut matches = qc.matches(q, root, src);
+        while let Some(m) = matches.next() {
+            let mut name: Option<String> = None;
+            let mut kind: Option<&str> = None;
+            for c in m.captures() {
+                if Some(c.index) == idx_name {
+                    name = Some(c.node.utf8_text(src).unwrap_or("").to_string());
+                } else if let Some((_, t)) = tags.iter().find(|(i, _)| *i == c.index) {
+                    kind = Some(t);
+                }
+            }
+            if let (Some(n), Some(k)) = (name, kind) {
+                out.push((n, k.to_string()));
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Текст .scm-запроса TS/TSX (общий для двух грамматик).
+    const TS_QUERY_TEXT: &str = "(function_declaration name: (identifier) @name) @fn
+(method_definition name: (property_identifier) @name) @fn
+(class_declaration name: (type_identifier) @name) @class
+(interface_declaration name: (type_identifier) @name) @interface
+(type_alias_declaration name: (type_identifier) @name) @interface
+(variable_declarator name: (identifier) @name value: (arrow_function)) @fn";
+
+    /// Компилированный .scm-запрос символов языка (OnceLock — один раз).
+    fn symbol_query(lang: &str) -> Option<&'static tree_sitter::Query> {
+        static NONE_Q: Option<tree_sitter::Query> = None;
+        static RUST: std::sync::OnceLock<Option<tree_sitter::Query>> = std::sync::OnceLock::new();
+        static PYTHON: std::sync::OnceLock<Option<tree_sitter::Query>> = std::sync::OnceLock::new();
+        static GO: std::sync::OnceLock<Option<tree_sitter::Query>> = std::sync::OnceLock::new();
+        static DART: std::sync::OnceLock<Option<tree_sitter::Query>> = std::sync::OnceLock::new();
+        static TS: std::sync::OnceLock<Option<tree_sitter::Query>> = std::sync::OnceLock::new();
+        static TSX: std::sync::OnceLock<Option<tree_sitter::Query>> = std::sync::OnceLock::new();
+        let compile = |grammar: tree_sitter::Language, text: &str| -> Option<tree_sitter::Query> {
+            tree_sitter::Query::new(&grammar, text).ok()
+        };
+        let q = match lang {
+            "rust" => RUST.get_or_init(|| {
+                compile(
+                    language_for("rust")?,
+                    r#"(function_item name: (identifier) @name) @fn
+(function_signature_item name: (identifier) @name) @fn
+(struct_item name: (type_identifier) @name) @struct
+(enum_item name: (type_identifier) @name) @struct
+(trait_item name: (type_identifier) @name) @trait"#,
+                )
+            }),
+            "python" => PYTHON.get_or_init(|| {
+                compile(
+                    language_for("python")?,
+                    "(function_definition name: (identifier) @name) @fn
+(class_definition name: (identifier) @name) @class",
+                )
+            }),
+            "go" => GO.get_or_init(|| {
+                compile(
+                    language_for("go")?,
+                    "(function_declaration name: (identifier) @name) @fn
+(method_declaration name: (field_identifier) @name) @fn
+(type_spec name: (type_identifier) @name type: (struct_type)) @struct
+(type_spec name: (type_identifier) @name type: (interface_type)) @struct",
+                )
+            }),
+            "dart" => DART.get_or_init(|| {
+                compile(
+                    language_for("dart")?,
+                    r#"(function_declaration . (function_signature (identifier) @name)) @fn
+(method_declaration . (method_signature (function_signature (identifier) @name))) @fn
+(class_declaration "class" (identifier) @name) @class
+(mixin_declaration "mixin" (identifier) @name) @trait"#,
+                )
+            }),
+            "ts" => TS.get_or_init(|| compile(language_for("ts")?, TS_QUERY_TEXT)),
+            "tsx" => TSX.get_or_init(|| compile(language_for("tsx")?, TS_QUERY_TEXT)),
+            _ => &NONE_Q,
+        };
+        q.as_ref()
+    }
 }
-
-
-/// Диспетчер бэкендов: прозрачный выбор regex / tree-sitter на файл.
 /// Создаётся один раз на скан (конструирование regex'ов дорогое).
 pub struct AstParserDispatcher {
     regex: RegexBackend,

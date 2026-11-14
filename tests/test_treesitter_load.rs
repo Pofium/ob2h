@@ -741,6 +741,57 @@ fn build() {
     );
 }
 
+// ——— Ф70.7: .scm-запросы — кросс-проверка mapper'ов ———
+
+/// Кросс-проверка 70.7: символы mapper'а (ручной обход CST) совпадают с
+/// декларативными .scm-запросами на эталонах всех 5 языков. Расхождение —
+/// баг в mapper'е или в запросе.
+#[test]
+fn query_symbols_cross_check_mappers() {
+    for (lang, rel) in [
+        ("rust", "source.rs"),
+        ("python", "source.py"),
+        ("go", "source.go"),
+        ("dart", "source.dart"),
+        ("ts", "source.ts"),
+    ] {
+        let golden = ob2h::project::ast_golden::load_embedded()
+            .unwrap()
+            .into_iter()
+            .find(|g| g.spec.language == lang)
+            .unwrap();
+        let mut out = AstScanResult::default();
+        ts::parse_source(rel, &golden.source, lang, &mut out)
+            .unwrap_or_else(|e| panic!("{lang}: {e}"));
+        let mut mapper_syms: Vec<(String, String)> = out
+            .nodes
+            .iter()
+            .filter(|n| {
+                matches!(
+                    n.node_type.as_str(),
+                    "Function" | "Struct" | "Trait" | "Class" | "Interface"
+                )
+            })
+            .map(|n| (n.label.clone(), n.node_type.clone()))
+            .collect();
+        mapper_syms.sort();
+        mapper_syms.dedup();
+
+        let mut parser = tree_sitter::Parser::new();
+        let grammar = ts::language_for(lang).unwrap_or_else(|| panic!("{lang}: нет грамматики"));
+        parser
+            .set_language(&grammar)
+            .unwrap_or_else(|e| panic!("{lang}: grammar {e}"));
+        let tree = parser.parse(&golden.source, None).expect("parse");
+        let query_syms = ts::query_symbols(tree.root_node(), golden.source.as_bytes(), lang);
+
+        assert_eq!(
+            mapper_syms, query_syms,
+            "{lang}: mapper и .scm-запрос разошлись"
+        );
+    }
+}
+
 // ——— Ф70.4: TS/JS mapper (CST → AstScanResult) ———
 
 /// TS: эталонные символы + superset (метод класса) + вызовы.
