@@ -19,6 +19,21 @@
 - 4 новых MCP-инструмента (**контракт 41 → 45**): `lesson_save`, `lesson_recall`,
   `lesson_list`, `lesson_delete`; аннотации: lesson_recall/lesson_list readOnlyHint,
   lesson_delete destructiveHint.
+- **Слоты рабочего контекста (slots, Фаза 65):** редактируемые агентом budgeted-единицы
+  памяти (pinned, size_limit 1..20000, scope project/global; project-слот затеняет global).
+  6 новых MCP-инструментов (**контракт 45 → 51**): `slot_list/get/create/append/replace/delete`
+  (append при переполнении — 413-семантика с текущим размером и подсказкой; операции в
+  audit_log; read_only-слоты защищены). **Инъекция в контекст**: `memory_context` и ресурс
+  `memory://context` добавляют блок `<agent_slots>` после памяти — pinned+непустые, по
+  алфавиту, бюджет `OB2H_SLOTS_MAX_CHARS` (дефолт 1500), усечение по границе целого слота,
+  блок отдаётся и при пустой памяти. Seed-дефолты §5.3 (pending_items, session_guidance,
+  project_context, user_rules, self_notes) создаются лениво при slot_list. Слоты не
+  индексируются векторно (контекст, а не факты). **Синк**: lessons/slots в дельта-бандлы
+  (LWW по updated_at/origin; счётчик reinforcements у уроков монотонный — max сторон;
+  no-op-гвард импорта сравнивает значимые поля — фикс «проглатывания» reinforce в ту же
+  секунду), counts/checksums в `sync local-stats` и `sync verify`; audit_log и secrets
+  по-прежнему вне бандлов. M11 дополнен колонкой `origin` в lessons/slots (схема v11
+  ещё не в релизе — правка на месте).
 
 ## [1.9.2] - 2026-11-03
 

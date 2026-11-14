@@ -283,12 +283,12 @@ Seed-дефолты слотов OB2H (создаются лениво при п
 
 ### Фаза 65 — Слоты (slots): сервис, MCP, инъекция в контекст, синк (оценка 1–1.5 дня)
 
-- [ ] **65.1** `src/lifecycle/slots.rs`: валидация label/limit/scope; затенение project→global; append/replace c 413-семантикой (ошибка с current_size/size_limit и подсказкой); keyed-лок на label; seed-дефолтов §5.3 (лениво).
-- [ ] **65.2** MCP: `slot_list`, `slot_get`, `slot_create`, `slot_append`, `slot_replace`, `slot_delete` — контракты 1:1 по agentmemory (§3.3). Операции в audit_log.
-- [ ] **65.3** `memory_context`: блок `<agent_slots>` после `<agent_memory>` — pinned+непустые, алфавитный порядок, бюджет `OB2H_SLOTS_MAX_CHARS=1500` по границе слота; слоты не попадают в векторный индекс (это контекст, а не факты — осознанно).
-- [ ] **65.4** Синк: `lessons`/`slots` в дельта-бандлы и поле-уровневый merge (LWW по `updated_at`, конфликты — в conflicts.jsonl, `OB2H_SYNC_KEEP_LOSERS`); `audit_log` и `secrets` вне бандлов; `sync verify` учитывает новые таблицы.
-- [ ] **65.5** Тесты: затенение, лимиты, бюджет инъекции, merge-конфликт слота на двух «машинах» (tmp-БД).
-- **DoD:** 6 инструментов; append при переполнении даёт читаемую ошибку с подсказкой; pinned-слоты видны в `<agent_slots>`; синк переносит слот PC↔VPS без потерь.
+- [x] **65.1** `src/lifecycle/slots.rs`: валидация label/limit/scope; затенение project→global; append/replace c 413-семантикой (ошибка с размерами и подсказкой); доступ через ручной лок `conn_arc()` (паттерн SecretsService); seed-дефолты §5.3 лениво (`ensure_defaults`).
+- [x] **65.2** MCP: `slot_list`, `slot_get`, `slot_create`, `slot_append`, `slot_replace`, `slot_delete` (контракт 45 → 51; project — явный аргумент или активный проект сессии). Операции в audit_log.
+- [x] **65.3** `memory_context` + ресурс `memory://context`: блок `<agent_slots>` после памяти — pinned+непустые, алфавитный порядок, бюджет `OB2H_SLOTS_MAX_CHARS=1500` по границе целого слота (не влезающие пропускаются); при пустой памяти блок слотов отдаётся сам. Слоты не индексируются векторно (осознанно).
+- [x] **65.4** Синк: `lessons`/`slots` в дельта-бандлы (LWW по updated_at/origin; reinforcements — монотонный max; no-op-гвард сравнивает значимые поля); counts/checksums в local-stats и verify; `audit_log` и `secrets` вне бандлов.
+- [x] **65.5** Тесты: 8 в `tests/test_lifecycle_slots.rs` — затенение, 413+replace, read_only, seed+audit, бюджет/затенение инъекции, sync roundtrip PC↔VPS с LWW-конфликтом и монотонным reinforce.
+- **DoD:** 6 инструментов; append при переполнении даёт читаемую ошибку с подсказкой; pinned-слоты видны в `<agent_slots>`; синк переносит слот PC↔VPS без потерь — **выполнено** (suite 53 набора зелёный, clippy чисто, python 20 OK, smoke MCP подтверждает seed/413/инъекцию).
 
 ### Фаза 66 — Хронология, рекап сессии, инкрементальные summaries (оценка 1–1.5 дня)
 
