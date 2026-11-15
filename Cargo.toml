@@ -34,6 +34,9 @@ hf-hub = { version = "0.4", default-features = false, features = ["rustls-tls", 
 ignore = "0.4"
 notify = "6.1"
 notify-debouncer-mini = "0.4.1"
+# 0.1.9: BSD-типы u_int8_t в C-коде отсутствуют в musl — обходится CFLAGS-макросами
+# в release.yml (musl-джоба). Альфа 0.1.10-alpha.4 фикс собрана, но её cc-сборка
+# нестабильна под MSVC 14.29 — остаёмся на 0.1.9 до стабильного релиза.
 sqlite-vec = "0.1.9"
 toml = "0.9"
 serde_yaml_ng = "0.10"

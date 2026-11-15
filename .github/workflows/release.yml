@@ -77,9 +77,15 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-musl'
         # cc-крейт ищет <target>-gcc (x86_64-linux-musl-gcc), которого нет даже в
         # musl-tools — задаём обёртку musl-gcc явно.
+        # sqlite-vec 0.1.9: C-код внутри `#ifndef _WIN32` делает
+        # `typedef u_int8_t uint8_t;` (BSD-типы есть в glibc, но их нет в musl).
+        # Макросы делают typedef самоссылочным (легально, stdint.h уже подключён).
         run: |
           echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
           echo "AR_x86_64_unknown_linux_musl=ar" >> "$GITHUB_ENV"
+          MUSL_CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int64_t=uint64_t"
+          echo "CFLAGS_x86_64-unknown-linux-musl=$MUSL_CFLAGS" >> "$GITHUB_ENV"
+          echo "CFLAGS_x86_64_unknown_linux_musl=$MUSL_CFLAGS" >> "$GITHUB_ENV"
 
       - name: Build release
         uses: clechasseur/rs-cargo@v2
