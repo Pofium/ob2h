@@ -186,6 +186,8 @@ pub enum BenchCommands {
         #[arg(long, default_value_t = 20)]
         last: usize,
     },
+    /// Замер скорости инференса и качества на RU и RU/EN триплетах (Ф72.7)
+    Embeddings,
 }
 
 #[derive(Subcommand, Debug)]

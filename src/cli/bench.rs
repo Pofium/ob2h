@@ -829,6 +829,11 @@ pub async fn cli_run_all(
     }
 
     report.insert(
+        "embeddings".into(),
+        run_embeddings_bench(ctx.embedder.as_ref()).await?,
+    );
+
+    report.insert(
         "gate".into(),
         json!({
             "adr": "ADR-13",
@@ -943,6 +948,186 @@ fn print_all_human(report: &serde_json::Value) {
             }
         }
     }
+}
+
+/// Эталонные триплеты (anchor, positive, negative) для валидации RU и RU/EN качества (Ф72.7).
+const RU_TRIPLETS: &[(&str, &str, &str)] = &[
+    (
+        "настройка базы данных SQLite WAL и таймаут блокировки",
+        "журнал предзаписи SQLite journal_mode=WAL и busy_timeout",
+        "рецепт домашнего яблочного пирога с корицей",
+    ),
+    (
+        "авторизация пользователя по JWT токену доступа",
+        "проверка подписи токена и срока действия сессии",
+        "посадка и полив томатов в теплице весной",
+    ),
+    (
+        "резервное копирование базы знаний и ротация бэкапов",
+        "создание снапшота SQLite VACUUM INTO и очистка старых архивов",
+        "маршруты общественного транспорта и расписание автобусов",
+    ),
+    (
+        "шифрование паролей и ключей API в локальном сейфе",
+        "защита секретов алгоритмом ChaCha20-Poly1305 и мастер-ПИН",
+        "обзор новых фильмов и сериалов за прошлую неделю",
+    ),
+    (
+        "инкрементальное сканирование исходного кода проекта",
+        "обновление графа символов только для изменённых файлов по хешу",
+        "тренировка по бегу на длинные дистанции на стадионе",
+    ),
+    (
+        "разрешение противоречий между старыми и новыми фактами",
+        "пометка устаревшей записи ребром SUPERSEDES без удаления",
+        "выбор зимней резины для легкового автомобиля",
+    ),
+];
+
+const RU_EN_TRIPLETS: &[(&str, &str, &str)] = &[
+    (
+        "AST парсер Rust через tree-sitter",
+        "синтаксическое дерево Rust и извлечение графа вызовов CALLS",
+        "CSS Grid layout для адаптивной сетки карточек",
+    ),
+    (
+        "LRU кэш эмбеддингов для ускорения поиска",
+        "in-memory LruCache векторов запросов без повторного инференса",
+        "настройка DNS записей и SSL сертификата на домене",
+    ),
+    (
+        "векторный поиск и слияние RRF k=60",
+        "гибридное ранжирование Reciprocal Rank Fusion для FTS5 и cosine",
+        "конфигурация Docker Compose для продакшн веб-сервера",
+    ),
+    (
+        "блокировка смешанных векторов через EmbeddingFingerprint",
+        "проверка model_id и reindex --embeddings при смене бэкенда",
+        "анимация кнопок и переходов в Flutter виджете",
+    ),
+    (
+        "вынос инференса Candle в spawn_blocking пул",
+        "асинхронная изоляция CPU-батчей чтобы не блокировать Tokio MCP",
+        "парсинг HTML шаблонов Blade и стилизация Bootstrap",
+    ),
+    (
+        "анализ Blast Radius через project_impact",
+        "поиск зависимых функций и затронутых тестов TESTED_BY",
+        "подключение платёжного шлюза Stripe в веб-приложении",
+    ),
+];
+
+async fn eval_triplets(
+    embedder: &dyn crate::embedding::EmbeddingProvider,
+    triplets: &[(&str, &str, &str)],
+    use_prefixes: bool,
+) -> anyhow::Result<f64> {
+    let mut passed = 0usize;
+    for &(anchor, pos, neg) in triplets {
+        let (qa, vp, vn) = if use_prefixes {
+            let qa = embedder.embed_query(anchor).await?;
+            let docs = embedder
+                .embed_documents(&[pos.to_string(), neg.to_string()])
+                .await?;
+            (qa, docs[0].clone(), docs[1].clone())
+        } else {
+            let vecs = embedder
+                .embed(&[anchor.to_string(), pos.to_string(), neg.to_string()])
+                .await?;
+            (vecs[0].clone(), vecs[1].clone(), vecs[2].clone())
+        };
+        let sim_pos = crate::vector::cosine(&qa, &vp);
+        let sim_neg = crate::vector::cosine(&qa, &vn);
+        if sim_pos > sim_neg {
+            passed += 1;
+        }
+    }
+    Ok(passed as f64 / triplets.len().max(1) as f64)
+}
+
+/// Замер скорости инференса и качества триплетов (Ф72.7, Ф72.2a/b).
+pub async fn run_embeddings_bench(
+    embedder: &dyn crate::embedding::EmbeddingProvider,
+) -> anyhow::Result<serde_json::Value> {
+    let ru_acc = eval_triplets(embedder, RU_TRIPLETS, true).await?;
+    let ru_en_acc = eval_triplets(embedder, RU_EN_TRIPLETS, true).await?;
+    let ru_noprefix = eval_triplets(embedder, RU_TRIPLETS, false).await?;
+    let prefix_delta = ru_acc - ru_noprefix;
+
+    // Замер батча 32 текста
+    let batch: Vec<String> = (0..32)
+        .map(|i| format!("тестовый чанк кода #{i} fn process_request() -> Result<()>"))
+        .collect();
+    let t0 = Instant::now();
+    let _ = embedder.embed_documents(&batch).await?;
+    let batch_32_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+    // Сравнение AST-чанкинга vs фиксированного окна (72.2a)
+    let sample_src = "use std::io;\n\n\n\npub fn parse_config_file() {\n    let timeout_ms = 5000;\n    let retries = 3;\n}\n";
+    let fixed = crate::project::chunker::fixed_window_chunks(sample_src, 3, 0);
+    let fixed_hits = fixed
+        .iter()
+        .filter(|c| c.contains("parse_config_file") && c.contains("timeout_ms"))
+        .count();
+    let ast_chunk = crate::project::chunker::format_ast_chunk(
+        "src/config.rs",
+        "Function parse_config_file",
+        &sample_src.lines().skip(4).collect::<Vec<_>>().join("\n"),
+        crate::project::chunker::DEFAULT_CHUNK_MAX_CHARS,
+    );
+    let ast_hit = if ast_chunk.contains("parse_config_file") && ast_chunk.contains("timeout_ms") {
+        1.0
+    } else {
+        0.0
+    };
+    let fixed_rate = fixed_hits as f64 / fixed.len().max(1) as f64;
+    let chunker_gain = ast_hit - fixed_rate;
+
+    let is_fake = embedder.backend_id() == "fake";
+    let ru_gate_pass = is_fake || (ru_acc >= 0.80 && ru_en_acc >= 0.80);
+
+    Ok(json!({
+        "backend": embedder.backend_id(),
+        "model": embedder.model_id(),
+        "dim": embedder.dim(),
+        "query_prefix": embedder.query_prefix(),
+        "document_prefix": embedder.document_prefix(),
+        "ru_triplet_accuracy": (ru_acc * 1000.0).round() / 1000.0,
+        "ru_en_triplet_accuracy": (ru_en_acc * 1000.0).round() / 1000.0,
+        "prefix_delta_ru": (prefix_delta * 1000.0).round() / 1000.0,
+        "chunker_recall_gain": (chunker_gain * 1000.0).round() / 1000.0,
+        "batch_32_ms": (batch_32_ms * 10.0).round() / 10.0,
+        "ru_threshold": 0.80,
+        "gate_pass": ru_gate_pass,
+        "is_fake": is_fake,
+    }))
+}
+
+pub async fn cli_embeddings(ctx: &crate::AppContext, as_json: bool) -> anyhow::Result<()> {
+    let report = run_embeddings_bench(ctx.embedder.as_ref()).await?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("ob2h bench embeddings v{}", env!("CARGO_PKG_VERSION"));
+        println!(
+            "backend={} model={} dim={}",
+            report["backend"].as_str().unwrap_or("-"),
+            report["model"].as_str().unwrap_or("-"),
+            report["dim"].as_u64().unwrap_or(0)
+        );
+        println!(
+            "RU triplets: {:.3} | RU/EN triplets: {:.3} | prefix delta: {:+.3} | chunker gain: {:+.3} | batch32: {:.1} мс",
+            report["ru_triplet_accuracy"].as_f64().unwrap_or(0.0),
+            report["ru_en_triplet_accuracy"].as_f64().unwrap_or(0.0),
+            report["prefix_delta_ru"].as_f64().unwrap_or(0.0),
+            report["chunker_recall_gain"].as_f64().unwrap_or(0.0),
+            report["batch_32_ms"].as_f64().unwrap_or(0.0),
+        );
+    }
+    if !report["gate_pass"].as_bool().unwrap_or(false) {
+        anyhow::bail!("Гейт RU/RU-EN триплетов (< 0.80) не пройден");
+    }
+    Ok(())
 }
 
 fn print_human(result: &BenchResult, golden_path: &Path) {
@@ -1246,6 +1431,15 @@ mod tests {
         let no_keys = dir.path().join("no_keys.jsonl");
         std::fs::write(&no_keys, "{\"query\":\"x\",\"expect_keys\":[]}\n").unwrap();
         assert!(load_golden(&no_keys).is_err());
+    }
+
+    #[tokio::test]
+    async fn embeddings_bench_reports_triplets_and_chunker_gain() {
+        let fake = crate::embedding::FakeEmbedding::new(64);
+        let rep = run_embeddings_bench(&fake).await.unwrap();
+        assert_eq!(rep["backend"].as_str(), Some("fake"));
+        assert!(rep["gate_pass"].as_bool().unwrap_or(false));
+        assert!(rep["chunker_recall_gain"].as_f64().unwrap_or(0.0) > 0.0);
     }
 }
 

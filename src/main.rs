@@ -100,6 +100,8 @@ async fn main() -> anyhow::Result<()> {
         }) => {
             if let Some(BenchCommands::History { last }) = command {
                 ob2h::cli::bench::cli_history(&ctx.settings, last)?;
+            } else if let Some(BenchCommands::Embeddings) = command {
+                ob2h::cli::bench::cli_embeddings(&ctx, json).await?;
             } else {
                 ob2h::cli::bench::cli_run(
                     &ctx,
