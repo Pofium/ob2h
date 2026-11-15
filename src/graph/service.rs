@@ -564,116 +564,218 @@ impl GraphService {
         damping: f64,
         weights: &crate::graph::pagerank::PprWeights,
     ) -> anyhow::Result<Vec<PprNodeHit>> {
-        // Ф54: окно сидов шире (50) — глобальный поиск без проектного фильтра
-        // топ-10 проектов-тёзок вытеснял, и PPR оставался без сидов (пусто).
-        // Фильтрация по project_id происходит ниже, при построении seeds.
-        let found = self.search(query, 50, false).await?;
+        const MAX_SUBGRAPH_NODES: usize = 8000;
+        const MAX_HOPS: usize = 2;
+
+        // Ф54 + Ф72b.3: окно сидов 50 с учётом проектного пространства имён.
+        let found = self.search_for_project(query, project_id, 50, false).await?;
         if found.nodes.is_empty() {
             return Ok(Vec::new());
         }
         let seed_ids: Vec<i64> = found.nodes.iter().map(|n| n.id).collect();
 
-        let nodes: Vec<(i64, String, String, Option<String>, i64)> = self.db.with_conn(|conn| {
-            match project_id {
-                Some(pid) => {
-                    let mut stmt = conn.prepare(
-                        "SELECT id, label, node_type, file_path, val FROM graph_nodes \
-                         WHERE deleted_at IS NULL AND project_id = ?1",
-                    )?;
-                    let rows = stmt.query_map(params![pid], |r| {
-                        Ok((
-                            r.get::<_, i64>(0)?,
-                            r.get::<_, String>(1)?,
-                            r.get::<_, String>(2)?,
-                            r.get::<_, Option<String>>(3)?,
-                            r.get::<_, i64>(4)?,
-                        ))
-                    })?;
-                    Ok(rows.flatten().collect())
+        // Ф73.4: экстракция k-hop сабграфа (до 8000 узлов) от seeds для SLA < 20 мс
+        let (nodes, raw_edges, dirty_files) = self.db.with_conn(|conn| {
+            let mut visited: std::collections::HashSet<i64> = seed_ids.iter().copied().collect();
+            let mut frontier: Vec<i64> = seed_ids.clone();
+            let mut collected_edges: Vec<(i64, i64, String)> = Vec::new();
+
+            for _hop in 0..MAX_HOPS {
+                if frontier.is_empty() || visited.len() >= MAX_SUBGRAPH_NODES {
+                    break;
                 }
-                None => {
-                    let mut stmt = conn.prepare(
-                        "SELECT id, label, node_type, file_path, val FROM graph_nodes \
-                         WHERE deleted_at IS NULL",
-                    )?;
-                    let rows = stmt.query_map([], |r| {
+                let mut next_frontier: Vec<i64> = Vec::new();
+                for chunk in frontier.chunks(400) {
+                    let ph = vec!["?"; chunk.len()].join(",");
+                    let sql = match project_id {
+                        Some(_) => format!(
+                            "SELECT source_id, target_id, label FROM graph_edges \
+                             WHERE deleted_at IS NULL AND project_id = ?1 \
+                               AND (source_id IN ({ph}) OR target_id IN ({ph}))"
+                        ),
+                        None => format!(
+                            "SELECT source_id, target_id, label FROM graph_edges \
+                             WHERE deleted_at IS NULL \
+                               AND (source_id IN ({ph}) OR target_id IN ({ph}))"
+                        ),
+                    };
+                    let mut stmt = conn.prepare(&sql)?;
+                    let mut pvec: Vec<&dyn rusqlite::ToSql> = Vec::new();
+                    if let Some(ref pid) = project_id {
+                        pvec.push(pid);
+                    }
+                    for id in chunk {
+                        pvec.push(id);
+                    }
+                    for id in chunk {
+                        pvec.push(id);
+                    }
+                    let rows = stmt.query_map(pvec.as_slice(), |r| {
                         Ok((
                             r.get::<_, i64>(0)?,
-                            r.get::<_, String>(1)?,
+                            r.get::<_, i64>(1)?,
                             r.get::<_, String>(2)?,
-                            r.get::<_, Option<String>>(3)?,
-                            r.get::<_, i64>(4)?,
                         ))
                     })?;
-                    Ok(rows.flatten().collect())
+                    for (s, t, lbl) in rows.flatten() {
+                        collected_edges.push((s, t, lbl));
+                        if visited.len() < MAX_SUBGRAPH_NODES && visited.insert(s) {
+                            next_frontier.push(s);
+                        }
+                        if visited.len() < MAX_SUBGRAPH_NODES && visited.insert(t) {
+                            next_frontier.push(t);
+                        }
+                    }
+                }
+                frontier = next_frontier;
+            }
+
+            let all_ids: Vec<i64> = visited.into_iter().collect();
+            type SubNode = (i64, String, String, Option<String>, i64, i64, f64, String, String);
+            let mut sub_nodes: Vec<SubNode> = Vec::with_capacity(all_ids.len());
+            for chunk in all_ids.chunks(800) {
+                let ph = vec!["?"; chunk.len()].join(",");
+                let proj_filter = if project_id.is_some() {
+                    " AND project_id = ?1"
+                } else {
+                    ""
+                };
+                let sql = format!(
+                    "SELECT id, label, node_type, file_path, val, \
+                     COALESCE(access_count, 0), COALESCE(trust_score, 1.0), \
+                     COALESCE(status, 'ACTIVE'), created_at \
+                     FROM graph_nodes \
+                     WHERE deleted_at IS NULL{proj_filter} AND id IN ({ph})"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let mut pvec: Vec<&dyn rusqlite::ToSql> = Vec::new();
+                if let Some(ref pid) = project_id {
+                    pvec.push(pid);
+                }
+                for id in chunk {
+                    pvec.push(id);
+                }
+                let rows = stmt.query_map(pvec.as_slice(), |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, i64>(4)?,
+                        r.get::<_, i64>(5)?,
+                        r.get::<_, f64>(6)?,
+                        r.get::<_, String>(7)?,
+                        r.get::<_, String>(8)?,
+                    ))
+                })?;
+                for r in rows.flatten() {
+                    sub_nodes.push(r);
                 }
             }
+
+            let dirty = if let Some(pid) = project_id {
+                conn.query_row(
+                    "SELECT root_path FROM projects WHERE id = ?1",
+                    params![pid],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok()
+                .map(|rp| crate::graph::pagerank::git_dirty_files(std::path::Path::new(&rp)))
+                .unwrap_or_default()
+            } else {
+                std::collections::HashSet::new()
+            };
+
+            Ok((sub_nodes, collected_edges, dirty))
         })?;
 
         let index: std::collections::HashMap<i64, usize> =
             nodes.iter().enumerate().map(|(i, (id, ..))| (*id, i)).collect();
-        let seeds: Vec<(usize, f64)> = seed_ids
+
+        // Считаем in_degree в сабграфе и возраст узлов
+        let mut in_deg = vec![0usize; nodes.len()];
+        for &(_, t, _) in &raw_edges {
+            if let Some(&ti) = index.get(&t) {
+                in_deg[ti] += 1;
+            }
+        }
+        let now_utc = chrono::Utc::now();
+        let age_days: Vec<f64> = nodes
             .iter()
-            .filter_map(|id| index.get(id).copied().map(|i| (i, 1.0)))
+            .map(|(.., created)| {
+                chrono::DateTime::parse_from_rfc3339(created)
+                    .map(|dt| (now_utc - dt.with_timezone(&chrono::Utc)).num_hours().max(0) as f64 / 24.0)
+                    .unwrap_or(0.0)
+            })
+            .collect();
+
+        // Ф73.5: исключаем SUPERSEDED узлы из целевого распределения PPR
+        let superseded: Vec<bool> = nodes
+            .iter()
+            .map(|(_, _, _, _, _, _, _, status, _)| status.eq_ignore_ascii_case("SUPERSEDED"))
+            .collect();
+
+        let ppr_edges: Vec<crate::graph::pagerank::PprEdge> = raw_edges
+            .iter()
+            .filter_map(|(s, t, label)| {
+                let &from = index.get(s)?;
+                let &to = index.get(t)?;
+                let target = &nodes[to];
+                let w0 = crate::graph::pagerank::weight_for(weights, label);
+                let is_code = target.3.is_some()
+                    || matches!(target.2.as_str(), "Function" | "Struct" | "Class" | "Interface" | "Trait" | "Module" | "File");
+                let w = crate::graph::pagerank::compute_usage_edge_weight(
+                    crate::graph::pagerank::UsageEdgeParams {
+                        w0,
+                        access_count: target.5.max(0) as u64,
+                        age_days: age_days[to],
+                        is_code,
+                        trust_score: target.6,
+                        target_in_degree: in_deg[to],
+                    },
+                );
+                Some(crate::graph::pagerank::PprEdge { from, to, weight: w })
+            })
+            .collect();
+
+        let total_n = nodes.len().max(1);
+        let mut seeds: Vec<(usize, f64)> = seed_ids
+            .iter()
+            .filter_map(|id| {
+                let &idx = index.get(id)?;
+                if superseded[idx] {
+                    return None;
+                }
+                let trust = nodes[idx].6;
+                let w = crate::graph::pagerank::compute_seed_idf_weight(total_n, in_deg[idx], trust);
+                Some((idx, w))
+            })
             .collect();
         if seeds.is_empty() {
             return Ok(Vec::new());
         }
 
-        let edges: Vec<crate::graph::pagerank::PprEdge> = self.db.with_conn(|conn| {
-            match project_id {
-                Some(pid) => {
-                    let mut stmt = conn.prepare(
-                        "SELECT source_id, target_id, label FROM graph_edges \
-                         WHERE deleted_at IS NULL AND project_id = ?1",
-                    )?;
-                    let rows = stmt.query_map(params![pid], |r| {
-                        Ok((
-                            r.get::<_, i64>(0)?,
-                            r.get::<_, i64>(1)?,
-                            r.get::<_, String>(2)?,
-                        ))
-                    })?;
-                    Ok(rows
-                        .flatten()
-                        .map(|(s, t, label)| crate::graph::pagerank::PprEdge {
-                            from: index.get(&s).copied().unwrap_or(usize::MAX),
-                            to: index.get(&t).copied().unwrap_or(usize::MAX),
-                            weight: crate::graph::pagerank::weight_for(weights, &label),
-                        })
-                        .collect())
-                }
-                None => {
-                    let mut stmt = conn.prepare(
-                        "SELECT source_id, target_id, label FROM graph_edges WHERE deleted_at IS NULL",
-                    )?;
-                    let rows = stmt.query_map([], |r| {
-                        Ok((
-                            r.get::<_, i64>(0)?,
-                            r.get::<_, i64>(1)?,
-                            r.get::<_, String>(2)?,
-                        ))
-                    })?;
-                    Ok(rows
-                        .flatten()
-                        .map(|(s, t, label)| crate::graph::pagerank::PprEdge {
-                            from: index.get(&s).copied().unwrap_or(usize::MAX),
-                            to: index.get(&t).copied().unwrap_or(usize::MAX),
-                            weight: crate::graph::pagerank::weight_for(weights, &label),
-                        })
-                        .collect())
-                }
-            }
-        })?;
+        let node_paths: Vec<Option<&str>> = nodes.iter().map(|n| n.3.as_deref()).collect();
+        crate::graph::pagerank::apply_working_set_boost(
+            &mut seeds,
+            &node_paths,
+            &dirty_files,
+            crate::graph::pagerank::WORKING_SET_BOOST,
+        );
 
-        let graph = crate::graph::pagerank::PprGraph::new(nodes.len(), &edges);
-        let ranked = crate::graph::pagerank::personalized_pagerank(&graph, &seeds, damping, 20, 0.0);
+        let adj = crate::graph::pagerank::GraphAdjacency::from_edges(
+            nodes.len(),
+            &ppr_edges,
+            Some(&superseded),
+        );
+        let ranked =
+            crate::graph::pagerank::personalized_pagerank_csr(&adj, &seeds, damping, 20, 0.0);
 
         Ok(ranked
             .into_iter()
             .take(limit)
             .filter_map(|(idx, score)| {
-                let (id, label, ntype, path, val) = nodes.get(idx)?;
+                let (id, label, ntype, path, val, ..) = nodes.get(idx)?;
                 Some(PprNodeHit {
                     node_id: *id,
                     label: label.clone(),

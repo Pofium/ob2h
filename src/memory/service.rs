@@ -1135,6 +1135,7 @@ impl MemoryService {
         let nodes: Vec<(i64, String)> = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, key FROM memories WHERE deleted_at IS NULL \
+                 AND COALESCE(status, 'ACTIVE') != 'SUPERSEDED' \
                  ORDER BY importance DESC, updated_at DESC LIMIT ?1",
             )?;
             let rows = stmt.query_map(params![limit], |r| Ok((r.get(0)?, r.get(1)?)))?;
@@ -1154,6 +1155,7 @@ impl MemoryService {
             let mut stmt = conn.prepare(
                 "SELECT l.from_id, l.to_id, l.kind, l.weight FROM memory_links l \
                  WHERE l.deleted_at IS NULL AND l.from_id IN (SELECT id FROM memories WHERE deleted_at IS NULL \
+                 AND COALESCE(status, 'ACTIVE') != 'SUPERSEDED' \
                                      ORDER BY importance DESC, updated_at DESC LIMIT ?1)",
             )?;
             let rows = stmt.query_map(params![limit], |r| {

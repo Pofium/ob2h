@@ -66,6 +66,57 @@ pub const DEFAULT_LAMBDA_MEMORY: f64 = 0.015;
 pub const GRACE_MIN_ACCESS: u64 = 4;
 /// Множитель штрафа при Negative Feedback / Mute Node (Ф73.2 / Ф73.6).
 pub const MUTE_TRUST_FACTOR: f64 = 0.3;
+/// Буст +20% к весу сидов p_0 для файлов из `git diff HEAD` (Ф73.4 Active Working Set Boost).
+pub const WORKING_SET_BOOST: f64 = 1.20;
+
+/// Вычислить стартовый вес сида `p_0`: `IDF(node) * trust_score` (HippoRAG-style specificity, Ф73.4).
+pub fn compute_seed_idf_weight(total_nodes: usize, in_degree: usize, trust_score: f64) -> f64 {
+    let n = total_nodes.max(1) as f64;
+    let idf = (1.0 + n / (1.0 + in_degree as f64)).ln().max(0.5);
+    let trust = trust_score.clamp(0.0, 1.0);
+    (idf * (0.1 + 0.9 * trust)).max(1e-6)
+}
+
+/// Применить буст Active Working Set (`WORKING_SET_BOOST = 1.20`) к сидам,
+/// относящимся к изменённым незакоммиченным файлам (`git diff HEAD`, Ф73.4).
+pub fn apply_working_set_boost(
+    seeds: &mut [(usize, f64)],
+    node_paths: &[Option<&str>],
+    dirty_files: &std::collections::HashSet<String>,
+    boost: f64,
+) {
+    if dirty_files.is_empty() || !boost.is_finite() || boost <= 1.0 {
+        return;
+    }
+    for (idx, w) in seeds.iter_mut() {
+        if let Some(Some(path)) = node_paths.get(*idx) {
+            let norm = path.replace('\\', "/");
+            if dirty_files.contains(&norm) {
+                *w *= boost;
+            }
+        }
+    }
+}
+
+/// Получить множество относительных путей, изменённых относительно `HEAD` (`git diff --name-only HEAD`).
+pub fn git_dirty_files(repo_root: &std::path::Path) -> std::collections::HashSet<String> {
+    let Ok(out) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["diff", "--name-only", "HEAD"])
+        .output()
+    else {
+        return std::collections::HashSet::new();
+    };
+    if !out.status.success() {
+        return std::collections::HashSet::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim().replace('\\', "/"))
+        .filter(|l| !l.is_empty())
+        .collect()
+}
 
 /// Компактное разреженное CSR-представление подграфа в памяти с весами рёбер (Ф73.1).
 #[derive(Debug, Clone, Default)]
@@ -733,5 +784,21 @@ mod tests {
         });
         assert!(w_after_mute < w_before_mute * 0.4);
         assert!(w_after_mute > 0.0);
+    }
+
+    #[test]
+    fn test_seed_idf_and_active_working_set_boost() {
+        // Редкий узел (in_degree=1) получает больший IDF-вес, чем хаб (in_degree=500)
+        let w_rare = compute_seed_idf_weight(1000, 1, 1.0);
+        let w_hub = compute_seed_idf_weight(1000, 500, 1.0);
+        assert!(w_rare > w_hub * 2.0);
+
+        let mut seeds = vec![(0usize, 1.0), (1usize, 1.0)];
+        let paths = [Some("src/clean.rs"), Some("src/dirty.rs")];
+        let mut dirty = std::collections::HashSet::new();
+        dirty.insert("src/dirty.rs".to_string());
+        apply_working_set_boost(&mut seeds, &paths, &dirty, WORKING_SET_BOOST);
+        assert!((seeds[0].1 - 1.0).abs() < 1e-9);
+        assert!((seeds[1].1 - 1.20).abs() < 1e-9);
     }
 }
