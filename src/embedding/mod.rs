@@ -38,6 +38,48 @@ pub trait EmbeddingProvider: Send + Sync {
 
     /// Размерность вектора.
     fn dim(&self) -> usize;
+
+    /// Префикс поискового запроса (Ф72.2b, напр. `"query: "` для E5).
+    fn query_prefix(&self) -> &'static str {
+        ""
+    }
+
+    /// Префикс индексируемого документа (Ф72.2b, напр. `"passage: "` для E5).
+    fn document_prefix(&self) -> &'static str {
+        ""
+    }
+
+    /// Векторизация поискового запроса с авто-подстановкой `query_prefix()`.
+    async fn embed_query(&self, query: &str) -> anyhow::Result<Vec<f32>> {
+        let p = self.query_prefix();
+        let text = if p.is_empty() || query.starts_with(p) {
+            query.to_string()
+        } else {
+            format!("{p}{query}")
+        };
+        let mut res = self.embed(&[text]).await?;
+        res.pop()
+            .ok_or_else(|| anyhow::anyhow!("empty embedding result for query"))
+    }
+
+    /// Векторизация документов с авто-подстановкой `document_prefix()`.
+    async fn embed_documents(&self, docs: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        let p = self.document_prefix();
+        if p.is_empty() {
+            return self.embed(docs).await;
+        }
+        let prefixed: Vec<String> = docs
+            .iter()
+            .map(|d| {
+                if d.starts_with(p) {
+                    d.clone()
+                } else {
+                    format!("{p}{d}")
+                }
+            })
+            .collect();
+        self.embed(&prefixed).await
+    }
 }
 
 /// Синхронная инициализация локального бэкенда (вызывается внутри spawn_blocking)
@@ -107,6 +149,14 @@ impl EmbeddingProvider for LazyEmbeddingProvider {
             384
         }
     }
+
+    fn query_prefix(&self) -> &'static str {
+        onnx_spec::prefixes_for_model(&self.settings.embed_model).0
+    }
+
+    fn document_prefix(&self) -> &'static str {
+        onnx_spec::prefixes_for_model(&self.settings.embed_model).1
+    }
 }
 
 #[cfg(feature = "onnx")]
@@ -164,6 +214,16 @@ impl EmbeddingProvider for LazyOnnxProvider {
         } else {
             self.expected_dim
         }
+    }
+
+    fn query_prefix(&self) -> &'static str {
+        let spec = onnx_spec::resolve_onnx_model_spec(&self.settings.embed_model);
+        onnx_spec::prefixes_for_model(spec.canonical_id).0
+    }
+
+    fn document_prefix(&self) -> &'static str {
+        let spec = onnx_spec::resolve_onnx_model_spec(&self.settings.embed_model);
+        onnx_spec::prefixes_for_model(spec.canonical_id).1
     }
 }
 
@@ -265,6 +325,14 @@ impl EmbeddingProvider for CachedEmbeddingProvider {
 
     fn dim(&self) -> usize {
         self.inner.dim()
+    }
+
+    fn query_prefix(&self) -> &'static str {
+        self.inner.query_prefix()
+    }
+
+    fn document_prefix(&self) -> &'static str {
+        self.inner.document_prefix()
     }
 }
 

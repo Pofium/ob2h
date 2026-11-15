@@ -219,7 +219,7 @@ impl GraphService {
         if text.trim().is_empty() {
             return;
         }
-        if let Ok(embs) = self.embedder.embed(&[text.to_string()]).await {
+        if let Ok(embs) = self.embedder.embed_documents(&[text.to_string()]).await {
             if let Some(v) = embs.first() {
                 let blob = serialize_q(v);
                 let _ = self.db.with_conn(|conn| {
@@ -306,8 +306,8 @@ impl GraphService {
         }
 
         // 2. Векторный скоринг
-        if let Ok(q_embs) = self.embedder.embed(&[query.to_string()]).await {
-            if let Some(q_vec) = q_embs.first() {
+        if let Ok(q_vec) = self.embedder.embed_query(query).await {
+            let q_vec = &q_vec;
                 // Ф35.1: при OB2H_VEC0=1 — vec0 (binary-первый проход + рескоринг
                 // настоящими векторами); индекс не готов/пуст → прежний полный
                 // перебор (флаг off — поведение не меняется вовсе).
@@ -346,7 +346,6 @@ impl GraphService {
                     *entry += (vscore as f64) * 5.0;
                 }
             }
-        }
 
         let mut sorted_ids: Vec<i64> = scored.keys().copied().collect();
         // Ф54: тай-брейк по id — итерация HashMap случайна, без детерминизма
@@ -770,8 +769,8 @@ impl GraphService {
         // 2. Векторный семантический поиск
         let mut vector_ranks: HashMap<i64, usize> = HashMap::new();
         if is_vector_enabled {
-            if let Ok(q_embs) = self.embedder.embed(&[query.to_string()]).await {
-                if let Some(q_vec) = q_embs.first() {
+            if let Ok(q_vec) = self.embedder.embed_query(query).await {
+                let q_vec = &q_vec;
                     let candidates = self.db.with_conn(|conn| {
                         let mut stmt = conn.prepare(
                             r#"
@@ -804,7 +803,6 @@ impl GraphService {
                     }
                 }
             }
-        }
 
         // 3. Слияние через RRF (k = 60)
         let k = 60.0;

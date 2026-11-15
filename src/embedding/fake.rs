@@ -8,11 +8,26 @@ use crate::vector::normalize;
 #[derive(Debug, Clone)]
 pub struct FakeEmbedding {
     dim: usize,
+    query_prefix: &'static str,
+    document_prefix: &'static str,
 }
 
 impl FakeEmbedding {
     pub fn new(dim: usize) -> Self {
-        Self { dim }
+        Self {
+            dim,
+            query_prefix: "",
+            document_prefix: "",
+        }
+    }
+
+    /// Конструктор с асимметричными префиксами для тестирования 72.2b.
+    pub fn with_prefixes(dim: usize, query_prefix: &'static str, document_prefix: &'static str) -> Self {
+        Self {
+            dim,
+            query_prefix,
+            document_prefix,
+        }
     }
 }
 
@@ -45,6 +60,14 @@ impl EmbeddingProvider for FakeEmbedding {
     fn dim(&self) -> usize {
         self.dim
     }
+
+    fn query_prefix(&self) -> &'static str {
+        self.query_prefix
+    }
+
+    fn document_prefix(&self) -> &'static str {
+        self.document_prefix
+    }
 }
 
 #[cfg(test)]
@@ -62,5 +85,23 @@ mod tests {
         assert_eq!(e1[0].len(), 384);
         assert_eq!(e1[0], e2[0]);
         assert_ne!(e1[0], e1[1]);
+    }
+
+    #[tokio::test]
+    async fn test_asymmetric_prefixes_auto_applied() {
+        let plain = FakeEmbedding::new(64);
+        let e5 = FakeEmbedding::with_prefixes(64, "query: ", "passage: ");
+
+        let q_vec = e5.embed_query("тест").await.unwrap();
+        let expected_q = plain.embed(&["query: тест".to_string()]).await.unwrap().pop().unwrap();
+        assert_eq!(q_vec, expected_q);
+
+        // Повторная подстановка не дублирует префикс
+        let q_vec_dup = e5.embed_query("query: тест").await.unwrap();
+        assert_eq!(q_vec_dup, expected_q);
+
+        let d_vecs = e5.embed_documents(&["документ".to_string()]).await.unwrap();
+        let expected_d = plain.embed(&["passage: документ".to_string()]).await.unwrap();
+        assert_eq!(d_vecs, expected_d);
     }
 }

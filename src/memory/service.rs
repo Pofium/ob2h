@@ -80,7 +80,7 @@ impl MemoryService {
             .unwrap_or_else(|| Self::generate_key(content));
 
         // Получаем векторное представление
-        let embeddings = self.embedder.embed(&[content.to_string()]).await?;
+        let embeddings = self.embedder.embed_documents(&[content.to_string()]).await?;
         let emb_blob = embeddings.first().map(|v| serialize_q(v));
 
         // Ф31.1: дешёвый save-time пре-чек дублей (без LLM) — топ-1 косинусный сосед.
@@ -428,7 +428,7 @@ impl MemoryService {
         let new_category = category.unwrap_or(&existing.category);
 
         let emb_blob = if content.is_some() {
-            let embs = self.embedder.embed(&[new_content.to_string()]).await?;
+            let embs = self.embedder.embed_documents(&[new_content.to_string()]).await?;
             embs.first().map(|v| serialize_q(v))
         } else {
             existing.embedding
@@ -544,11 +544,8 @@ impl MemoryService {
         limit: usize,
         min_score: f32,
     ) -> anyhow::Result<Vec<(i64, f64)>> {
-        let q_embs = self.embedder.embed(&[query.to_string()]).await?;
-        let q_vec = match q_embs.first() {
-            Some(v) => v,
-            None => return Ok(Vec::new()),
-        };
+        let q_vec = self.embedder.embed_query(query).await?;
+        let q_vec = &q_vec;
 
         let candidates = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare("SELECT id, embedding FROM memories WHERE embedding IS NOT NULL AND deleted_at IS NULL")?;

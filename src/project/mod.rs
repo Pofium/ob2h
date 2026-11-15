@@ -167,7 +167,7 @@ impl ProjectService {
                 })
                 .collect();
 
-            let vecs = embedder.embed(&texts).await?;
+            let vecs = embedder.embed_documents(&texts).await?;
             {
                 let mut conn = self.conn.lock().unwrap();
                 let tx = conn.transaction()?;

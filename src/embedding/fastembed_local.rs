@@ -84,6 +84,14 @@ impl EmbeddingProvider for FastembedLocal {
     fn dim(&self) -> usize {
         self.inner.spec.dim
     }
+
+    fn query_prefix(&self) -> &'static str {
+        super::onnx_spec::prefixes_for_model(self.inner.spec.canonical_id).0
+    }
+
+    fn document_prefix(&self) -> &'static str {
+        super::onnx_spec::prefixes_for_model(self.inner.spec.canonical_id).1
+    }
 }
 
 #[cfg(test)]

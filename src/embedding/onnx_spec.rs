@@ -6,6 +6,23 @@ use tracing::warn;
 
 use crate::vector::normalize;
 
+/// Версия схемы префиксов (входит в `EmbeddingFingerprint`, Ф72.3).
+pub const PREFIX_SCHEMA_VERSION: &str = "prefix_v1";
+
+/// Асимметричные префиксы модели: `(query_prefix, document_prefix)` (Ф72.2b).
+/// E5: `("query: ", "passage: ")`, Nomic: `("search_query: ", "search_document: ")`,
+/// Candle MiniLM и jina-v2 — no-op `("", "")`.
+pub fn prefixes_for_model(model_id: &str) -> (&'static str, &'static str) {
+    let lower = model_id.trim().to_lowercase();
+    if lower.contains("e5") {
+        ("query: ", "passage: ")
+    } else if lower.contains("nomic") {
+        ("search_query: ", "search_document: ")
+    } else {
+        ("", "")
+    }
+}
+
 /// Спецификация выбранной ONNX-модели.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnnxModelSpec {
@@ -94,5 +111,25 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert!((out[0] - 0.6).abs() < 1e-5);
         assert!((out[1] - 0.8).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_prefixes_for_model() {
+        assert_eq!(
+            prefixes_for_model("intfloat/multilingual-e5-small"),
+            ("query: ", "passage: ")
+        );
+        assert_eq!(
+            prefixes_for_model("nomic-embed-text-v1.5"),
+            ("search_query: ", "search_document: ")
+        );
+        assert_eq!(
+            prefixes_for_model("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),
+            ("", "")
+        );
+        assert_eq!(
+            prefixes_for_model("jina-embeddings-v2-base-code"),
+            ("", "")
+        );
     }
 }

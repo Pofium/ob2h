@@ -23,6 +23,8 @@ struct LocalBertInner {
     dim: usize,
     max_seq_len: usize,
     batch_size: usize,
+    query_prefix: &'static str,
+    document_prefix: &'static str,
 }
 
 pub struct LocalBertEmbedding {
@@ -65,6 +67,8 @@ impl LocalBertEmbedding {
 
         info!("Локальная модель эмбеддингов успешно загружена (hidden_size: {dim}, batch_size: {batch_size})");
 
+        let (query_prefix, document_prefix) = super::onnx_spec::prefixes_for_model(repo_id);
+
         Ok(Self {
             inner: Arc::new(LocalBertInner {
                 model: Mutex::new(model),
@@ -73,6 +77,8 @@ impl LocalBertEmbedding {
                 dim,
                 max_seq_len,
                 batch_size,
+                query_prefix,
+                document_prefix,
             }),
         })
     }
@@ -183,6 +189,14 @@ impl EmbeddingProvider for LocalBertEmbedding {
 
     fn dim(&self) -> usize {
         self.inner.dim
+    }
+
+    fn query_prefix(&self) -> &'static str {
+        self.inner.query_prefix
+    }
+
+    fn document_prefix(&self) -> &'static str {
+        self.inner.document_prefix
     }
 }
 
