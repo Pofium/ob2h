@@ -1098,7 +1098,52 @@ impl McpServer {
                     ..Default::default()
                 };
                 match self.ctx.memory.build_context(limit, query, &opts).await {
-                    Ok(ctx) => {
+                    Ok(mut ctx) => {
+                        if limit >= 256 {
+                            if let (Some(q), Some(pid)) = (query, opts.project.as_deref()) {
+                                let total_budget = limit.saturating_mul(crate::graph::repomap::TOKEN_CHARS);
+                                let used = ctx.len();
+                                let rem_tokens = total_budget.saturating_sub(used)
+                                    / crate::graph::repomap::TOKEN_CHARS;
+                                if rem_tokens >= 32 {
+                                    if let Ok(hits) = self
+                                        .ctx
+                                        .graph
+                                        .ppr_search(
+                                            q,
+                                            Some(pid),
+                                            32,
+                                            self.ctx.settings.ppr_damping,
+                                            &self.ctx.settings.ppr_weights,
+                                        )
+                                        .await
+                                    {
+                                        let skel_nodes: Vec<crate::graph::repomap::SkeletonNode> = hits
+                                            .iter()
+                                            .map(|h| crate::graph::repomap::SkeletonNode {
+                                                node_id: h.node_id,
+                                                label: h.label.clone(),
+                                                node_type: h.node_type.clone(),
+                                                score: h.score,
+                                            })
+                                            .collect();
+                                        let conn_arc = self.ctx.db.conn_arc();
+                                        if let Ok(conn) = conn_arc.lock() {
+                                            if let Ok(skel) = crate::graph::repomap::render_ast_skeleton(
+                                                &conn,
+                                                Some(pid),
+                                                &skel_nodes,
+                                                rem_tokens,
+                                            ) {
+                                                if !skel.is_empty() {
+                                                    ctx.push_str(&format!("\n<ast_skeleton>\n{skel}\n</ast_skeleton>"));
+                                                }
+                                            }
+                                        };
+                                    }
+                                }
+                            }
+                        }
                         let _ = self.ctx.telemetry.maybe_flush(&self.ctx.db);
                         ctx
                     }
@@ -1553,18 +1598,31 @@ impl McpServer {
                     Ok(res) => {
                         let steps = res.reasoning_steps.join("; ");
                         let entities = res.used_entities.join(", ");
-                        // Ф29.3: scope=all дополняет факт-блок PPR-подграфом знаний
+                        // Ф29.3 + 73.8: scope=all или max_tokens дополняет факт-блок PPR-подграфом / AST-скелетом
+                        let max_tokens = args
+                            .get("max_tokens")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as usize);
+                        let req_pid = args
+                            .get("project_id")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(String::from);
                         let mut ppr_docs = String::new();
-                        if scope == "all" {
-                            let pid = self.ctx.active_project_id.read().await.clone();
+                        if scope == "all" || max_tokens.is_some() {
+                            let pid = match req_pid {
+                                Some(p) => Some(p),
+                                None => self.ctx.active_project_id.read().await.clone(),
+                            };
                             if let Some(pid) = pid {
+                                let top_k = if max_tokens.is_some() { 32 } else { 5 };
                                 if let Ok(hits) = self
                                     .ctx
                                     .graph
                                     .ppr_search(
                                         query,
                                         Some(&pid),
-                                        5,
+                                        top_k,
                                         self.ctx.settings.ppr_damping,
                                         &self.ctx.settings.ppr_weights,
                                     )
@@ -1573,17 +1631,42 @@ impl McpServer {
                                     let hit_ids: Vec<i64> = hits.iter().map(|h| h.node_id).collect();
                                     self.ctx.telemetry.record_graph_hits(&hit_ids);
                                     let _ = self.ctx.telemetry.maybe_flush(&self.ctx.db);
-                                    let lines: Vec<String> = hits
-                                        .iter()
-                                        .map(|h| {
-                                            format!(
-                                                "- {} ({}) ppr={:.4}",
-                                                h.label, h.node_type, h.score
-                                            )
-                                        })
-                                        .collect();
-                                    if !lines.is_empty() {
-                                        ppr_docs = format!("\nppr_docs:\n{}", lines.join("\n"));
+                                    if let Some(mt) = max_tokens {
+                                        let skel_nodes: Vec<crate::graph::repomap::SkeletonNode> = hits
+                                            .iter()
+                                            .map(|h| crate::graph::repomap::SkeletonNode {
+                                                node_id: h.node_id,
+                                                label: h.label.clone(),
+                                                node_type: h.node_type.clone(),
+                                                score: h.score,
+                                            })
+                                            .collect();
+                                        let conn_arc = self.ctx.db.conn_arc();
+                                        if let Ok(conn) = conn_arc.lock() {
+                                            if let Ok(skel) = crate::graph::repomap::render_ast_skeleton(
+                                                &conn,
+                                                Some(&pid),
+                                                &skel_nodes,
+                                                mt,
+                                            ) {
+                                                if !skel.is_empty() {
+                                                    ppr_docs = format!("\nast_skeleton:\n{skel}");
+                                                }
+                                            }
+                                        };
+                                    } else {
+                                        let lines: Vec<String> = hits
+                                            .iter()
+                                            .map(|h| {
+                                                format!(
+                                                    "- {} ({}) ppr={:.4}",
+                                                    h.label, h.node_type, h.score
+                                                )
+                                            })
+                                            .collect();
+                                        if !lines.is_empty() {
+                                            ppr_docs = format!("\nppr_docs:\n{}", lines.join("\n"));
+                                        }
                                     }
                                 }
                             }

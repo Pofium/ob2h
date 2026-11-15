@@ -212,7 +212,8 @@ pub fn list_tools() -> Vec<McpToolDef> {
                 "properties": {
                     "query": { "type": "string", "description": "Вопрос к графу знаний" },
                     "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" },
-                    "scope": { "type": "string", "enum": ["docs", "memory", "all"], "description": "Область ответа: docs (граф знаний, дефолт) | memory (PPR по памяти) | all (оба)" }
+                    "scope": { "type": "string", "enum": ["docs", "memory", "all"], "description": "Область ответа: docs (граф знаний, дефолт) | memory (PPR по памяти) | all (оба)" },
+                    "max_tokens": { "type": "integer", "description": "Бюджет токенов для компактного AST-скелета U-PPR с Elbow Cutoff (например, 1024/2048)" }
                 },
                 "required": ["query"]
             }),
