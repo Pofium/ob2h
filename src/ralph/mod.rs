@@ -483,12 +483,15 @@ impl RalphService {
 
     /// Ф75.1: привязать `git_head_sha` к meta finding'а, если корень проекта — git-репозиторий.
     fn attach_git_head_sha(&self, project_id: &str, meta: Option<&str>) -> Option<String> {
-        let fallback = meta.map(|s| s.to_string());
-        let Some(root) = self.project_root(project_id).ok().flatten() else {
-            return fallback;
+        // Без git-корня/ша сохраняем исходную meta (fallback): ранний `?` здесь
+        // терял ceiling/no_trigger и ломал debt-леджер (тест ralph_report).
+        let root = match self.project_root(project_id).ok().flatten() {
+            Some(r) => r,
+            None => return meta.map(|s| s.to_string()),
         };
-        let Some(sha) = crate::dream::conflicts::current_git_head_sha(std::path::Path::new(&root)) else {
-            return fallback;
+        let sha = match crate::dream::conflicts::current_git_head_sha(std::path::Path::new(&root)) {
+            Some(s) => s,
+            None => return meta.map(|s| s.to_string()),
         };
         let mut obj = meta
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
