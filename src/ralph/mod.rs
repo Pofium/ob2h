@@ -97,7 +97,11 @@ fn repeat_failure_stats(iters: &[(String, String, i64, Option<String>)]) -> (i64
 
 impl RalphService {
     pub fn new(db: Database, project: Arc<ProjectService>, data_dir: std::path::PathBuf) -> Self {
-        Self { db, project, data_dir }
+        Self {
+            db,
+            project,
+            data_dir,
+        }
     }
 
     /// ralph_start: один активный run на (project, feature).
@@ -227,7 +231,15 @@ impl RalphService {
                 let symbols = f.get("symbols").map(|s| s.to_string());
                 let meta = f.get("meta").map(|m| m.to_string());
                 if self
-                    .add_finding(&project_id, Some(run_id), Some(&iteration_id), kind, content, symbols.as_deref(), meta.as_deref())
+                    .add_finding(
+                        &project_id,
+                        Some(run_id),
+                        Some(&iteration_id),
+                        kind,
+                        content,
+                        symbols.as_deref(),
+                        meta.as_deref(),
+                    )
                     .is_ok()
                 {
                     findings_added += 1;
@@ -330,7 +342,15 @@ impl RalphService {
                     }
                     Some((old_sig, _, _)) if old_sig != sig => {
                         let ntype = key.rsplit('|').next().unwrap_or("other").to_string();
-                        write_change(conn, path, label, &ntype, "modified", Some(old_sig), Some(sig))?;
+                        write_change(
+                            conn,
+                            path,
+                            label,
+                            &ntype,
+                            "modified",
+                            Some(old_sig),
+                            Some(sig),
+                        )?;
                     }
                     _ => {}
                 }
@@ -417,7 +437,9 @@ impl RalphService {
 
     /// Корень проекта (для тестов и скилла).
     pub fn project_root(&self, project_id: &str) -> anyhow::Result<Option<String>> {
-        self.project.get_project(project_id).map(|p| p.map(|p| p.root_path))
+        self.project
+            .get_project(project_id)
+            .map(|p| p.map(|p| p.root_path))
     }
 
     /// Finding цикла: hypothesis|gotcha|decision|constraint|deferred (Ponytail-маркер).
@@ -442,7 +464,17 @@ impl RalphService {
                 "INSERT INTO ralph_findings (id, run_id, iteration_id, project_id, kind, content, \
                  symbols, verdict, meta, created_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, '[]'), 'unconfirmed', ?8, ?9)",
-                params![id, run_id, iteration_id, project_id, kind, content, symbols, enriched_meta, utcnow()],
+                params![
+                    id,
+                    run_id,
+                    iteration_id,
+                    project_id,
+                    kind,
+                    content,
+                    symbols,
+                    enriched_meta,
+                    utcnow()
+                ],
             )?;
             Ok(())
         })?;
@@ -492,7 +524,11 @@ impl RalphService {
         let sha = meta_opt
             .as_deref()
             .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-            .and_then(|v| v.get("git_head_sha").and_then(|s| s.as_str()).map(String::from));
+            .and_then(|v| {
+                v.get("git_head_sha")
+                    .and_then(|s| s.as_str())
+                    .map(String::from)
+            });
         let Some(sha) = sha else {
             return Ok(true);
         };
@@ -683,7 +719,11 @@ impl RalphService {
                         &ntype[..1],
                         label,
                         path.as_deref().unwrap_or("-"),
-                        if god == 1 { format!(" — god node, val={val}") } else { String::new() }
+                        if god == 1 {
+                            format!(" — god node, val={val}")
+                        } else {
+                            String::new()
+                        }
                     )
                 })
                 .collect())
@@ -745,11 +785,15 @@ impl RalphService {
         }
         let neg_block = take(&negative, neg_cap);
         if !neg_block.is_empty() {
-            out.push_str(&format!("<negative_experience>\n{neg_block}</negative_experience>\n"));
+            out.push_str(&format!(
+                "<negative_experience>\n{neg_block}</negative_experience>\n"
+            ));
         }
         let reuse_block = take(&reuse, reuse_cap);
         if !reuse_block.is_empty() {
-            out.push_str(&format!("<reuse_candidates>\n{reuse_block}</reuse_candidates>\n"));
+            out.push_str(&format!(
+                "<reuse_candidates>\n{reuse_block}</reuse_candidates>\n"
+            ));
         }
         if !invariants.is_empty() && mode != "lite" {
             out.push_str(&format!(
@@ -759,7 +803,9 @@ impl RalphService {
         }
         let arch_block = take(&arch, arch_cap);
         if !arch_block.is_empty() && mode != "lite" {
-            out.push_str(&format!("<architecture_zone>\n{arch_block}</architecture_zone>\n"));
+            out.push_str(&format!(
+                "<architecture_zone>\n{arch_block}</architecture_zone>\n"
+            ));
         }
         out.push_str("</ralph_context>");
 
@@ -864,7 +910,10 @@ impl RalphService {
         if !deferred.is_empty() {
             out.push_str("\ndebt-леджер (deferred):");
             for (content, meta, kind) in deferred {
-                let no_trigger = meta.as_deref().map(|m| m.contains("no_trigger")).unwrap_or(false);
+                let no_trigger = meta
+                    .as_deref()
+                    .map(|m| m.contains("no_trigger"))
+                    .unwrap_or(false);
                 let head: String = content.chars().take(120).collect();
                 out.push_str(&format!(
                     "\n- [{kind}]{} {head}",
@@ -911,7 +960,10 @@ impl RalphService {
                 .as_ref()
                 .and_then(|v| v.get("upgrade_trigger"))
                 .and_then(|x| x.as_str());
-            let explicit = meta.as_deref().map(|m| m.contains("no_trigger")).unwrap_or(false);
+            let explicit = meta
+                .as_deref()
+                .map(|m| m.contains("no_trigger"))
+                .unwrap_or(false);
             let no_trigger = explicit || trigger.is_none();
             if no_trigger {
                 no_trigger_count += 1;
@@ -945,7 +997,12 @@ impl RalphService {
     }
 
     /// ast_diff: symbol-level дифф между итерациями (по ast_changes).
-    pub fn ast_diff(&self, project_id: &str, from: &str, to: Option<&str>) -> anyhow::Result<String> {
+    pub fn ast_diff(
+        &self,
+        project_id: &str,
+        from: &str,
+        to: Option<&str>,
+    ) -> anyhow::Result<String> {
         let rows: Vec<(String, String, String, String)> = self.db.with_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT path, label, node_type, change_type FROM ast_changes \
@@ -1013,7 +1070,11 @@ fn rows_to_vec(
     stmt: &mut rusqlite::Statement,
 ) -> rusqlite::Result<Vec<(String, Option<String>, String)>> {
     let rows = stmt.query_map([], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, String>(2)?,
+        ))
     })?;
     Ok(rows.flatten().collect())
 }
@@ -1027,14 +1088,32 @@ mod tests {
     fn test_ralph_finding_git_head_sha_and_freshness() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        if Command::new("git").args(["-C", &root.to_string_lossy(), "init"]).status().is_err() {
+        if Command::new("git")
+            .args(["-C", &root.to_string_lossy(), "init"])
+            .status()
+            .is_err()
+        {
             return;
         }
-        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "config", "user.email", "t@t.local"]).status();
-        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "config", "user.name", "T"]).status();
+        let _ = Command::new("git")
+            .args([
+                "-C",
+                &root.to_string_lossy(),
+                "config",
+                "user.email",
+                "t@t.local",
+            ])
+            .status();
+        let _ = Command::new("git")
+            .args(["-C", &root.to_string_lossy(), "config", "user.name", "T"])
+            .status();
         std::fs::write(root.join("a.rs"), "pub fn f1() {}\n").unwrap();
-        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "add", "."]).status();
-        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "commit", "-m", "init"]).status();
+        let _ = Command::new("git")
+            .args(["-C", &root.to_string_lossy(), "add", "."])
+            .status();
+        let _ = Command::new("git")
+            .args(["-C", &root.to_string_lossy(), "commit", "-m", "init"])
+            .status();
 
         let db = Database::in_memory().unwrap();
         let proj = Arc::new(ProjectService::new(db.conn_arc()));
@@ -1050,17 +1129,39 @@ mod tests {
         let ralph = RalphService::new(db.clone(), proj, root.to_path_buf());
 
         let fid = ralph
-            .add_finding("p_ralph", None, None, "gotcha", "f1 detail", Some("[\"f1\"]"), None)
+            .add_finding(
+                "p_ralph",
+                None,
+                None,
+                "gotcha",
+                "f1 detail",
+                Some("[\"f1\"]"),
+                None,
+            )
             .unwrap();
         let meta: Option<String> = db
-            .with_conn(|c| c.query_row("SELECT meta FROM ralph_findings WHERE id = ?1", params![fid], |r| r.get(0)))
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT meta FROM ralph_findings WHERE id = ?1",
+                    params![fid],
+                    |r| r.get(0),
+                )
+            })
             .unwrap();
         assert!(meta.as_deref().unwrap_or("").contains("git_head_sha"));
-        assert!(ralph.verify_finding_git_fresh("p_ralph", &fid, "a.rs").unwrap());
+        assert!(ralph
+            .verify_finding_git_fresh("p_ralph", &fid, "a.rs")
+            .unwrap());
 
         std::fs::write(root.join("a.rs"), "pub fn f1(x: i32) {}\n").unwrap();
-        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "add", "."]).status();
-        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "commit", "-m", "change"]).status();
-        assert!(!ralph.verify_finding_git_fresh("p_ralph", &fid, "a.rs").unwrap());
+        let _ = Command::new("git")
+            .args(["-C", &root.to_string_lossy(), "add", "."])
+            .status();
+        let _ = Command::new("git")
+            .args(["-C", &root.to_string_lossy(), "commit", "-m", "change"])
+            .status();
+        assert!(!ralph
+            .verify_finding_git_fresh("p_ralph", &fid, "a.rs")
+            .unwrap());
     }
 }

@@ -849,7 +849,7 @@ pub async fn cli_run_all(
     }
     report.insert("uppr_calibration".into(), uppr_rep);
 
-    let dream_rb_rep = eval_dream_rollback();
+    let dream_rb_rep = eval_dream_rollback_async().await;
     if !dream_rb_rep["gate_pass"].as_bool().unwrap_or(false) {
         gate_over = true;
         notes.push("dream_rollback: откат транзакции при деградации метрик не сработал (ADR-13)".into());
@@ -1655,7 +1655,7 @@ mod tests {
 }
 
 /// Ф74.7: проверка автоматического отката транзакции Dream при деградации метрик (ADR-13).
-pub fn eval_dream_rollback() -> serde_json::Value {
+pub async fn eval_dream_rollback_async() -> serde_json::Value {
     let Ok(db) = crate::db::Database::in_memory() else {
         return json!({ "gate_pass": false, "error": "db init failed" });
     };
@@ -1676,13 +1676,8 @@ pub fn eval_dream_rollback() -> serde_json::Value {
         return json!({ "gate_pass": false, "error": "seed insert failed" });
     }
 
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(r) => r,
-        Err(e) => return json!({ "gate_pass": false, "error": format!("{e}") }),
-    };
-
     let mut step = 0usize;
-    let res = rt.block_on(crate::dream::conflicts::reconcile_with_rollback_guard(
+    let res = crate::dream::conflicts::reconcile_with_rollback_guard(
         &conn,
         None,
         None,
@@ -1694,7 +1689,8 @@ pub fn eval_dream_rollback() -> serde_json::Value {
             step += 1;
             if step == 1 { (0.90, 0.80) } else { (0.50, 0.40) }
         },
-    ));
+    )
+    .await;
     match res {
         Ok(rep) => {
             let status: String = conn
@@ -1709,6 +1705,14 @@ pub fn eval_dream_rollback() -> serde_json::Value {
         }
         Err(e) => json!({ "gate_pass": false, "error": format!("{e}") }),
     }
+}
+
+/// Синхронная обёртка Ф74.7 для юнит-тестов (вне активного Tokio runtime).
+pub fn eval_dream_rollback() -> serde_json::Value {
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+        return json!({ "gate_pass": false, "error": "tokio runtime build failed" });
+    };
+    rt.block_on(eval_dream_rollback_async())
 }
 
 /// Ф54: прогон golden-набора по кодовому графу: PPR от семантических сидов

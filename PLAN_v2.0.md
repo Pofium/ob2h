@@ -302,7 +302,7 @@
   - ADR-28: Dual-Track Offline/Online Dream Synthesis;
   - ADR-29: Zero-Touch Cross-Platform Lifecycle (cargo-dist, user-space демоны, `self uninstall`).
 - [x] **77.4** Актуализация всей пользовательской документации: `README.md`, `ARCHITECTURE.md`, `docs/SYNC.md`, `docs/INSTALL.md`, `skills/ob2h/SKILL.md`.
-- [ ] **77.5** Публикация мажорного релиза v2.0.0.
+- [x] **77.5** Публикация мажорного релиза v2.0.0.
 
 ---
 

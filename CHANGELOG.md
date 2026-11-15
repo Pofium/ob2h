@@ -3,10 +3,15 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
-## [Unreleased]
+## [2.0.0] - 2026-11-15
 
 ### Added
-- **74.5 (`knowledge_reconcile`)**: новый MCP-инструмент HITL-сверки конфликтов знаний (TemporalSupersession, UserCorrection, ContextualCoexistence) с режимом предпросмотра (`apply=false`) для важных сущностей и применением (`apply=true`).
+- **Фаза 72 & 72b — Vector Spaces, Multi-Model & Binary Quantization**: таблица `vector_spaces`, `EmbeddingFingerprint` (модель+dim+чанкер), пакетная переиндексация `ob2h reindex --embeddings`, BLAKE3 `file_blobs` кэш, `src/vector/bq.rs` (бинарное квантование + Hamming/Popcnt), опциональная фича `onnx` (`fastembed`).
+- **Фаза 73 — U-PPR, AST-скелет и наблюдаемость WAL**: Usage-Weighted PageRank (`U-PPR`) с анти-голоданием, `subtokens` в FTS5, `max_tokens` + Elbow cutoff в `graph_reason`/`memory_context`, `wal_checkpoint` трассировка.
+- **Фаза 74 — Автономное разрешение конфликтов Dream (`knowledge_reconcile`)**: трёхуровневая классификация конфликтов, предфильтрация (category + Entity Overlap + `cosine > 0.82`), offline/online детектор противоречий, рёбра `SUPERSEDES`/`CONTRADICTS`, `git_head_sha` привязка, `DreamBudget`, автооткат по метрикам bench (ADR-13), новый MCP-инструмент `knowledge_reconcile` (`apply=false`/`true`).
+- **Фаза 75 — Интеграция Ralph и Sync v2**: `git_head_sha` валидация свежести findings, `tracing` spans (`embed`, `parse`, `vec`, `fts`, `ppr`, `dream`, `wal_checkpoint`) в `omnes_stats`, синк `SUPERSEDES`/`CONTRADICTS` + CRDT `max` для `access_count`.
+- **Фаза 76 — Кроссплатформенный Lifecycle**: `src/cli/lifecycle.rs`, `dist-workspace.toml` (`cargo-dist`), `packaging/ob2h.iss`, `ob2h doctor --fix` (preflight + аварийная очистка), JSONC-safe патч IDE, user-space демоны (`ob2h service install/uninstall`), `ob2h completions`, `ob2h models hydrate`, `ob2h self uninstall [--keep-data | --purge-data] [--silent]`.
+- **Фаза 77 — CI/CD, миграции и документация**: матрица `.github/workflows/release.yml` (включая `x86_64-unknown-linux-musl`, `SHA256SUMS-*.txt`, SBOM, optional secret-gated signing), `ob2h migrate --dry-run`, ADR-24..29, `docs/INSTALL.md`.
 
 ### Changed
 - **73.6 (`memory_feedback`)**: добавлен опциональный параметр `node_id` для Mute Node (`trust_score *= 0.3` на `graph_nodes`); при передаче `node_id` поле `key` необязательно.
