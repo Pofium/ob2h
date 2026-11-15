@@ -140,10 +140,11 @@ impl GraphService {
                 label_to_rowid.insert(entity.label.clone(), id);
                 self.embed_node(id, &format!("{}: {}", entity.label, desc)).await;
             } else {
+                let subtokens = crate::db::schema::decompose_identifier(&entity.label);
                 let id: i64 = self.db.with_conn(|conn| {
                     conn.execute(
-                        "INSERT INTO graph_nodes (node_id, label, node_type, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-                        params![node_id, entity.label, entity.entity_type, entity.description, now],
+                        "INSERT INTO graph_nodes (node_id, label, node_type, description, subtokens, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                        params![node_id, entity.label, entity.entity_type, entity.description, subtokens, now],
                     )?;
                     Ok(conn.last_insert_rowid())
                 })?;
@@ -255,10 +256,13 @@ impl GraphService {
         limit: usize,
         expand_hops: bool,
     ) -> anyhow::Result<GraphSearchResult> {
-        let words: Vec<String> = query
+        let decomposed_q = crate::db::schema::decompose_identifier(query);
+        let mut seen_w: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let words: Vec<String> = decomposed_q
             .split_whitespace()
             .filter(|w| w.chars().count() >= 3)
             .map(|w| w.to_lowercase())
+            .filter(|w| seen_w.insert(w.clone()))
             .collect();
 
         let mut scored: HashMap<i64, f64> = HashMap::new();
@@ -1010,4 +1014,44 @@ pub struct ScoredProjectNode {
     pub is_god_node: bool,
     pub description: Option<String>,
     pub score: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embedding::FakeEmbedding;
+
+    #[tokio::test]
+    async fn test_subtoken_fts_finds_camel_and_snake_case_identifiers() {
+        let db = Database::in_memory().unwrap();
+        let embedder = Arc::new(FakeEmbedding::new(8));
+        let svc = GraphService::new(db.clone(), embedder);
+
+        db.with_conn(|conn| {
+            let s1 = crate::db::schema::decompose_identifier("EmbeddingWorkerPool");
+            let s2 = crate::db::schema::decompose_identifier("parse_source_file");
+            conn.execute(
+                "INSERT INTO graph_nodes (node_id, label, node_type, description, subtokens, project_id, val, created_at, updated_at)
+                 VALUES ('n1', 'EmbeddingWorkerPool', 'Struct', 'struct EmbeddingWorkerPool', ?1, 'p1', 1.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                        ('n2', 'parse_source_file', 'Function', 'fn parse_source_file()', ?2, 'p1', 1.0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                params![s1, s2],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let res1 = svc.search_for_project("worker pool", Some("p1"), 5, false).await.unwrap();
+        assert!(
+            res1.nodes.iter().any(|n| n.label == "EmbeddingWorkerPool"),
+            "Ожидали найти EmbeddingWorkerPool по запросу 'worker pool', получили: {:?}",
+            res1.nodes.iter().map(|n| &n.label).collect::<Vec<_>>()
+        );
+
+        let res2 = svc.search_for_project("parse source", Some("p1"), 5, false).await.unwrap();
+        assert!(
+            res2.nodes.iter().any(|n| n.label == "parse_source_file"),
+            "Ожидали найти parse_source_file по запросу 'parse source', получили: {:?}",
+            res2.nodes.iter().map(|n| &n.label).collect::<Vec<_>>()
+        );
+    }
 }

@@ -722,9 +722,9 @@ impl ProjectService {
                     INSERT INTO graph_nodes (
                         node_id, label, node_type, description, val, created_at, updated_at,
                         project_id, file_path, line_start, line_end, provenance, is_god_node,
-                        kind_detail
+                        kind_detail, subtokens
                     )
-                    VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?9, 'SYNTAX', 0, ?10)
+                    VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?9, 'SYNTAX', 0, ?10, ?11)
                     ON CONFLICT(node_id) DO UPDATE SET
                         label = excluded.label,
                         node_type = excluded.node_type,
@@ -735,10 +735,12 @@ impl ProjectService {
                         line_start = excluded.line_start,
                         line_end = excluded.line_end,
                         provenance = 'SYNTAX',
-                        kind_detail = excluded.kind_detail
+                        kind_detail = excluded.kind_detail,
+                        subtokens = excluded.subtokens
                     RETURNING id
                     "#
                 )?;
+                let subtokens = crate::db::schema::decompose_identifier(&node.label);
                 stmt.query_row(
                     params![
                         node.node_id,
@@ -751,6 +753,7 @@ impl ProjectService {
                         node.line_start as i64,
                         node.line_end as i64,
                         kind_detail,
+                        subtokens,
                     ],
                     |r| r.get(0),
                 )?
@@ -785,9 +788,9 @@ impl ProjectService {
                     r#"
                     INSERT INTO graph_nodes (
                         node_id, label, node_type, description, val, created_at, updated_at,
-                        project_id, provenance
+                        project_id, provenance, subtokens
                     )
-                    VALUES (?1, ?5, ?6, ?2, 1, ?3, ?3, ?4, 'SYNTAX')
+                    VALUES (?1, ?5, ?6, ?2, 1, ?3, ?3, ?4, 'SYNTAX', ?7)
                     ON CONFLICT(node_id) DO NOTHING
                     "#,
                     params![
@@ -797,6 +800,7 @@ impl ProjectService {
                         project_id,
                         auto_label,
                         auto_type,
+                        crate::db::schema::decompose_identifier(&auto_label),
                     ],
                 )?;
                 tx.query_row(
@@ -1039,14 +1043,15 @@ impl ProjectService {
             let mut insert_node = tx.prepare_cached(
                 "INSERT INTO graph_nodes (
                     node_id, label, node_type, description, val, created_at, updated_at,
-                    project_id, file_path, line_start, line_end, provenance, is_god_node
-                 ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?9, 'codegraph', 0)
+                    project_id, file_path, line_start, line_end, provenance, is_god_node, subtokens
+                 ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?9, 'codegraph', 0, ?10)
                  ON CONFLICT(node_id) DO UPDATE SET
                     label = excluded.label,
                     node_type = excluded.node_type,
                     description = excluded.description,
                     updated_at = excluded.updated_at,
-                    provenance = 'codegraph'
+                    provenance = 'codegraph',
+                    subtokens = excluded.subtokens
                  RETURNING id"
             )?;
 
@@ -1066,6 +1071,7 @@ impl ProjectService {
             for r in rows.flatten() {
                 let (id, name, kind, file_path, start_line, end_line, sig, doc) = r;
                 let desc = sig.or(doc).unwrap_or_else(|| format!("{kind} {name}"));
+                let subtokens = crate::db::schema::decompose_identifier(&name);
                 let pk: i64 = insert_node.query_row(
                     params![
                         format!("cg:{id}"),
@@ -1077,6 +1083,7 @@ impl ProjectService {
                         file_path,
                         start_line as i64,
                         end_line as i64,
+                        subtokens,
                     ],
                     |row| row.get(0),
                 )?;
