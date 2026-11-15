@@ -3,6 +3,7 @@
 pub mod ast;
 pub mod ast_backend;
 pub mod ast_golden;
+pub mod chunker;
 pub mod cochange;
 pub mod hooks;
 pub mod scanjob;
@@ -48,7 +49,15 @@ pub struct ProjectService {
     embedder: Option<Arc<dyn crate::embedding::EmbeddingProvider>>,
 }
 
-type RawNodeTuple = (i64, String, String, Option<String>, Option<String>);
+type RawNodeTuple = (
+    i64,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<i64>,
+);
 
 impl ProjectService {
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
@@ -78,11 +87,18 @@ impl ProjectService {
             None => return Ok(0),
         };
 
-        let nodes: Vec<RawNodeTuple> = {
+        let (root_path, nodes): (Option<PathBuf>, Vec<RawNodeTuple>) = {
             let conn = self.conn.lock().unwrap();
+            let root: Option<String> = conn
+                .query_row(
+                    "SELECT root_path FROM projects WHERE id = ?1",
+                    params![project_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
             let mut stmt = conn.prepare(
                 r#"
-                SELECT id, node_type, label, file_path, description
+                SELECT id, node_type, label, file_path, description, line_start, line_end
                 FROM graph_nodes
                 WHERE project_id = ?1
                   AND embedding IS NULL
@@ -97,31 +113,57 @@ impl ProjectService {
                     r.get::<_, String>(2)?,
                     r.get::<_, Option<String>>(3)?,
                     r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<i64>>(5)?,
+                    r.get::<_, Option<i64>>(6)?,
                 ))
             })?;
             let mut res = Vec::new();
             for r in rows {
                 res.push(r?);
             }
-            res
+            (root.map(PathBuf::from), res)
         };
 
         if nodes.is_empty() {
             return Ok(0);
         }
 
+        // Ф70.15 / Ф72.2a: генерированные stub-файлы не векторизуем (иначе раздувают индекс).
+        let (stub_nodes, embed_nodes): (Vec<_>, Vec<_>) = nodes.into_iter().partition(|(_, _, _, fpath, _, _, _)| {
+            fpath
+                .as_deref()
+                .map(crate::project::ast_backend::is_generated_stub)
+                .unwrap_or(false)
+        });
+        if !stub_nodes.is_empty() {
+            let mut conn = self.conn.lock().unwrap();
+            let tx = conn.transaction()?;
+            for (pk, _, _, _, _, _, _) in &stub_nodes {
+                tx.execute(
+                    "UPDATE graph_nodes SET embedding = X'' WHERE id = ?1",
+                    params![pk],
+                )?;
+            }
+            tx.commit()?;
+        }
+        if embed_nodes.is_empty() {
+            return Ok(0);
+        }
+
         let mut total_embedded = 0;
-        for chunk in nodes.chunks(32) {
+        for chunk in embed_nodes.chunks(32) {
             let texts: Vec<String> = chunk
                 .iter()
-                .map(|(_, ntype, label, fpath, desc)| {
-                    let loc = fpath.as_deref().unwrap_or("-");
-                    let d = desc.as_deref().unwrap_or("");
-                    if d.is_empty() {
-                        format!("{ntype} {label} in {loc}")
-                    } else {
-                        format!("{ntype} {label} in {loc}: {d}")
-                    }
+                .map(|(_, ntype, label, fpath, desc, ls, le)| {
+                    chunker::extract_node_span_chunk(
+                        root_path.as_deref(),
+                        fpath.as_deref(),
+                        ntype,
+                        label,
+                        desc.as_deref(),
+                        *ls,
+                        *le,
+                    )
                 })
                 .collect();
 
@@ -129,7 +171,7 @@ impl ProjectService {
             {
                 let mut conn = self.conn.lock().unwrap();
                 let tx = conn.transaction()?;
-                for ((pk, _, _, _, _), vec) in chunk.iter().zip(vecs.iter()) {
+                for ((pk, _, _, _, _, _, _), vec) in chunk.iter().zip(vecs.iter()) {
                     let blob = crate::vector::similarity::serialize_q(vec);
                     tx.execute(
                         "UPDATE graph_nodes SET embedding = ?1 WHERE id = ?2",

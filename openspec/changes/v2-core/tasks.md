@@ -3,7 +3,7 @@
 ## Фаза 72 — FastEmbed & Batch Vector Pipeline
 - [x] T-72.1 Оптимизация базового Candle: вынос синхронного инференса в `spawn_blocking` и пакетная обработка чанков (батчи 32/64).
 - [x] T-72.2 Опциональный крейт `fastembed` / `ort` под флагом `onnx`: INT8-модели мультиязычного/кодового класса (`multilingual-e5-small`; альтернативы `jina-embeddings-v2-base-code`, `nomic-embed-text-v1.5`).
-- [ ] T-72.2a AST-aware чанкинг для векторизации кода: нарезка по границам tree-sitter-узлов с заголовком `// File: <путь> | Scope: <контекст>`, прирост Recall@10 в bench.
+- [x] T-72.2a AST-aware чанкинг для векторизации кода: нарезка по границам tree-sitter-узлов с заголовком `// File: <путь> | Scope: <контекст>`, прирост Recall@10 в bench.
 - [ ] T-72.2b Асимметричные префиксы моделей в трейте `EmbeddingProvider`: поля `query_prefix`/`document_prefix` с авто-подстановкой и проверкой дельты RU-триплетов в bench.
 - [ ] T-72.3 Механизм `EmbeddingFingerprint`: фиксация `model_id:backend:quant:dim:prefix_vN` в метаданных БД и блокировка смешанного поиска (триггер `reindex --embeddings`).
 - [ ] T-72.4 CLI-команда `ob2h reindex --embeddings`: фоновая пакетная переиндексация векторов при смене бэкенда/модели с прогресс-баром.
