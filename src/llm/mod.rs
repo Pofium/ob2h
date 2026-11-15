@@ -37,20 +37,57 @@ impl<C: ?Sized + LLMClient> LLMClientExt for C {
     }
 }
 
-/// Очистка ответа модели от markdown ```json ... ``` обёрток.
+/// Очистка ответа модели от markdown ```json ... ``` обёрток и пояснительного
+/// текста вокруг JSON: модели любят дописывать «Note: ...» после JSON —
+/// serde_json на таком падает (trailing characters). Вырезаем первое
+/// сбалансированное JSON-значение из текста.
 pub fn clean_json_markdown(text: &str) -> String {
-    let trimmed = text.trim();
-    if let Some(stripped) = trimmed.strip_prefix("```json") {
-        if let Some(end) = stripped.strip_suffix("```") {
-            return end.trim().to_string();
+    let mut cur = text.trim();
+    for prefix in ["```json", "```"] {
+        if let Some(stripped) = cur.strip_prefix(prefix) {
+            if let Some(end) = stripped.strip_suffix("```") {
+                cur = end.trim();
+            }
+            break;
         }
     }
-    if let Some(stripped) = trimmed.strip_prefix("```") {
-        if let Some(end) = stripped.strip_suffix("```") {
-            return end.trim().to_string();
+    extract_first_json_value(cur).unwrap_or_else(|| cur.to_string())
+}
+
+/// Вырезать из текста первое сбалансированное JSON-значение (`{...}` или `[...]`)
+/// с учётом строк и экранирования. None — JSON-значения в тексте нет.
+fn extract_first_json_value(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let start = text.find(['{', '['])?;
+    let open = bytes[start];
+    let close = if open == b'{' { b'}' } else { b']' };
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            _ if b == open => depth += 1,
+            _ if b == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(text[start..=i].to_string());
+                }
+            }
+            _ => {}
         }
     }
-    trimmed.to_string()
+    None
 }
 
 /// Делегирующий LLM-клиент с подменой на лету: harness-детект при MCP
@@ -131,5 +168,53 @@ mod tests {
         // Внутренний клиент — OpenAI (не Fake и не локальный); проверить нельзя
         // напрямую, но подмена/делегирование работают через trait.
         assert!(Arc::strong_count(&sw.current()) >= 1);
+    }
+
+    #[test]
+    fn clean_json_extracts_value_with_trailing_note() {
+        // Реальный случай дрима (run 104): хвост после JSON ломал phase2.
+        let raw = "{\"action\": \"edit\", \"file\": \"memory\", \"new\": \"x\"}\n\nNote: assistant must output only the JSON per step.";
+        assert_eq!(
+            clean_json_markdown(raw),
+            "{\"action\": \"edit\", \"file\": \"memory\", \"new\": \"x\"}"
+        );
+    }
+
+    #[test]
+    fn clean_json_respects_strings_with_braces_and_escapes() {
+        let raw = "{\"new\": \"код {a: 1} \\\"quoted\\\" [ok]\"}\nХвост текста.";
+        assert_eq!(
+            clean_json_markdown(raw),
+            "{\"new\": \"код {a: 1} \\\"quoted\\\" [ok]\"}"
+        );
+    }
+
+    #[test]
+    fn clean_json_handles_arrays_leading_and_trailing_text() {
+        assert_eq!(
+            clean_json_markdown("Вот вердикты:\n[{\"key\": \"a\", \"verdict\": \"confirmed\"}] — готово."),
+            "[{\"key\": \"a\", \"verdict\": \"confirmed\"}]"
+        );
+    }
+
+    #[test]
+    fn clean_json_markdown_wrapper_still_works() {
+        assert_eq!(clean_json_markdown("```json\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(clean_json_markdown("```\n[1, 2]\n```"), "[1, 2]");
+        // Незакрытый fence — JSON всё равно вырезается
+        assert_eq!(clean_json_markdown("```json\n{\"a\":1}\n"), "{\"a\":1}");
+    }
+
+    #[test]
+    fn clean_json_no_json_returns_trimmed() {
+        assert_eq!(clean_json_markdown("  просто текст  "), "просто текст");
+    }
+
+    #[tokio::test]
+    async fn ask_json_tolerates_trailing_text() {
+        let f = fake_with("{\"action\": \"done\", \"summary\": \"ok\"}\n\nNote: JSON only.");
+        let sw = SwappableLLM::new(f);
+        let v: serde_json::Value = sw.ask_json("p", None).await.unwrap();
+        assert_eq!(v["action"], "done");
     }
 }
