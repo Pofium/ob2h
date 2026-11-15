@@ -81,6 +81,8 @@ fn test_tools_list_contract_snapshot() {
         "memory_audit",
         // v1.9.9: окно просмотра (Фаза 72)
         "viewer_open",
+        // v2.0.0: HITL-сверка конфликтов (Фаза 74.5)
+        "knowledge_reconcile",
     ];
     assert_eq!(names, expected, "контракт tools/list изменился — см. PLAN_v1.9.9.md");
 }

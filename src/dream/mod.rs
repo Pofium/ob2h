@@ -2,6 +2,7 @@
 
 pub mod autodream;
 pub mod bench_gate;
+pub mod conflicts;
 pub mod consolidate;
 pub mod golden;
 
@@ -245,6 +246,25 @@ impl Dream {
                 None
             }
         };
+
+        // Ф74: автономное разрешение конфликтов в пределах ночного бюджета
+        {
+            let budget = conflicts::DreamBudget::from_env();
+            if let Err(e) = conflicts::reconcile_knowledge_db(
+                &self.db,
+                Some(self.llm.as_ref()),
+                None,
+                0.5,
+                true,
+                true,
+                budget,
+                None,
+            )
+            .await
+            {
+                warn!("Сверка конфликтов (Ф74) не удалась: {e}");
+            }
+        }
 
         // Ф28.1 (FR-K7): ревизия stale-findings Ralph по свежему контексту
         let ralph_revision = self.revise_ralph_findings().await.unwrap_or_else(|e| {

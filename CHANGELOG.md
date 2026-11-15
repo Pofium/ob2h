@@ -5,6 +5,9 @@
 
 ## [Unreleased]
 
+### Added
+- **74.5 (`knowledge_reconcile`)**: новый MCP-инструмент HITL-сверки конфликтов знаний (TemporalSupersession, UserCorrection, ContextualCoexistence) с режимом предпросмотра (`apply=false`) для важных сущностей и применением (`apply=true`).
+
 ### Changed
 - **73.6 (`memory_feedback`)**: добавлен опциональный параметр `node_id` для Mute Node (`trust_score *= 0.3` на `graph_nodes`); при передаче `node_id` поле `key` необязательно.
 - **73.8 (`graph_reason`, `memory_context`)**: добавлен параметр `max_tokens` в `graph_reason` (и поддержка `max_tokens >= 256` с `project_id` в `memory_context`) для выдачи токен-бюджетного AST-скелета U-PPR с отсечением мусорного хвоста (Elbow/Drop-off Cutoff).

@@ -849,6 +849,13 @@ pub async fn cli_run_all(
     }
     report.insert("uppr_calibration".into(), uppr_rep);
 
+    let dream_rb_rep = eval_dream_rollback();
+    if !dream_rb_rep["gate_pass"].as_bool().unwrap_or(false) {
+        gate_over = true;
+        notes.push("dream_rollback: откат транзакции при деградации метрик не сработал (ADR-13)".into());
+    }
+    report.insert("dream_rollback".into(), dream_rb_rep);
+
     report.insert(
         "gate".into(),
         json!({
@@ -1636,6 +1643,71 @@ mod tests {
         assert!(
             rep["uppr_mrr"].as_f64().unwrap_or(0.0) >= rep["base_mrr"].as_f64().unwrap_or(0.0)
         );
+    }
+
+    #[test]
+    fn dream_rollback_gate_passes() {
+        let rep = eval_dream_rollback();
+        assert!(rep["gate_pass"].as_bool().unwrap_or(false));
+        assert_eq!(rep["rolled_back"].as_bool(), Some(true));
+        assert_eq!(rep["status_preserved"].as_str(), Some("ACTIVE"));
+    }
+}
+
+/// Ф74.7: проверка автоматического отката транзакции Dream при деградации метрик (ADR-13).
+pub fn eval_dream_rollback() -> serde_json::Value {
+    let Ok(db) = crate::db::Database::in_memory() else {
+        return json!({ "gate_pass": false, "error": "db init failed" });
+    };
+    let conn_arc = db.conn_arc();
+    let Ok(conn) = conn_arc.lock() else {
+        return json!({ "gate_pass": false, "error": "db lock failed" });
+    };
+    let v = crate::vector::similarity::serialize(&[1.0f32, 0.0, 0.0, 0.0]);
+    if conn
+        .execute(
+            "INSERT INTO memories (id, key, content, category, importance, trust, embedding, created_at, updated_at)
+             VALUES (1, 'auth_1', 'таймаут Auth 5с', 'fact', 0.9, 0.9, ?1, '2026-01-01', '2026-01-01'),
+                    (2, 'auth_2', 'таймаут Auth 10с', 'fact', 0.9, 0.9, ?1, '2026-01-02', '2026-01-02')",
+            rusqlite::params![v],
+        )
+        .is_err()
+    {
+        return json!({ "gate_pass": false, "error": "seed insert failed" });
+    }
+
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(r) => r,
+        Err(e) => return json!({ "gate_pass": false, "error": format!("{e}") }),
+    };
+
+    let mut step = 0usize;
+    let res = rt.block_on(crate::dream::conflicts::reconcile_with_rollback_guard(
+        &conn,
+        None,
+        None,
+        0.5,
+        true,
+        crate::dream::conflicts::DreamBudget::default(),
+        None,
+        |_| {
+            step += 1;
+            if step == 1 { (0.90, 0.80) } else { (0.50, 0.40) }
+        },
+    ));
+    match res {
+        Ok(rep) => {
+            let status: String = conn
+                .query_row("SELECT status FROM memories WHERE id = 1", [], |r| r.get(0))
+                .unwrap_or_default();
+            let gate_pass = rep.rolled_back && status == "ACTIVE";
+            json!({
+                "rolled_back": rep.rolled_back,
+                "status_preserved": status,
+                "gate_pass": gate_pass,
+            })
+        }
+        Err(e) => json!({ "gate_pass": false, "error": format!("{e}") }),
     }
 }
 

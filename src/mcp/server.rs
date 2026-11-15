@@ -2526,6 +2526,46 @@ impl McpServer {
                 }
                 Err(e) => format!("[Error] {e}"),
             },
+            "knowledge_reconcile" => {
+                let pid = args
+                    .get("project_id")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty());
+                let min_imp = args
+                    .get("min_importance")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.6);
+                let apply = args
+                    .get("apply")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let online = args
+                    .get("online")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let llm_ref: Option<&dyn crate::llm::LLMClient> = if online {
+                    Some(self.ctx.llm.as_ref())
+                } else {
+                    None
+                };
+                let budget = crate::dream::conflicts::DreamBudget::from_env();
+                match crate::dream::conflicts::reconcile_knowledge_db(
+                    &self.ctx.db,
+                    llm_ref,
+                    pid,
+                    min_imp,
+                    apply,
+                    true,
+                    budget,
+                    None,
+                )
+                .await
+                {
+                    Ok(report) => serde_json::to_string_pretty(&report)
+                        .unwrap_or_else(|e| format!("[Error] {e}")),
+                    Err(e) => format!("[Error] {e}"),
+                }
+            }
             other => format!("[Error] Unknown tool {other}"),
         }
     }

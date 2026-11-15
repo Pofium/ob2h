@@ -811,5 +811,19 @@ pub fn list_tools() -> Vec<McpToolDef> {
                 "properties": {}
             }),
         },
+        // v2.0.0: HITL-сверка конфликтов (Фаза 74.5)
+        McpToolDef {
+            name: "knowledge_reconcile".to_string(),
+            description: "Сверка и разрешение конфликтов знаний (TemporalSupersession, UserCorrection, ContextualCoexistence). По умолчанию apply=false возвращает отчёт предпросмотра для важных сущностей (HITL).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Идентификатор проекта (опционально)" },
+                    "min_importance": { "type": "number", "description": "Минимальная важность сущностей (дефолт: 0.6)" },
+                    "apply": { "type": "boolean", "description": "Применить изменения в БД (дефолт: false — только предпросмотр)" },
+                    "online": { "type": "boolean", "description": "Использовать LLM (дефолт: false — быстрые offline-эвристики)" }
+                }
+            }),
+        },
     ]
 }
