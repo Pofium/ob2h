@@ -235,8 +235,8 @@
 ### Релизный поезд 2 (v2.1): Graph RAG 2.0, Dream Conflicts, Lifecycle Installer & Enterprise Hub
 
 #### Фаза 73 — Usage-Weighted Personalized PageRank (U-PPR) (оценка: 3–4 дня)
-- [ ] **73.1** Структура `GraphAdjacency`: компактное разреженное представление подграфа в памяти с весами рёбер.
-- [ ] **73.2** Реализация формулы $W(e)$ в `src/graph/pagerank.rs`:
+- [x] **73.1** Структура `GraphAdjacency`: компактное разреженное представление подграфа в памяти с весами рёбер.
+- [x] **73.2** Реализация формулы $W(e)$ в `src/graph/pagerank.rs`:
   - Ограничение бонуса популярности ($\text{CAP}_{\text{access}} = 3.0$);
   - Раздельные коэффициенты затухания: $\lambda_{\text{code}} = 0$ (код стабилен) vs $\lambda_{\text{memory}} > 0$;
   - Гарантированный ненулевой вес: $(0.1 + 0.9 \times \text{trust\_score})$;

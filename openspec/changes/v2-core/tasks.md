@@ -19,8 +19,8 @@
 - [x] T-72b.5 Content-addressed кэш (blake3): таблица `file_blobs` для мгновенного переключения веток без шторма ре-парсинга/ONNX.
 
 ## Фаза 73 — Usage-Weighted Personalized PageRank (U-PPR)
-- [ ] T-73.1 Структура `GraphAdjacency`: компактное разреженное представление подграфа в памяти с весами рёбер.
-- [ ] T-73.2 Реализация формулы $W(e)$ в `src/graph/pagerank.rs` (CAP_access=3.0, lambda_code=0 vs lambda_memory>0, trust_score, In-Degree Penalty, Grace period, Mute Node).
+- [x] T-73.1 Структура `GraphAdjacency`: компактное разреженное представление подграфа в памяти с весами рёбер.
+- [x] T-73.2 Реализация формулы $W(e)$ в `src/graph/pagerank.rs` (CAP_access=3.0, lambda_code=0 vs lambda_memory>0, trust_score, In-Degree Penalty, Grace period, Mute Node).
 - [ ] T-73.3 Буферизация телеметрии обращений + обслуживание WAL (`PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA optimize` в autodream и shutdown).
 - [ ] T-73.4 Экстракция $k$-hop сабграфа (до 5k–10k узлов) с взвешиванием `IDF * trust_score` и Active Working Set Boost (`git diff HEAD`).
 - [ ] T-73.5 Фильтрация устаревших данных: узлы с флагом `SUPERSEDED` исключаются из целевого вектора PPR.

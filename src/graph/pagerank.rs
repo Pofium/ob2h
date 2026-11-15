@@ -56,6 +56,250 @@ pub struct PprEdge {
     pub weight: f64,
 }
 
+/// Ограничение бонуса популярности (Ф73.2).
+pub const CAP_ACCESS: f64 = 3.0;
+/// Коэффициент затухания для кодовых узлов (Ф73.2: код стабилен).
+pub const LAMBDA_CODE: f64 = 0.0;
+/// Дефолтный коэффициент затухания для узлов памяти (per-day, Ф73.2).
+pub const DEFAULT_LAMBDA_MEMORY: f64 = 0.015;
+/// Минимальный порог grace-периода для cold-start узлов (Ф73.2: N_grace >= 4).
+pub const GRACE_MIN_ACCESS: u64 = 4;
+/// Множитель штрафа при Negative Feedback / Mute Node (Ф73.2 / Ф73.6).
+pub const MUTE_TRUST_FACTOR: f64 = 0.3;
+
+/// Компактное разреженное CSR-представление подграфа в памяти с весами рёбер (Ф73.1).
+#[derive(Debug, Clone, Default)]
+pub struct GraphAdjacency {
+    n: usize,
+    /// `offsets[u]..offsets[u + 1]` — срез исходящих рёбер узла `u`.
+    offsets: Vec<usize>,
+    targets: Vec<usize>,
+    weights: Vec<f64>,
+    out_weight: Vec<f64>,
+    in_degree: Vec<usize>,
+    superseded: Vec<bool>,
+}
+
+impl GraphAdjacency {
+    /// Собрать CSR-граф из списка рёбер.
+    pub fn from_edges(n: usize, edges: &[PprEdge], superseded: Option<&[bool]>) -> Self {
+        let mut counts = vec![0usize; n];
+        let mut in_degree = vec![0usize; n];
+        let mut out_weight = vec![0.0f64; n];
+        let mut valid_edges = Vec::with_capacity(edges.len());
+        for &e in edges {
+            if e.from >= n || e.to >= n || !e.weight.is_finite() || e.weight <= 0.0 {
+                continue;
+            }
+            counts[e.from] += 1;
+            in_degree[e.to] += 1;
+            out_weight[e.from] += e.weight;
+            valid_edges.push(e);
+        }
+
+        let mut offsets = Vec::with_capacity(n + 1);
+        offsets.push(0);
+        for c in &counts {
+            offsets.push(offsets.last().unwrap() + c);
+        }
+
+        let total = *offsets.last().unwrap_or(&0);
+        let mut targets = vec![0usize; total];
+        let mut weights = vec![0.0f64; total];
+        let mut cursor = offsets[..n].to_vec();
+
+        for e in valid_edges {
+            let pos = cursor[e.from];
+            targets[pos] = e.to;
+            weights[pos] = e.weight;
+            cursor[e.from] += 1;
+        }
+
+        let sup = match superseded {
+            Some(s) if s.len() == n => s.to_vec(),
+            _ => vec![false; n],
+        };
+
+        Self {
+            n,
+            offsets,
+            targets,
+            weights,
+            out_weight,
+            in_degree,
+            superseded: sup,
+        }
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.n
+    }
+
+    pub fn edge_count(&self) -> usize {
+        self.targets.len()
+    }
+
+    pub fn in_degree(&self, node: usize) -> usize {
+        self.in_degree.get(node).copied().unwrap_or(0)
+    }
+
+    pub fn out_weight(&self, node: usize) -> f64 {
+        self.out_weight.get(node).copied().unwrap_or(0.0)
+    }
+
+    pub fn is_superseded(&self, node: usize) -> bool {
+        self.superseded.get(node).copied().unwrap_or(false)
+    }
+
+    /// Исходящие рёбра узла `(targets_slice, weights_slice)` без аллокаций.
+    pub fn neighbors(&self, node: usize) -> (&[usize], &[f64]) {
+        if node >= self.n {
+            return (&[], &[]);
+        }
+        let s = self.offsets[node];
+        let e = self.offsets[node + 1];
+        (&self.targets[s..e], &self.weights[s..e])
+    }
+}
+
+/// Параметры целевого узла для расчёта веса ребра U-PPR `W(e)` (Ф73.2).
+#[derive(Debug, Clone, Copy)]
+pub struct UsageEdgeParams {
+    /// Базовый вес ребра (из типа связи / уверенности).
+    pub w0: f64,
+    /// Счётчик обращений целевого узла.
+    pub access_count: u64,
+    /// Возраст узла в днях.
+    pub age_days: f64,
+    /// Кодовый ли это узел (`true` → λ_code = 0, `false` → λ_memory > 0).
+    pub is_code: bool,
+    /// Оценка доверия узла в `[0.0, 1.0]`.
+    pub trust_score: f64,
+    /// Входящая степень целевого узла (для In-Degree Penalty хабов).
+    pub target_in_degree: usize,
+}
+
+/// Вычислить вес ребра U-PPR `W(e)` (Ф73.2):
+/// - In-Degree Penalty: `w0 / ln(1 + in_degree)` (с защитой `max(1.0)` при `in_degree <= 1`);
+/// - Бонус популярности с ограничением `CAP_ACCESS = 3.0` и защитой cold-start (`N_grace >= 4`);
+/// - Затухание по возрасту (`λ_code = 0`, `λ_memory = DEFAULT_LAMBDA_MEMORY`), не применяется к cold-start узлам в grace-периоде;
+/// - Гарантированный ненулевой вес доверия: `(0.1 + 0.9 * trust_score)`.
+pub fn compute_usage_edge_weight(p: UsageEdgeParams) -> f64 {
+    let w0 = if p.w0.is_finite() && p.w0 > 0.0 { p.w0 } else { PPR_UNKNOWN_WEIGHT };
+
+    // 1. In-Degree Penalty для структурных хабов
+    let in_deg_denom = (1.0 + p.target_in_degree as f64).ln().max(1.0);
+    let base_penalized = w0 / in_deg_denom;
+
+    // 2. Cold-start grace period (N_grace >= 4) и ограничение популярности CAP_ACCESS = 3.0
+    let is_grace = p.access_count < GRACE_MIN_ACCESS;
+    let access_bonus = if is_grace {
+        // Cold-start защита: новый узел получает нейтральный/стартовый множитель >= 1.0
+        1.0_f64.max((1.0 + (p.access_count as f64).ln_1p() * 0.25).min(CAP_ACCESS))
+    } else {
+        (1.0 + (p.access_count as f64).ln_1p() * 0.5).min(CAP_ACCESS)
+    };
+
+    // 3. Раздельное затухание: код стабилен (λ=0), память затухает (если не в grace)
+    let lambda = if p.is_code || is_grace {
+        LAMBDA_CODE
+    } else {
+        DEFAULT_LAMBDA_MEMORY
+    };
+    let age = p.age_days.max(0.0);
+    let decay = (-lambda * age).exp();
+
+    // 4. Гарантированный ненулевой вес доверия (Mute Node бьёт trust_score *= 0.3)
+    let trust = p.trust_score.clamp(0.0, 1.0);
+    let trust_factor = 0.1 + 0.9 * trust;
+
+    (base_penalized * access_bonus * decay * trust_factor).max(1e-9)
+}
+
+/// Персонализированный PageRank поверх [`GraphAdjacency`] (CSR) с исключением
+/// `SUPERSEDED` узлов из целевого распределения (Ф73.1, Ф73.5).
+pub fn personalized_pagerank_csr(
+    adj: &GraphAdjacency,
+    seeds: &[(usize, f64)],
+    damping: f64,
+    max_iter: usize,
+    tol: f64,
+) -> Vec<(usize, f64)> {
+    let n = adj.node_count();
+    if n == 0 || seeds.is_empty() {
+        return Vec::new();
+    }
+
+    let mut seed = vec![0.0f64; n];
+    let mut total = 0.0f64;
+    for &(node, w) in seeds {
+        if node < n && !adj.is_superseded(node) && w.is_finite() && w > 0.0 {
+            seed[node] += w;
+            total += w;
+        }
+    }
+    if total <= 0.0 {
+        return Vec::new();
+    }
+    for s in &mut seed {
+        *s /= total;
+    }
+
+    let d = damping.clamp(DAMPING_MIN, DAMPING_MAX);
+    let iters = max_iter.clamp(1, MAX_ITER);
+    let tol = if tol > 0.0 { tol } else { DEFAULT_TOL };
+
+    let mut p = seed.clone();
+    for _ in 0..iters {
+        let mut next = vec![0.0f64; n];
+        let mut dangling = 0.0f64;
+        for (u, &pu) in p.iter().enumerate() {
+            if pu == 0.0 {
+                continue;
+            }
+            let (nbrs, wts) = adj.neighbors(u);
+            let active_deg: f64 = nbrs
+                .iter()
+                .zip(wts.iter())
+                .filter(|(&v, _)| !adj.is_superseded(v))
+                .map(|(_, &w)| w)
+                .sum();
+            if active_deg <= 0.0 {
+                dangling += pu;
+                continue;
+            }
+            for (&v, &w) in nbrs.iter().zip(wts.iter()) {
+                if !adj.is_superseded(v) {
+                    next[v] += d * pu * (w / active_deg);
+                }
+            }
+        }
+        let teleport = (1.0 - d) + d * dangling;
+        for (u, &s) in seed.iter().enumerate() {
+            if s > 0.0 {
+                next[u] += teleport * s;
+            }
+        }
+        let l1: f64 = p.iter().zip(next.iter()).map(|(a, b)| (a - b).abs()).sum();
+        p = next;
+        if l1 < tol {
+            break;
+        }
+    }
+
+    let mut ranked: Vec<(usize, f64)> = p
+        .into_iter()
+        .enumerate()
+        .filter(|&(u, s)| s > 0.0 && !adj.is_superseded(u))
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    ranked
+}
+
 /// Граф под PPR: `n` узлов, исходящие рёбра в CSR-подобном виде.
 #[derive(Debug, Clone, Default)]
 pub struct PprGraph {
@@ -403,5 +647,91 @@ mod tests {
         assert_eq!(normalize_entity("ООО «Ромашка»"), "ооо ромашка");
         // дефисные формы схлопываются в один токен
         assert_eq!(normalize_entity("кое-что"), "коечто");
+    }
+
+    #[test]
+    fn test_graph_adjacency_csr_and_superseded_exclusion() {
+        let edges = vec![edge(0, 1, 1.0), edge(0, 2, 1.0), edge(1, 3, 1.0)];
+        let adj = GraphAdjacency::from_edges(4, &edges, Some(&[false, true, false, false]));
+        assert_eq!(adj.node_count(), 4);
+        assert_eq!(adj.edge_count(), 3);
+        assert_eq!(adj.in_degree(1), 1);
+        assert!(adj.is_superseded(1));
+
+        let ranked = personalized_pagerank_csr(&adj, &[(0, 1.0)], 0.85, 20, 1e-6);
+        assert!(ranked.iter().all(|&(u, _)| u != 1), "SUPERSEDED узел 1 должен быть исключён");
+        assert!(ranked.iter().any(|&(u, _)| u == 2));
+    }
+
+    #[test]
+    fn test_u_ppr_edge_weight_formula_invariants() {
+        // 1. CAP_ACCESS = 3.0 ограничивает сверхпопулярные узлы
+        let w_10k = compute_usage_edge_weight(UsageEdgeParams {
+            w0: 1.0,
+            access_count: 10_000,
+            age_days: 0.0,
+            is_code: true,
+            trust_score: 1.0,
+            target_in_degree: 1,
+        });
+        assert!(w_10k <= CAP_ACCESS + 1e-9);
+
+        // 2. Код стабилен (λ=0), память затухает со временем
+        let w_code_old = compute_usage_edge_weight(UsageEdgeParams {
+            w0: 1.0,
+            access_count: 10,
+            age_days: 120.0,
+            is_code: true,
+            trust_score: 1.0,
+            target_in_degree: 1,
+        });
+        let w_mem_old = compute_usage_edge_weight(UsageEdgeParams {
+            w0: 1.0,
+            access_count: 10,
+            age_days: 120.0,
+            is_code: false,
+            trust_score: 1.0,
+            target_in_degree: 1,
+        });
+        assert!(w_code_old > w_mem_old * 3.0);
+
+        // 3. In-degree penalty подавляет хабы
+        let w_leaf = compute_usage_edge_weight(UsageEdgeParams {
+            w0: 1.0,
+            access_count: 5,
+            age_days: 0.0,
+            is_code: true,
+            trust_score: 1.0,
+            target_in_degree: 1,
+        });
+        let w_hub = compute_usage_edge_weight(UsageEdgeParams {
+            w0: 1.0,
+            access_count: 5,
+            age_days: 0.0,
+            is_code: true,
+            trust_score: 1.0,
+            target_in_degree: 200,
+        });
+        assert!(w_hub < w_leaf * 0.25);
+
+        // 4. Mute Node (trust_score *= 0.3) резко роняет вес, но сохраняет > 0 (0.1 + 0.9*trust)
+        let w_before_mute = compute_usage_edge_weight(UsageEdgeParams {
+            w0: 1.0,
+            access_count: 5,
+            age_days: 0.0,
+            is_code: false,
+            trust_score: 1.0,
+            target_in_degree: 1,
+        });
+        let w_after_mute = compute_usage_edge_weight(UsageEdgeParams {
+            w0: 1.0,
+            access_count: 5,
+            age_days: 0.0,
+            is_code: false,
+            trust_score: 1.0 * MUTE_TRUST_FACTOR,
+            target_in_degree: 1,
+        });
+        assert!(w_after_mute < w_before_mute * 0.4);
+        assert!(w_after_mute > 0.0);
     }
 }
