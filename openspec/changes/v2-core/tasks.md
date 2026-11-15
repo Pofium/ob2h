@@ -25,7 +25,7 @@
 - [x] T-73.4 Экстракция $k$-hop сабграфа (до 5k–10k узлов) с взвешиванием `IDF * trust_score` и Active Working Set Boost (`git diff HEAD`).
 - [x] T-73.5 Фильтрация устаревших данных: узлы с флагом `SUPERSEDED` исключаются из целевого вектора PPR.
 - [x] T-73.6 Сквозная телеметрия (`memory_context`, `graph_reason`, prefetch, `project_impact`) + Mute Node (`trust_score *= 0.3`).
-- [ ] T-73.7 Калибровка весов на multi-hop golden наборе (сравнение выдачи с базовым PPR в bench).
+- [x] T-73.7 Калибровка весов на multi-hop golden наборе (сравнение выдачи с базовым PPR в bench).
 - [ ] T-73.8 Токен-бюджетный AST-скелет: параметр `max_tokens` в `graph_reason`/`memory_context` + Elbow/Drop-off Cutoff.
 - [ ] T-73.9 Sub-token декомпозиция идентификаторов в FTS5 (CamelCase/snake_case).
 

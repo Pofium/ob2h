@@ -838,6 +838,17 @@ pub async fn cli_run_all(
     }
     report.insert("embeddings".into(), emb_rep);
 
+    let uppr_rep = eval_uppr_calibration();
+    if !uppr_rep["gate_pass"].as_bool().unwrap_or(false) {
+        gate_over = true;
+        notes.push(format!(
+            "uppr_calibration: uppr_mrr={:.3} < base_mrr={:.3} (ADR-13)",
+            uppr_rep["uppr_mrr"].as_f64().unwrap_or(0.0),
+            uppr_rep["base_mrr"].as_f64().unwrap_or(0.0)
+        ));
+    }
+    report.insert("uppr_calibration".into(), uppr_rep);
+
     report.insert(
         "gate".into(),
         json!({
@@ -1180,6 +1191,102 @@ fn eval_bq_recall_at_10(dim: usize) -> anyhow::Result<(f64, f64)> {
     Ok((mean_recall, p95))
 }
 
+/// Ф73.7: калибровка весов U-PPR на multi-hop golden наборе (сравнение с базовым PPR).
+pub fn eval_uppr_calibration() -> serde_json::Value {
+    use crate::graph::pagerank::{
+        compute_seed_idf_weight, compute_usage_edge_weight, personalized_pagerank,
+        personalized_pagerank_csr, GraphAdjacency, PprEdge, PprGraph, UsageEdgeParams,
+    };
+
+    // Граф из 12 узлов с 2..3-hop путями:
+    // 0 (seed) -> 1 (структурный хаб, шум) -> 6,7,8,9,10,11 (шум)
+    // 0 (seed) -> 2 (SUPERSEDED узел) -> 3 (неактуальная цель)
+    // 0 (seed) -> 4 (промежуточный код) -> 5 (целевой 2-hop код, высокий trust/access)
+    let n = 12usize;
+    let raw_edges = vec![
+        (0usize, 1usize, 1.0f64),
+        (0, 2, 1.0),
+        (0, 4, 1.0),
+        (4, 5, 1.0),
+        (2, 3, 1.0),
+        (1, 6, 1.0),
+        (1, 7, 1.0),
+        (1, 8, 1.0),
+        (1, 9, 1.0),
+        (1, 10, 1.0),
+        (1, 11, 1.0),
+        // Дополнительные входящие рёбра в хаб 1 (делают in_degree=7)
+        (6, 1, 1.0),
+        (7, 1, 1.0),
+        (8, 1, 1.0),
+        (9, 1, 1.0),
+        (10, 1, 1.0),
+        (11, 1, 1.0),
+    ];
+
+    let base_edges: Vec<PprEdge> = raw_edges
+        .iter()
+        .map(|&(from, to, weight)| PprEdge { from, to, weight })
+        .collect();
+    let base_graph = PprGraph::new(n, &base_edges);
+    let base_ranked = personalized_pagerank(&base_graph, &[(0, 1.0)], 0.85, 20, 1e-6);
+
+    // Метаданные узлов для U-PPR
+    let access = [2u64, 1, 1, 1, 6, 12, 1, 1, 1, 1, 1, 1];
+    let trust = [1.0f64, 0.3, 0.5, 0.4, 1.0, 1.0, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5];
+    let is_code = [true, false, false, false, true, true, false, false, false, false, false, false];
+    let age_days = [0.0f64, 60.0, 90.0, 90.0, 5.0, 2.0, 30.0, 30.0, 30.0, 30.0, 30.0, 30.0];
+    let superseded = [false, false, true, false, false, false, false, false, false, false, false, false];
+
+    let mut in_deg = vec![0usize; n];
+    for &(_, to, _) in &raw_edges {
+        in_deg[to] += 1;
+    }
+
+    let uppr_edges: Vec<PprEdge> = raw_edges
+        .iter()
+        .map(|&(from, to, w0)| PprEdge {
+            from,
+            to,
+            weight: compute_usage_edge_weight(UsageEdgeParams {
+                w0,
+                access_count: access[to],
+                age_days: age_days[to],
+                is_code: is_code[to],
+                trust_score: trust[to],
+                target_in_degree: in_deg[to],
+            }),
+        })
+        .collect();
+
+    let adj = GraphAdjacency::from_edges(n, &uppr_edges, Some(&superseded));
+    let seed_w = compute_seed_idf_weight(n, in_deg[0], trust[0]);
+    let uppr_ranked = personalized_pagerank_csr(&adj, &[(0, seed_w)], 0.85, 20, 1e-6);
+
+    // Ожидаемая 2-hop цель: узел 5 (исключая сам seed 0)
+    let mrr_of = |ranked: &[(usize, f64)], target: usize| -> f64 {
+        ranked
+            .iter()
+            .filter(|&&(u, _)| u != 0)
+            .position(|&(u, _)| u == target)
+            .map(|pos| 1.0 / ((pos + 1) as f64))
+            .unwrap_or(0.0)
+    };
+
+    let base_mrr = mrr_of(&base_ranked, 5);
+    let uppr_mrr = mrr_of(&uppr_ranked, 5);
+    let superseded_leaked = uppr_ranked.iter().filter(|&&(u, _)| superseded[u]).count();
+    let gate_pass = uppr_mrr >= base_mrr && uppr_mrr > 0.0 && superseded_leaked == 0;
+
+    json!({
+        "base_mrr": (base_mrr * 1000.0).round() / 1000.0,
+        "uppr_mrr": (uppr_mrr * 1000.0).round() / 1000.0,
+        "mrr_gain": ((uppr_mrr - base_mrr) * 1000.0).round() / 1000.0,
+        "superseded_leaked": superseded_leaked,
+        "gate_pass": gate_pass,
+    })
+}
+
 pub async fn cli_embeddings(ctx: &crate::AppContext, as_json: bool) -> anyhow::Result<()> {
     let report = run_embeddings_bench(ctx.embedder.as_ref()).await?;
     if as_json {
@@ -1519,6 +1626,16 @@ mod tests {
         assert!(rep["chunker_recall_gain"].as_f64().unwrap_or(0.0) > 0.0);
         assert!(rep["bq_recall_at_10"].as_f64().unwrap_or(0.0) >= 0.90);
         assert!(rep["bq_gate_pass"].as_bool().unwrap_or(false));
+    }
+
+    #[test]
+    fn uppr_calibration_beats_base_ppr_on_multihop_golden() {
+        let rep = eval_uppr_calibration();
+        assert!(rep["gate_pass"].as_bool().unwrap_or(false));
+        assert_eq!(rep["superseded_leaked"].as_u64(), Some(0));
+        assert!(
+            rep["uppr_mrr"].as_f64().unwrap_or(0.0) >= rep["base_mrr"].as_f64().unwrap_or(0.0)
+        );
     }
 }
 
