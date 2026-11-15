@@ -39,6 +39,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             ext: .tar.gz
             features: ""
+          - build: Linux-x86_64-musl
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            ext: .tar.gz
+            features: ""
           - build: macOS-aarch64
             os: macos-latest
             target: aarch64-apple-darwin
@@ -119,15 +124,52 @@ jobs:
           Get-Item $Out | Format-List Name,Length
           "ARTIFACT=$Out" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: SHA256 checksum
+      - name: Optional Windows Authenticode signing (gated by secrets)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SIGN_CERT_B64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
+          SIGN_CERT_PASS: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGN_CERT_B64)) {
+            Write-Warning "WINDOWS_SIGN_CERT_BASE64 not set — skipping Authenticode signing (ADR-29)."
+          } else {
+            Write-Host "Authenticode signing secret detected; signing binary..."
+            $pfx = Join-Path $env:RUNNER_TEMP "ob2h-sign.pfx"
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_CERT_B64))
+            $exe = "target/${{ matrix.target }}/release/${{ env.BIN_NAME }}.exe"
+            signtool sign /f $pfx /p $env:SIGN_CERT_PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $exe
+            Remove-Item $pfx -Force
+          }
+
+      - name: Optional macOS Notarization (gated by secrets)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          if [[ -z "${APPLE_ID:-}" || -z "${APPLE_TEAM_ID:-}" || -z "${APPLE_APP_PASSWORD:-}" ]]; then
+            echo "::warning::Apple notarization secrets not set — skipping notarization (see Gatekeeper docs)."
+          else
+            echo "Apple notarization secrets detected; notarizing archive..."
+            xcrun notarytool submit "${{ env.ARTIFACT }}" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          fi
+
+      - name: SHA256 checksum + SBOM
         shell: bash
         run: |
           set -euo pipefail
           OUT="${{ env.ARTIFACT }}"
           DIR="$(dirname "$OUT")"
           NAME="$(basename "$OUT")"
-          (cd "$DIR" && sha256sum "$NAME" > "$NAME.sha256")
+          (cd "$DIR" && sha256sum "$NAME" > "$NAME.sha256" && cp "$NAME.sha256" "SHA256SUMS-${{ matrix.build }}.txt")
+          SBOM="${DIR}/${BIN_NAME}-${{ env.VERSION }}-${{ matrix.build }}.sbom.json"
+          cargo metadata --format-version 1 --no-deps > "$SBOM"
           echo "CHECKSUM=${OUT}.sha256" >> $GITHUB_ENV
+          echo "CHECKSUM_TXT=${DIR}/SHA256SUMS-${{ matrix.build }}.txt" >> $GITHUB_ENV
+          echo "SBOM=${SBOM}" >> $GITHUB_ENV
           cat "${OUT}.sha256"
 
       - name: Upload workflow artifact
@@ -137,6 +179,8 @@ jobs:
           path: |
             ${{ env.ARTIFACT }}
             ${{ env.CHECKSUM }}
+            ${{ env.CHECKSUM_TXT }}
+            ${{ env.SBOM }}
 
   release:
     name: Publish GitHub Release

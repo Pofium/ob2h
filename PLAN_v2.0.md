@@ -292,16 +292,16 @@
 - [x] **76.9** Управление данными и аварийная очистка: выбор `--keep-data`/`--purge-data` в `self uninstall` (CLI-флаги, не GUI-визард); глубокая очистка — **расширение `ob2h doctor --fix`** (зависшие блокировки, мёртвые задачи, битые записи конфигов, сиротские процессы) вместо отдельного бинарника `ob2h cleaner`.
 
 #### Фаза 77 — Финализация, CI/CD релизная матрица, документация и запуск (оценка: 2–3 дня)
-- [ ] **77.1** Настройка кроссплатформенного релизного конвейера в GitHub Actions: сборка, генерация checksums (SHA256) и SBOM. Подпись кода (Authenticode для Windows, Apple Notarization для macOS) — шаги `[optional / gated by secrets]`: выполняются только при наличии секретов подписи в CI, иначе пропускаются с предупреждением (консистентно с 76.2/76.3 и риск-матрицей: платная подпись вне v2.0 по умолчанию).
-- [ ] **77.2** Утилита `ob2h migrate --dry-run`: предпросмотр миграции схемы M12 с автоматическим бэкапом базы перед обновлением.
-- [ ] **77.3** Оформление архитектурных решений ADR-24..29 (нумерация 16..21 из первоначального плана занята в `PLAN.md` §6: ADR-15 автообновление, ADR-16 DSH, ADR-17 cordis-плагин, ADR-18..23 PIN/секреты/viewer):
+- [x] **77.1** Настройка кроссплатформенного релизного конвейера в GitHub Actions: сборка, генерация checksums (SHA256) и SBOM. Подпись кода (Authenticode для Windows, Apple Notarization для macOS) — шаги `[optional / gated by secrets]`: выполняются только при наличии секретов подписи в CI, иначе пропускаются с предупреждением (консистентно с 76.2/76.3 и риск-матрицей: платная подпись вне v2.0 по умолчанию).
+- [x] **77.2** Утилита `ob2h migrate --dry-run`: предпросмотр миграции схемы M12 с автоматическим бэкапом базы перед обновлением.
+- [x] **77.3** Оформление архитектурных решений ADR-24..29 (нумерация 16..21 из первоначального плана занята в `PLAN.md` §6: ADR-15 автообновление, ADR-16 DSH, ADR-17 cordis-плагин, ADR-18..23 PIN/секреты/viewer):
   - ADR-24: Hybrid Tree-sitter & Semantic Provenance;
   - ADR-25: Vector Spaces Isolation & Model Fingerprinting;
   - ADR-26: Stable Usage-Weighted PageRank (Anti-Starvation PPR);
   - ADR-27: Conflict Resolution Taxonomy & Tombstone Semantics;
   - ADR-28: Dual-Track Offline/Online Dream Synthesis;
   - ADR-29: Zero-Touch Cross-Platform Lifecycle (cargo-dist, user-space демоны, `self uninstall`).
-- [ ] **77.4** Актуализация всей пользовательской документации: `README.md`, `ARCHITECTURE.md`, `docs/SYNC.md`, `docs/INSTALL.md`, `skills/ob2h/SKILL.md`.
+- [x] **77.4** Актуализация всей пользовательской документации: `README.md`, `ARCHITECTURE.md`, `docs/SYNC.md`, `docs/INSTALL.md`, `skills/ob2h/SKILL.md`.
 - [ ] **77.5** Публикация мажорного релиза v2.0.0.
 
 ---

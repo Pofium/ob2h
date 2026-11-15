@@ -293,3 +293,9 @@ Counts/checksums lessons/slots включены в `sync local-stats` и `sync v
 `ralph_*`/`ast_changes` — ADR-K6/ADR-21 преемственность) и `secrets`
 (шифрованный сейф никогда не покидает машину, ADR-21/ADR-22). Значения секретов
 не попадают и в аудит: леджер хранит только имена.
+
+## Синхронизация v2.0.0: `SUPERSEDES`/`CONTRADICTS` и CRDT `max`
+
+С v2.0.0 (Фаза 75.3, ADR-27) sync-бандлы поддерживают:
+- Передачу графовых рёбер `SUPERSEDES` и `CONTRADICTS` (и прочих `graph_edges`) с сохранением `valid_until`, `status`, `trust_score`.
+- Монотонную CRDT-семантику (`max`) для счётчика обращений `graph_nodes.access_count`, чтобы популярность узлов не терялась при независимых сессиях на ПК и VPS.

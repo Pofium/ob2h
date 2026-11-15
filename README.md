@@ -10,7 +10,7 @@
 
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-FF6B00.svg?logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-111827.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.9.11-FF6B00.svg)](https://github.com/Pofium/ob2h/releases)
+[![Release](https://img.shields.io/badge/Release-v2.0.0-FF6B00.svg)](https://github.com/Pofium/ob2h/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Linux%20%7C%20macOS-111827.svg)](https://github.com/Pofium/ob2h)
 [![CloudTips](https://img.shields.io/badge/%F0%9F%92%B0%20%D0%A7%D0%B0%D0%B5%D0%B2%D1%8B%20%D0%B0%D0%B2%D1%82%D0%BE%D1%80%D1%83-CloudTips%20(РФ)-ff69b4.svg)](https://pay.cloudtips.ru/p/4e7f8019)
 
@@ -55,6 +55,9 @@
 20. 🔑 **Секреты во viewer**: вкладка «Секреты» в окне просмотра — инициализация сейфа («Начать сохранять», PIN дважды), разблокировка по локальному PIN, добавление/просмотр (маска, авто-скрытие 15 с)/копирование/удаление с подтверждением. PIN никогда не проходит через чат/MCP/LLM; ключ затирается при блокировке и закрытии окна.
 21. 🕸️ **Глубокий call graph (v1.9.11)**: межфайловое разрешение символов по таблице импортов (`helpers::run()`, `mod.fn()`, `pkg.Func()` — включая алиасы и namespace-импорты TS), статика `Type::method()`, эвристика виртуальных вызовов по единственному кандидату; для Vue/Svelte парсится `<script>` (tree-sitter TS) без потери regex-мостов шаблонов. Качество движка зажато F1-гейтами на эталонах 5 языков (symbol ≥ 0.95, call ≥ 0.90) в `ob2h bench`.
 22. ⏱ **Co-change связи (v1.9.11)**: из истории git (200 коммитов) извлекаются пары файлов, менявшихся вместе ≥3 раз в компактных коммитах — ребро `CO_CHANGES_WITH` ловит межъязыковое зацепление, которое не видит AST (Rust-хендлер ↔ SQL-миграция ↔ Dart-клиент ↔ `.env.example`), и подмешивается в blast radius.
+23. 🧭 **Vector Spaces & U-PPR (v2.0.0)**: изоляция векторных пространств (`EmbeddingFingerprint`, `ob2h reindex --embeddings`), бинарное квантование (BQ) + INT8, usage-weighted PPR с `subtokens` FTS5-декомпозицией и токен-бюджетный AST-скелет `max_tokens` (с Elbow cutoff) в `graph_reason` / `memory_context`.
+24. 🧹 **Автономное разрешение конфликтов Dream (v2.0.0)**: классификация противоречий (*Temporal Supersession*, *User Correction*, *Contextual Coexistence*), offline/online детектор, рёбра `SUPERSEDES`/`CONTRADICTS`, `git_head_sha` привязка фактов/findings, HITL-инструмент `knowledge_reconcile`, `DreamBudget` и автооткат по метрикам bench.
+25. 📦 **Кроссплатформенный Lifecycle (v2.0.0)**: `ob2h doctor --fix` с preflight-диагностикой, `ob2h service install/uninstall`, JSONC-safe патч IDE-конфигов, `ob2h completions`, `ob2h models hydrate`, `ob2h migrate --dry-run` и `ob2h self uninstall [--keep-data | --purge-data] [--silent]`.
 
 **Кому подходит:** у кого Hermes живёт на двух машинах (ПК + VPS/сервер, работа + дом)
 и кому нужна **приватная** память — все данные остаются на ваших машинах, наружу уходит

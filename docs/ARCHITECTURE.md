@@ -438,3 +438,11 @@ tree-sitter (Rust/Python/TS-TSX/Go/Dart) при поддержке языка, k
 эвристики и co-change проходят; 0.7+ — только точные); в ответе — блок «🧪 Затронутые
 тесты (TESTED_BY)»; пометки `[⏱ co-change]`/`[~ виртуальный вызов]` в дереве.
 AST_EXTRACTOR_VERSION 46: первый скан после апгрейда — полный рескан проекта.
+
+## Аддендум v2.0.0 (2026-11-15) — Фазы 72–77: Vector Spaces, U-PPR, Dream Reconcile и Lifecycle
+
+- **Vector Spaces & Fingerprinting (Ф72, Ф72b, ADR-25):** таблица `vector_spaces`, `EmbeddingFingerprint` (модель + размерность + чанкер), ленивый `ob2h reindex --embeddings`, кэш `file_blobs` (BLAKE3), бинарное квантование (`src/vector/bq.rs`).
+- **U-PPR & AST-скелет (Ф73, ADR-26):** взвешенный U-PPR с анти-голоданием, `subtokens` в FTS5, `max_tokens` + `apply_elbow_cutoff` в `graph_reason` и `memory_context`.
+- **Dream Reconcile (Ф74, ADR-27, ADR-28):** `src/dream/conflicts.rs`, предфильтрация (`category` + Entity Overlap + `cosine > 0.82`), offline/online детектор, рёбра `SUPERSEDES`/`CONTRADICTS`, `knowledge_reconcile`, `DreamBudget`, откат при деградации bench.
+- **Наблюдаемость и Ralph (Ф75):** `git_head_sha` свежесть findings, `tracing` spans (`embed`, `parse`, `vec`, `fts`, `ppr`, `dream`, `wal_checkpoint`) и вывод метрик в `omnes_stats`.
+- **Lifecycle и упаковка (Ф76–77, ADR-29):** `src/cli/lifecycle.rs`, `dist-workspace.toml`, `ob2h migrate --dry-run`, `ob2h self uninstall`, `ob2h doctor --fix`.

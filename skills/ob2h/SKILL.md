@@ -252,3 +252,8 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   (`OB2H_UI_LANG`), тёмная/светлая тема. Сборка: `cargo build --release --features gui`;
   headless-сборка отвечает честным `[Error] … [Подсказка]`. `ob2h doctor` показывает
   «Viewer: доступен / сборка без gui».
+
+## Новые возможности v2.0.0
+- **Сверка конфликтов знаний:** инструмент `knowledge_reconcile` (dry-run предпросмотр или apply для устранения противоречий с рёбрами `SUPERSEDES`/`CONTRADICTS`).
+- **Токен-бюджетный AST-скелет:** параметр `max_tokens` в `graph_reason` и `memory_context` для компактной выдачи «файл → сигнатура → зависимости» с Elbow cutoff.
+- **Обслуживание CLI:** `ob2h migrate --dry-run` (предпросмотр миграций с авто-бэкапом), `ob2h doctor --fix` (preflight + очистка lock/битых конфигов), `ob2h self uninstall [--keep-data | --purge-data]`.

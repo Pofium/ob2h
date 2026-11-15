@@ -55,8 +55,8 @@
 - [x] T-76.9 Управление данными и аварийная очистка: `--keep-data`/`--purge-data` и расширение `ob2h doctor --fix`.
 
 ## Фаза 77 — Финализация, CI/CD релизная матрица, документация и запуск
-- [ ] T-77.1 Настройка кроссплатформенного релизного конвейера в GitHub Actions (сборка, SHA256, SBOM, optional gated signing).
-- [ ] T-77.2 Утилита `ob2h migrate --dry-run`: предпросмотр миграции M12 с авто-бэкапом.
-- [ ] T-77.3 Оформление архитектурных решений ADR-24..29 в `PLAN.md`.
-- [ ] T-77.4 Актуализация всей пользовательской документации: `README.md`, `ARCHITECTURE.md`, `docs/SYNC.md`, `docs/INSTALL.md`, `skills/ob2h/SKILL.md`.
+- [x] T-77.1 Настройка кроссплатформенного релизного конвейера в GitHub Actions (сборка, SHA256, SBOM, optional gated signing).
+- [x] T-77.2 Утилита `ob2h migrate --dry-run`: предпросмотр миграции M12 с авто-бэкапом.
+- [x] T-77.3 Оформление архитектурных решений ADR-24..29 в `PLAN.md`.
+- [x] T-77.4 Актуализация всей пользовательской документации: `README.md`, `ARCHITECTURE.md`, `docs/SYNC.md`, `docs/INSTALL.md`, `skills/ob2h/SKILL.md`.
 - [ ] T-77.5 Публикация мажорного релиза v2.0.0.

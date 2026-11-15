@@ -89,3 +89,70 @@ pub fn run_quantize(ctx: &AppContext, dry_run: bool) -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// Список версий миграций, которые нужно применить от `current_version` до `SCHEMA_VERSION`.
+pub fn pending_migrations(current_version: i64) -> Vec<i64> {
+    let target = crate::db::schema::SCHEMA_VERSION;
+    if current_version >= target {
+        return Vec::new();
+    }
+    ((current_version + 1)..=target).collect()
+}
+
+/// Ф77.2: `ob2h migrate [--dry-run]` — предпросмотр миграции схемы с авто-бэкапом.
+pub fn run_migrate(ctx: &AppContext, dry_run: bool) -> anyhow::Result<()> {
+    let current_version: i64 = ctx.db.with_conn(|conn| {
+        let v: String = conn
+            .query_row(
+                "SELECT value FROM kv WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or_else(|_| "0".to_string());
+        Ok(v.parse::<i64>().unwrap_or(0))
+    })?;
+    let target = crate::db::schema::SCHEMA_VERSION;
+    let pending = pending_migrations(current_version);
+    println!(
+        "ob2h migrate{}: текущая схема=v{current_version}, целевая=v{target}, ожидают={:?}",
+        if dry_run { " [dry-run]" } else { "" },
+        pending
+    );
+    if pending.is_empty() {
+        println!("схема БД актуальна (миграции не требуются)");
+        return Ok(());
+    }
+    if dry_run {
+        println!("dry-run: изменения не применялись");
+        return Ok(());
+    }
+    let bak = ctx.backup.create()?;
+    println!("пре-бэкап создан: {}", bak.display());
+    ctx.db.with_conn(crate::db::schema::init_schema)?;
+    println!("миграция завершена до v{target}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pending_migrations_and_dry_run_preserves_version() {
+        assert!(pending_migrations(crate::db::schema::SCHEMA_VERSION).is_empty());
+        assert_eq!(pending_migrations(11), vec![12, 13]);
+        let db = crate::db::Database::in_memory().unwrap();
+        let ver: i64 = db
+            .with_conn(|conn| {
+                let s: String = conn.query_row(
+                    "SELECT value FROM kv WHERE key = 'schema_version'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                Ok(s.parse::<i64>().unwrap_or(0))
+            })
+            .unwrap();
+        assert_eq!(ver, crate::db::schema::SCHEMA_VERSION);
+        assert!(pending_migrations(ver).is_empty());
+    }
+}

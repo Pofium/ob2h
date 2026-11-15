@@ -176,6 +176,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: ModelsCommands,
     },
+    /// Миграция схемы SQLite с предпросмотром и авто-бэкапом (Ф77.2)
+    Migrate {
+        /// Только показать ожидающие миграции без изменения БД
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

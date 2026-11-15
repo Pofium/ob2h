@@ -178,6 +178,9 @@ async fn main() -> anyhow::Result<()> {
                 println!("{msg}");
             }
         },
+        Some(Commands::Migrate { dry_run }) => {
+            ob2h::cli::db::run_migrate(&ctx, dry_run)?;
+        }
         Some(Commands::Doctor { fix }) => {
             let doctor = ob2h::cli::Doctor::new(ctx.settings.clone(), fix).with_db(ctx.db.clone());
             doctor.run()?;
