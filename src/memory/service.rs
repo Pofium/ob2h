@@ -45,6 +45,11 @@ impl MemoryService {
         format!("m_{}", &hash[..12])
     }
 
+    /// Готов ли эмбеддер к немедленному инференсу (false во время холодного старта, Ф72.5).
+    pub fn is_embedder_ready(&self) -> bool {
+        self.embedder.is_ready()
+    }
+
     /// Сохранить воспоминание (upsert по ключу).
     pub async fn save(
         &self,
@@ -82,6 +87,7 @@ impl MemoryService {
         // Получаем векторное представление
         let embeddings = self.embedder.embed_documents(&[content.to_string()]).await?;
         let emb_blob = embeddings.first().map(|v| serialize_q(v));
+
         let cur_fp = crate::embedding::fingerprint::EmbeddingFingerprint::from_provider(
             self.embedder.as_ref(),
         );
@@ -552,6 +558,13 @@ impl MemoryService {
         limit: usize,
         min_score: f32,
     ) -> anyhow::Result<Vec<(i64, f64)>> {
+        if !self.embedder.is_ready() {
+            // Stale-While-Revalidate (Ф72.5): не блокируем MCP-запрос при холодном старте,
+            // запускаем прогрев в фоне и отвечаем по FTS5 + графу.
+            self.embedder.trigger_warmup();
+            return Ok(Vec::new());
+        }
+
         let cur_fp = crate::embedding::fingerprint::EmbeddingFingerprint::from_provider(
             self.embedder.as_ref(),
         );

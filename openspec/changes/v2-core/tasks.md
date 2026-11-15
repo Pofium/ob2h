@@ -7,7 +7,7 @@
 - [x] T-72.2b Асимметричные префиксы моделей в трейте `EmbeddingProvider`: поля `query_prefix`/`document_prefix` с авто-подстановкой и проверкой дельты RU-триплетов в bench.
 - [x] T-72.3 Механизм `EmbeddingFingerprint`: фиксация `model_id:backend:quant:dim:prefix_vN` в метаданных БД и блокировка смешанного поиска (триггер `reindex --embeddings`).
 - [x] T-72.4 CLI-команда `ob2h reindex --embeddings`: фоновая пакетная переиндексация векторов при смене бэкенда/модели с прогресс-баром.
-- [ ] T-72.5 Изоляция пула воркеров (`EmbeddingWorkerPool`): выделенный семафор и потоки, Stale-While-Revalidate (`degraded_mode: "warming_up_embeddings"`).
+- [x] T-72.5 Изоляция пула воркеров (`EmbeddingWorkerPool`): выделенный семафор и потоки, Stale-While-Revalidate (`degraded_mode: "warming_up_embeddings"`).
 - [ ] T-72.6 Безопасность: санитайзер текста перед векторизацией (удаление секретов, ключей API и токенов).
 - [ ] T-72.7 CLI-команда `ob2h bench embeddings`: замер скорости инференса и проверка качества триплетов с отдельным порогом на RU и RU/EN-смешанных триплетах.
 

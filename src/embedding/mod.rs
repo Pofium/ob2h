@@ -50,6 +50,14 @@ pub trait EmbeddingProvider: Send + Sync {
         "default"
     }
 
+    /// Готов ли провайдер к немедленному инференсу (false во время холодного старта ONNX/Candle, Ф72.5).
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    /// Запустить фоновый прогрев весов без блокировки вызывающего потока (Ф72.5).
+    fn trigger_warmup(&self) {}
+
     /// Префикс поискового запроса (Ф72.2b, напр. `"query: "` для E5).
     fn query_prefix(&self) -> &'static str {
         ""
@@ -119,17 +127,19 @@ fn init_local_sync(settings: &Settings) -> Arc<dyn EmbeddingProvider> {
     }
 }
 
-/// Ленивая обертка для неблокирующего старта сервиса (Фаза 61.3).
-/// Веса Candle загружаются в spawn_blocking только при первом реальном вызове embed().
+/// Ленивая обертка для неблокирующего старта сервиса (Фаза 61.3, 72.5).
+/// Веса Candle загружаются в spawn_blocking только при первом реальном вызове embed() или warmup.
 pub struct LazyEmbeddingProvider {
-    inner: tokio::sync::OnceCell<Arc<dyn EmbeddingProvider>>,
+    inner: Arc<tokio::sync::OnceCell<Arc<dyn EmbeddingProvider>>>,
+    warming: std::sync::atomic::AtomicBool,
     settings: Settings,
 }
 
 impl LazyEmbeddingProvider {
     pub fn new(settings: Settings) -> Self {
         Self {
-            inner: tokio::sync::OnceCell::new(),
+            inner: Arc::new(tokio::sync::OnceCell::new()),
+            warming: std::sync::atomic::AtomicBool::new(false),
             settings,
         }
     }
@@ -167,6 +177,33 @@ impl EmbeddingProvider for LazyEmbeddingProvider {
 
     fn document_prefix(&self) -> &'static str {
         onnx_spec::prefixes_for_model(&self.settings.embed_model).1
+    }
+
+    fn is_ready(&self) -> bool {
+        self.inner.get().is_some()
+    }
+
+    fn trigger_warmup(&self) {
+        if self.is_ready()
+            || self
+                .warming
+                .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let cell = Arc::clone(&self.inner);
+        let s = self.settings.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = cell
+                    .get_or_try_init(|| async {
+                        tokio::task::spawn_blocking(move || init_local_sync(&s))
+                            .await
+                            .map_err(|e| anyhow::anyhow!("warmup error: {e}"))
+                    })
+                    .await;
+            });
+        }
     }
 }
 
@@ -353,6 +390,71 @@ impl EmbeddingProvider for CachedEmbeddingProvider {
     fn model_id(&self) -> &str {
         self.inner.model_id()
     }
+
+    fn is_ready(&self) -> bool {
+        self.inner.is_ready()
+    }
+
+    fn trigger_warmup(&self) {
+        self.inner.trigger_warmup();
+    }
+}
+
+/// Выделенный пул воркеров с семафором для изоляции тяжелого инференса от Tokio MCP (Ф72.5).
+pub struct EmbeddingWorkerPool {
+    inner: Arc<dyn EmbeddingProvider>,
+    semaphore: tokio::sync::Semaphore,
+}
+
+impl EmbeddingWorkerPool {
+    pub const DEFAULT_CONCURRENCY: usize = 2;
+
+    pub fn new(inner: Arc<dyn EmbeddingProvider>, concurrency: usize) -> Self {
+        Self {
+            inner,
+            semaphore: tokio::sync::Semaphore::new(concurrency.clamp(1, 16)),
+        }
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for EmbeddingWorkerPool {
+    async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        let _permit = self
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!("EmbeddingWorkerPool semaphore closed: {e}"))?;
+        self.inner.embed(texts).await
+    }
+
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    fn backend_id(&self) -> &'static str {
+        self.inner.backend_id()
+    }
+
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    fn query_prefix(&self) -> &'static str {
+        self.inner.query_prefix()
+    }
+
+    fn document_prefix(&self) -> &'static str {
+        self.inner.document_prefix()
+    }
+
+    fn is_ready(&self) -> bool {
+        self.inner.is_ready()
+    }
+
+    fn trigger_warmup(&self) {
+        self.inner.trigger_warmup();
+    }
 }
 
 pub fn provider_for(settings: &Settings) -> Arc<dyn EmbeddingProvider> {
@@ -395,6 +497,59 @@ pub fn provider_for(settings: &Settings) -> Arc<dyn EmbeddingProvider> {
             Arc::new(LazyEmbeddingProvider::new(settings.clone()))
         }
     };
-    // Ф62.2: кэш эмбеддингов запросов поверх любого бэкенда.
-    Arc::new(CachedEmbeddingProvider::new(inner))
+    let concurrency = std::env::var("OB2H_EMBED_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(EmbeddingWorkerPool::DEFAULT_CONCURRENCY);
+    let pooled: Arc<dyn EmbeddingProvider> =
+        Arc::new(EmbeddingWorkerPool::new(inner, concurrency));
+    // Ф62.2: кэш эмбеддингов запросов поверх пула воркеров.
+    Arc::new(CachedEmbeddingProvider::new(pooled))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+    struct ColdStartStub {
+        ready: AtomicBool,
+        warmup_calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl EmbeddingProvider for ColdStartStub {
+        async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|_| vec![1.0, 0.0, 0.0, 0.0]).collect())
+        }
+
+        fn dim(&self) -> usize {
+            4
+        }
+
+        fn is_ready(&self) -> bool {
+            self.ready.load(Ordering::Acquire)
+        }
+
+        fn trigger_warmup(&self) {
+            self.warmup_calls.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_pool_preserves_readiness_and_bounds_concurrency() {
+        let stub = Arc::new(ColdStartStub {
+            ready: AtomicBool::new(false),
+            warmup_calls: AtomicUsize::new(0),
+        });
+        let pool = EmbeddingWorkerPool::new(stub.clone(), 2);
+        assert!(!pool.is_ready());
+        pool.trigger_warmup();
+        assert_eq!(stub.warmup_calls.load(Ordering::Acquire), 1);
+
+        stub.ready.store(true, Ordering::Release);
+        assert!(pool.is_ready());
+        let res = pool.embed(&["hello".to_string()]).await.unwrap();
+        assert_eq!(res.len(), 1);
+    }
 }

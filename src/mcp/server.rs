@@ -698,7 +698,11 @@ impl McpServer {
                         .unwrap_or_default(),
                 };
 
+                let warming_up = !self.ctx.memory.is_embedder_ready();
                 if hits.is_empty() {
+                    if warming_up {
+                        return "ничего не найдено\n[degraded_mode: \"warming_up_embeddings\"]".to_string();
+                    }
                     return "ничего не найдено".to_string();
                 }
 
@@ -804,6 +808,8 @@ impl McpServer {
                     out.push_str(
                         "\n[warn] эмбеддинги деградированы (fallback: fake) — семантический режим недостоверен",
                     );
+                } else if warming_up {
+                    out.push_str("\n[degraded_mode: \"warming_up_embeddings\"]");
                 }
                 out
             }
