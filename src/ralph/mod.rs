@@ -451,8 +451,13 @@ impl RalphService {
 
     /// Ф75.1: привязать `git_head_sha` к meta finding'а, если корень проекта — git-репозиторий.
     fn attach_git_head_sha(&self, project_id: &str, meta: Option<&str>) -> Option<String> {
-        let root = self.project_root(project_id).ok().flatten()?;
-        let sha = crate::dream::conflicts::current_git_head_sha(std::path::Path::new(&root))?;
+        let fallback = meta.map(|s| s.to_string());
+        let Some(root) = self.project_root(project_id).ok().flatten() else {
+            return fallback;
+        };
+        let Some(sha) = crate::dream::conflicts::current_git_head_sha(std::path::Path::new(&root)) else {
+            return fallback;
+        };
         let mut obj = meta
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
             .filter(|v| v.is_object())

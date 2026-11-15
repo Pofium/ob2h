@@ -128,7 +128,7 @@ pub fn run_migrate(ctx: &AppContext, dry_run: bool) -> anyhow::Result<()> {
     }
     let bak = ctx.backup.create()?;
     println!("пре-бэкап создан: {}", bak.display());
-    ctx.db.with_conn(crate::db::schema::init_schema)?;
+    ctx.db.with_conn(|conn| crate::db::schema::migrate(conn))?;
     println!("миграция завершена до v{target}");
     Ok(())
 }
