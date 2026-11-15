@@ -17,6 +17,9 @@
 - **73.6 (`memory_feedback`)**: добавлен опциональный параметр `node_id` для Mute Node (`trust_score *= 0.3` на `graph_nodes`); при передаче `node_id` поле `key` необязательно.
 - **73.8 (`graph_reason`, `memory_context`)**: добавлен параметр `max_tokens` в `graph_reason` (и поддержка `max_tokens >= 256` с `project_id` в `memory_context`) для выдачи токен-бюджетного AST-скелета U-PPR с отсечением мусорного хвоста (Elbow/Drop-off Cutoff).
 
+### Fixed
+- **CI (77.1)**: musl-таргет релизной матрицы (`x86_64-unknown-linux-musl`) падал — `aws-lc-sys`/bundled sqlite не находили C-компилятор; в воркфлоу добавлены `musl-tools`/`musl-dev` и env `CC/AR` (`musl-gcc`).
+
 ## [1.9.11] - 2026-11-15
 
 ### Added

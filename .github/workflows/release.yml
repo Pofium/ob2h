@@ -69,7 +69,17 @@ jobs:
 
       - name: Install system deps (Linux build-essential)
         if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y build-essential
+        # v2.0.1-fix: musl-tools/musl-dev нужны musl-таргету: aws-lc-sys (rustls-провайдер
+        # reqwest) и bundled sqlite компилируют C-код и без musl-gcc падают (ToolNotFound).
+        run: sudo apt-get update && sudo apt-get install -y build-essential musl-tools musl-dev
+
+      - name: Musl CC env
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        # cc-крейт ищет <target>-gcc (x86_64-linux-musl-gcc), которого нет даже в
+        # musl-tools — задаём обёртку musl-gcc явно.
+        run: |
+          echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+          echo "AR_x86_64_unknown_linux_musl=ar" >> "$GITHUB_ENV"
 
       - name: Build release
         uses: clechasseur/rs-cargo@v2
