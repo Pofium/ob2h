@@ -223,9 +223,11 @@ impl GraphService {
             if let Some(v) = embs.first() {
                 let blob = serialize_q(v);
                 let _ = self.db.with_conn(|conn| {
+                    let means = crate::vector::bq::load_or_compute_means(conn, "graph_nodes", v.len());
+                    let bq = crate::vector::bq::quantize_mean_centered(v, means.as_deref());
                     conn.execute(
-                        "UPDATE graph_nodes SET embedding = ?1 WHERE id = ?2",
-                        params![blob, rowid],
+                        "UPDATE graph_nodes SET embedding = ?1, bq_mask = ?2 WHERE id = ?3",
+                        params![blob, bq, rowid],
                     )?;
                     if crate::vector::vec0::enabled() {
                         let _ = crate::vector::vec0::upsert_nodes_batch(
@@ -331,22 +333,16 @@ impl GraphService {
                 let ranked: Vec<(i64, f32)> = if !vec0_hits.is_empty() {
                     vec0_hits
                 } else {
-                    let candidates = self.db.with_conn(|conn| {
-                        let mut stmt = conn.prepare("SELECT id, embedding FROM graph_nodes WHERE embedding IS NOT NULL AND deleted_at IS NULL")?;
-                        let rows = stmt.query_map([], |row| {
-                            let id: i64 = row.get(0)?;
-                            let blob: Vec<u8> = row.get(1)?;
-                            Ok((id, blob))
-                        })?;
-                        let mut list = Vec::new();
-                        for r in rows.flatten() {
-                            list.push(r);
-                        }
-                        Ok(list)
-                    })?;
-
-                    let cand_refs: Vec<(i64, Option<&[u8]>)> = candidates.iter().map(|(id, b)| (*id, Some(b.as_slice()))).collect();
-                    top_k(q_vec, &cand_refs, limit, 0.0)
+                    self.db.with_conn(|conn| {
+                        crate::vector::bq::search_table_two_stage(
+                            conn,
+                            "graph_nodes",
+                            None,
+                            q_vec,
+                            limit,
+                            0.0,
+                        )
+                    })?
                 };
 
                 for (nid, vscore) in ranked {

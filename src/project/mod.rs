@@ -170,12 +170,14 @@ impl ProjectService {
             let vecs = embedder.embed_documents(&texts).await?;
             {
                 let mut conn = self.conn.lock().unwrap();
+                let means = crate::vector::bq::load_or_compute_means(&conn, "graph_nodes", embedder.dim());
                 let tx = conn.transaction()?;
                 for ((pk, _, _, _, _, _, _), vec) in chunk.iter().zip(vecs.iter()) {
                     let blob = crate::vector::similarity::serialize_q(vec);
+                    let bq = crate::vector::bq::quantize_mean_centered(vec, means.as_deref());
                     tx.execute(
-                        "UPDATE graph_nodes SET embedding = ?1 WHERE id = ?2",
-                        params![blob, pk],
+                        "UPDATE graph_nodes SET embedding = ?1, bq_mask = ?2 WHERE id = ?3",
+                        params![blob, bq, pk],
                     )?;
                 }
                 tx.commit()?;

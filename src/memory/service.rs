@@ -12,7 +12,7 @@ use crate::graph::pagerank::{
     normalize_entity, personalized_pagerank, weight_for, PprEdge, PprGraph, PprWeights, DEFAULT_TOL,
     MAX_ITER,
 };
-use crate::vector::{rrf_merge, serialize_q, similarity::{cosine, deserialize}, top_k};
+use crate::vector::{rrf_merge, serialize_q, similarity::{cosine, deserialize}};
 
 /// Ф31.1: порог identity-дубля при save («одно и то же» → тихий UPDATE).
 pub const COS_IDENTITY: f32 = 0.98;
@@ -87,6 +87,14 @@ impl MemoryService {
         // Получаем векторное представление
         let embeddings = self.embedder.embed_documents(&[content.to_string()]).await?;
         let emb_blob = embeddings.first().map(|v| serialize_q(v));
+        let bq_blob = embeddings.first().map(|v| {
+            let means = self
+                .db
+                .with_conn(|conn| Ok(crate::vector::bq::load_or_compute_means(conn, "memories", v.len())))
+                .ok()
+                .flatten();
+            crate::vector::bq::quantize_mean_centered(v, means.as_deref())
+        });
 
         let cur_fp = crate::embedding::fingerprint::EmbeddingFingerprint::from_provider(
             self.embedder.as_ref(),
@@ -128,8 +136,8 @@ impl MemoryService {
             conn.execute(
                 r#"
                 INSERT INTO memories (
-                    key, content, category, importance, source, meta, embedding, created_at, updated_at, project_id
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)
+                    key, content, category, importance, source, meta, embedding, bq_mask, created_at, updated_at, project_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10)
                 ON CONFLICT(key) DO UPDATE SET
                     content = excluded.content,
                     category = excluded.category,
@@ -137,12 +145,13 @@ impl MemoryService {
                     source = excluded.source,
                     meta = excluded.meta,
                     embedding = excluded.embedding,
+                    bq_mask = excluded.bq_mask,
                     updated_at = excluded.updated_at,
                     project_id = COALESCE(excluded.project_id, memories.project_id),
                     origin = '',           /* локальная правка — строка снова «наша» */
                     deleted_at = NULL      /* повторное сохранение снимает tombstone */
                 "#,
-                params![k, content, category, importance, source, meta, emb_blob, now, project_id],
+                params![k, content, category, importance, source, meta, emb_blob, bq_blob, now, project_id],
             )?;
             Ok(())
         })?;
@@ -441,11 +450,20 @@ impl MemoryService {
         let new_importance = importance.unwrap_or(existing.importance);
         let new_category = category.unwrap_or(&existing.category);
 
-        let emb_blob = if content.is_some() {
+        let (emb_blob, bq_blob) = if content.is_some() {
             let embs = self.embedder.embed_documents(&[new_content.to_string()]).await?;
-            embs.first().map(|v| serialize_q(v))
+            let eb = embs.first().map(|v| serialize_q(v));
+            let bq = embs.first().map(|v| {
+                let means = self
+                    .db
+                    .with_conn(|conn| Ok(crate::vector::bq::load_or_compute_means(conn, "memories", v.len())))
+                    .ok()
+                    .flatten();
+                crate::vector::bq::quantize_mean_centered(v, means.as_deref())
+            });
+            (eb, bq)
         } else {
-            existing.embedding
+            (existing.embedding, None)
         };
 
         let now = utcnow();
@@ -454,10 +472,10 @@ impl MemoryService {
                 r#"
                 UPDATE memories
                 SET content = ?1, importance = ?2, category = ?3, embedding = ?4,
-                    updated_at = ?5, origin = ''
-                WHERE key = ?6
+                    bq_mask = COALESCE(?5, bq_mask), updated_at = ?6, origin = ''
+                WHERE key = ?7
                 "#,
-                params![new_content, new_importance, new_category, emb_blob, now, key],
+                params![new_content, new_importance, new_category, emb_blob, bq_blob, now, key],
             )?;
             Ok(())
         })?;
@@ -578,28 +596,9 @@ impl MemoryService {
         }
 
         let q_vec = self.embedder.embed_query(query).await?;
-        let q_vec = &q_vec;
-
-        let candidates = self.db.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT id, embedding FROM memories WHERE embedding IS NOT NULL AND deleted_at IS NULL")?;
-            let rows = stmt.query_map([], |row| {
-                let id: i64 = row.get(0)?;
-                let blob: Vec<u8> = row.get(1)?;
-                Ok((id, blob))
-            })?;
-            let mut list = Vec::new();
-            for r in rows.flatten() {
-                list.push(r);
-            }
-            Ok(list)
+        let scored = self.db.with_conn(|conn| {
+            crate::vector::bq::search_table_two_stage(conn, "memories", None, &q_vec, limit, min_score)
         })?;
-
-        let candidate_refs: Vec<(i64, Option<&[u8]>)> = candidates
-            .iter()
-            .map(|(id, blob)| (*id, Some(blob.as_slice())))
-            .collect();
-
-        let scored = top_k(q_vec, &candidate_refs, limit, min_score);
         Ok(scored.into_iter().map(|(id, s)| (id, s as f64)).collect())
     }
 

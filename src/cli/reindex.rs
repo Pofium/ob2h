@@ -67,12 +67,14 @@ pub async fn reindex_embeddings(
         let texts: Vec<String> = chunk.iter().map(|(_, c)| c.clone()).collect();
         let vecs = embedder.embed_documents(&texts).await?;
         db.with_conn(|conn| {
+            let means = crate::vector::bq::load_or_compute_means(conn, "memories", embedder.dim());
             let tx = conn.unchecked_transaction()?;
             for ((id, _), v) in chunk.iter().zip(vecs.iter()) {
                 let blob = serialize_q(v);
+                let bq = crate::vector::bq::quantize_mean_centered(v, means.as_deref());
                 tx.execute(
-                    "UPDATE memories SET embedding = ?1 WHERE id = ?2",
-                    params![blob, id],
+                    "UPDATE memories SET embedding = ?1, bq_mask = ?2 WHERE id = ?3",
+                    params![blob, bq, id],
                 )?;
             }
             tx.commit()?;
@@ -153,12 +155,15 @@ pub async fn reindex_embeddings(
             .collect();
         let vecs = embedder.embed_documents(&texts).await?;
         db.with_conn(|conn| {
+            let means =
+                crate::vector::bq::load_or_compute_means(conn, "graph_nodes", embedder.dim());
             let tx = conn.unchecked_transaction()?;
             for ((id, ..), v) in chunk.iter().zip(vecs.iter()) {
                 let blob = serialize_q(v);
+                let bq = crate::vector::bq::quantize_mean_centered(v, means.as_deref());
                 tx.execute(
-                    "UPDATE graph_nodes SET embedding = ?1 WHERE id = ?2",
-                    params![blob, id],
+                    "UPDATE graph_nodes SET embedding = ?1, bq_mask = ?2 WHERE id = ?3",
+                    params![blob, bq, id],
                 )?;
             }
             tx.commit()?;

@@ -1,5 +1,6 @@
 //! Векторная математика и сериализация (BLOB float32, cosine, RRF).
 
+pub mod bq;
 pub mod rrf;
 pub mod similarity;
 pub mod vec0;
