@@ -828,10 +828,15 @@ pub async fn cli_run_all(
         }
     }
 
-    report.insert(
-        "embeddings".into(),
-        run_embeddings_bench(ctx.embedder.as_ref()).await?,
-    );
+    let emb_rep = run_embeddings_bench(ctx.embedder.as_ref()).await?;
+    if !emb_rep["bq_gate_pass"].as_bool().unwrap_or(false) {
+        gate_over = true;
+        notes.push(format!(
+            "vector_bq: recall@10={:.3} < 0.90 (ADR-13)",
+            emb_rep["bq_recall_at_10"].as_f64().unwrap_or(0.0)
+        ));
+    }
+    report.insert("embeddings".into(), emb_rep);
 
     report.insert(
         "gate".into(),
@@ -1083,6 +1088,9 @@ pub async fn run_embeddings_bench(
     let fixed_rate = fixed_hits as f64 / fixed.len().max(1) as f64;
     let chunker_gain = ast_hit - fixed_rate;
 
+    let (bq_recall_at_10, bq_p95_ms) = eval_bq_recall_at_10(embedder.dim().max(64))?;
+    let bq_gate_pass = bq_recall_at_10 >= 0.90;
+
     let is_fake = embedder.backend_id() == "fake";
     let ru_gate_pass = is_fake || (ru_acc >= 0.80 && ru_en_acc >= 0.80);
 
@@ -1097,10 +1105,79 @@ pub async fn run_embeddings_bench(
         "prefix_delta_ru": (prefix_delta * 1000.0).round() / 1000.0,
         "chunker_recall_gain": (chunker_gain * 1000.0).round() / 1000.0,
         "batch_32_ms": (batch_32_ms * 10.0).round() / 10.0,
+        "bq_recall_at_10": (bq_recall_at_10 * 1000.0).round() / 1000.0,
+        "bq_p95_ms": (bq_p95_ms * 100.0).round() / 100.0,
+        "bq_threshold": 0.90,
+        "bq_gate_pass": bq_gate_pass,
         "ru_threshold": 0.80,
-        "gate_pass": ru_gate_pass,
+        "gate_pass": ru_gate_pass && bq_gate_pass,
         "is_fake": is_fake,
     }))
+}
+
+/// Ф72b.4: проверка recall@10 двухступенчатого BQ-поиска против brute-force эталона (ADR-13).
+fn eval_bq_recall_at_10(dim: usize) -> anyhow::Result<(f64, f64)> {
+    use crate::vector::{bq, similarity::{serialize_q, top_k}};
+
+    let count = 1000usize;
+    let vecs: Vec<Vec<f32>> = (0..count)
+        .map(|i| {
+            (0..dim)
+                .map(|d| {
+                    let phase = ((i * 131 + d * 17) % 97) as f32 / 97.0 - 0.5;
+                    0.08 + 0.04 * phase + if (i % 10) == (d % 10) { 0.03 } else { 0.0 }
+                })
+                .collect()
+        })
+        .collect();
+    let refs: Vec<&[f32]> = vecs.iter().map(|v| v.as_slice()).collect();
+    let means = bq::compute_per_dim_means(&refs);
+
+    let db = crate::db::Database::in_memory()?;
+    let mut blobs: Vec<(i64, Vec<u8>)> = Vec::with_capacity(count);
+    db.with_conn(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        for (i, v) in vecs.iter().enumerate() {
+            let blob = serialize_q(v);
+            let mask = bq::quantize_mean_centered(v, Some(&means));
+            tx.execute(
+                "INSERT INTO memories (key, content, category, embedding, bq_mask, created_at, updated_at) \
+                 VALUES (?1, ?2, 'general', ?3, ?4, datetime('now'), datetime('now'))",
+                rusqlite::params![format!("bq_{i}"), format!("doc {i}"), blob, mask],
+            )?;
+            let id = tx.last_insert_rowid();
+            blobs.push((id, blob));
+        }
+        tx.commit()?;
+        Ok(())
+    })?;
+
+    let blob_refs: Vec<(i64, Option<&[u8]>)> = blobs
+        .iter()
+        .map(|(id, b)| (*id, Some(b.as_slice())))
+        .collect();
+
+    let mut recalls = Vec::with_capacity(20);
+    let mut lat_ms = Vec::with_capacity(20);
+    for q_idx in (0..count).step_by(count / 20).take(20) {
+        let q = &vecs[q_idx];
+        let brute = top_k(q, &blob_refs, 10, 0.0);
+        let brute_ids: std::collections::HashSet<i64> = brute.iter().map(|x| x.0).collect();
+
+        let t0 = std::time::Instant::now();
+        let approx = db.with_conn(|conn| {
+            bq::search_namespace(conn, bq::VectorNamespace::Memories, None, q, 10, 0.0)
+        })?;
+        lat_ms.push(t0.elapsed().as_secs_f64() * 1000.0);
+
+        let hits = approx.iter().filter(|x| brute_ids.contains(&x.0)).count();
+        recalls.push(hits as f64 / brute_ids.len().max(1) as f64);
+    }
+
+    let mean_recall = recalls.iter().sum::<f64>() / recalls.len().max(1) as f64;
+    lat_ms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p95 = lat_ms[((lat_ms.len() * 95) / 100).min(lat_ms.len().saturating_sub(1))];
+    Ok((mean_recall, p95))
 }
 
 pub async fn cli_embeddings(ctx: &crate::AppContext, as_json: bool) -> anyhow::Result<()> {
@@ -1440,6 +1517,8 @@ mod tests {
         assert_eq!(rep["backend"].as_str(), Some("fake"));
         assert!(rep["gate_pass"].as_bool().unwrap_or(false));
         assert!(rep["chunker_recall_gain"].as_f64().unwrap_or(0.0) > 0.0);
+        assert!(rep["bq_recall_at_10"].as_f64().unwrap_or(0.0) >= 0.90);
+        assert!(rep["bq_gate_pass"].as_bool().unwrap_or(false));
     }
 }
 

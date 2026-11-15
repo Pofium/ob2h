@@ -15,7 +15,7 @@
 - [x] T-72b.1 Инкрементальный upsert векторов в `vec0` (opt-in `OB2H_VEC0`) в `BEGIN IMMEDIATE`.
 - [x] T-72b.2 Двухступенчатый конвейер извлечения: ступень 1 — mean-centered Binary Quantization (BQ) + Hamming `popcnt` oversample; ступень 2 — точный FP32/INT8 rescore.
 - [x] T-72b.3 Партиционирование по пространствам имен: раздельные векторные индексы для `memories` и `ast_nodes` с фильтрацией по `project_id`.
-- [ ] T-72b.4 Регрессионный гейт: проверка recall@10 векторного поиска против brute-force эталона (ADR-13).
+- [x] T-72b.4 Регрессионный гейт: проверка recall@10 векторного поиска против brute-force эталона (ADR-13).
 - [ ] T-72b.5 Content-addressed кэш (blake3): таблица `file_blobs` для мгновенного переключения веток без шторма ре-парсинга/ONNX.
 
 ## Фаза 73 — Usage-Weighted Personalized PageRank (U-PPR)
