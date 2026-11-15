@@ -68,6 +68,14 @@ impl EmbeddingProvider for FakeEmbedding {
     fn document_prefix(&self) -> &'static str {
         self.document_prefix
     }
+
+    fn backend_id(&self) -> &'static str {
+        "fake"
+    }
+
+    fn model_id(&self) -> &str {
+        "fake-sha256"
+    }
 }
 
 #[cfg(test)]

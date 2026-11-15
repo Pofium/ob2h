@@ -82,6 +82,14 @@ impl MemoryService {
         // Получаем векторное представление
         let embeddings = self.embedder.embed_documents(&[content.to_string()]).await?;
         let emb_blob = embeddings.first().map(|v| serialize_q(v));
+        let cur_fp = crate::embedding::fingerprint::EmbeddingFingerprint::from_provider(
+            self.embedder.as_ref(),
+        );
+        if let Ok(crate::embedding::fingerprint::FingerprintStatus::Fresh) =
+            crate::embedding::fingerprint::check_fingerprint(&self.db, &cur_fp)
+        {
+            let _ = crate::embedding::fingerprint::save_fingerprint(&self.db, &cur_fp);
+        }
 
         // Ф31.1: дешёвый save-time пре-чек дублей (без LLM) — топ-1 косинусный сосед.
         // cos ≥ 0.98 — identity-дубль: тихий UPDATE существующей записи, новой строки нет;
@@ -544,6 +552,18 @@ impl MemoryService {
         limit: usize,
         min_score: f32,
     ) -> anyhow::Result<Vec<(i64, f64)>> {
+        let cur_fp = crate::embedding::fingerprint::EmbeddingFingerprint::from_provider(
+            self.embedder.as_ref(),
+        );
+        if let Ok(crate::embedding::fingerprint::FingerprintStatus::Mismatch { stored, current }) =
+            crate::embedding::fingerprint::check_fingerprint(&self.db, &cur_fp)
+        {
+            tracing::warn!(
+                "Векторный поиск заблокирован (EmbeddingFingerprint mismatch: stored={stored}, current={current}). Запустите `ob2h reindex --embeddings`"
+            );
+            return Ok(Vec::new());
+        }
+
         let q_vec = self.embedder.embed_query(query).await?;
         let q_vec = &q_vec;
 

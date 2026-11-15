@@ -4,6 +4,7 @@ pub mod api;
 pub mod fake;
 #[cfg(feature = "onnx")]
 pub mod fastembed_local;
+pub mod fingerprint;
 pub mod local_bert;
 pub mod onnx_spec;
 
@@ -38,6 +39,16 @@ pub trait EmbeddingProvider: Send + Sync {
 
     /// Размерность вектора.
     fn dim(&self) -> usize;
+
+    /// Идентификатор бэкенда для `EmbeddingFingerprint` (Ф72.3).
+    fn backend_id(&self) -> &'static str {
+        active_backend()
+    }
+
+    /// Идентификатор модели для `EmbeddingFingerprint` (Ф72.3).
+    fn model_id(&self) -> &str {
+        "default"
+    }
 
     /// Префикс поискового запроса (Ф72.2b, напр. `"query: "` для E5).
     fn query_prefix(&self) -> &'static str {
@@ -333,6 +344,14 @@ impl EmbeddingProvider for CachedEmbeddingProvider {
 
     fn document_prefix(&self) -> &'static str {
         self.inner.document_prefix()
+    }
+
+    fn backend_id(&self) -> &'static str {
+        self.inner.backend_id()
+    }
+
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
     }
 }
 
