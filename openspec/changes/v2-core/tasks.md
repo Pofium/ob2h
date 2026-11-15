@@ -44,15 +44,15 @@
 - [x] T-75.3 Синхронизация v2: поддержка рёбер `SUPERSEDES`/`CONTRADICTS` в sync-бандлах и CRDT `max` для счётчиков обращений.
 
 ## Фаза 76 — Кроссплатформенный Lifecycle (cargo-dist), self-uninstall и упаковка
-- [ ] T-76.1 Движок предварительной диагностики (`Pre-flight Diagnostics Engine`: CPU AVX2/NEON, VC++ только при onnx, конфликтующие процессы).
-- [ ] T-76.2 Упаковка через `cargo-dist` (`dist.toml`) + опциональный шаблон Inno Setup.
-- [ ] T-76.3 macOS: Universal2 через cargo-dist + документация Gatekeeper.
-- [ ] T-76.4 Linux: статический musl `.tar.gz`, `.deb`/`.rpm`, `curl | sh`.
-- [ ] T-76.5 Пользовательские демоны: Task Scheduler `ob2h-autodream` (Windows), LaunchAgent (macOS), `systemd --user` (Linux).
-- [ ] T-76.6 Zero-Touch IDE & Agent Auto-Discovery: JSONC-safe идемпотентный патч, shell completions, `PATH`.
-- [ ] T-76.7 Предзагрузка моделей (First-run Model Hydration) с прогресс-баром.
-- [ ] T-76.8 Встроенная подкоманда `ob2h self uninstall [--keep-data | --purge-data] [--silent]` (Full Teardown Engine + `self-replace`).
-- [ ] T-76.9 Управление данными и аварийная очистка: `--keep-data`/`--purge-data` и расширение `ob2h doctor --fix`.
+- [x] T-76.1 Движок предварительной диагностики (`Pre-flight Diagnostics Engine`: CPU AVX2/NEON, VC++ только при onnx, конфликтующие процессы).
+- [x] T-76.2 Упаковка через `cargo-dist` (`dist.toml`) + опциональный шаблон Inno Setup.
+- [x] T-76.3 macOS: Universal2 через cargo-dist + документация Gatekeeper.
+- [x] T-76.4 Linux: статический musl `.tar.gz`, `.deb`/`.rpm`, `curl | sh`.
+- [x] T-76.5 Пользовательские демоны: Task Scheduler `ob2h-autodream` (Windows), LaunchAgent (macOS), `systemd --user` (Linux).
+- [x] T-76.6 Zero-Touch IDE & Agent Auto-Discovery: JSONC-safe идемпотентный патч, shell completions, `PATH`.
+- [x] T-76.7 Предзагрузка моделей (First-run Model Hydration) с прогресс-баром.
+- [x] T-76.8 Встроенная подкоманда `ob2h self uninstall [--keep-data | --purge-data] [--silent]` (Full Teardown Engine + `self-replace`).
+- [x] T-76.9 Управление данными и аварийная очистка: `--keep-data`/`--purge-data` и расширение `ob2h doctor --fix`.
 
 ## Фаза 77 — Финализация, CI/CD релизная матрица, документация и запуск
 - [ ] T-77.1 Настройка кроссплатформенного релизного конвейера в GitHub Actions (сборка, SHA256, SBOM, optional gated signing).

@@ -5,6 +5,7 @@ pub mod db;
 pub mod dedup;
 pub mod doctor;
 pub mod lessons;
+pub mod lifecycle;
 pub mod reindex;
 pub mod secrets;
 pub use lessons::LessonsCommands;
@@ -153,6 +154,27 @@ pub enum Commands {
         /// Размер батча (1..=128)
         #[arg(long, default_value_t = 32)]
         batch_size: usize,
+    },
+    /// Управление жизненным циклом бинарника (Ф76.7)
+    #[command(name = "self")]
+    SelfCmd {
+        #[command(subcommand)]
+        command: SelfCommands,
+    },
+    /// Регистрация и удаление фонового сервиса (launchd / systemd user, Ф76.3)
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommands,
+    },
+    /// Генерация shell completions (bash, zsh, fish, powershell, elvish, Ф76.6)
+    Completions {
+        /// Имя shell: bash | zsh | fish | powershell | elvish
+        shell: String,
+    },
+    /// Локальная гидратация моделей (BGE-M3 / MiniLM / ONNX) (Ф76.9)
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommands,
     },
 }
 
@@ -406,4 +428,34 @@ pub enum DreamCommands {
         #[arg(short, long)]
         commit: String,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SelfCommands {
+    /// Полное удаление интеграций, сервиса и бинарника ob2h (Ф76.7)
+    Uninstall {
+        /// Сохранить data_dir (БД, бэкапы, workspace)
+        #[arg(long)]
+        keep_data: bool,
+        /// Удалить data_dir (включая ob2h.db)
+        #[arg(long)]
+        purge_data: bool,
+        /// Неинтерактивный режим для инсталляторов
+        #[arg(long)]
+        silent: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ServiceCommands {
+    /// Установить и запустить пользовательский сервис (launchd / systemd --user)
+    Install,
+    /// Остановить и удалить пользовательский сервис
+    Uninstall,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ModelsCommands {
+    /// Проверить или скачать локальные embedding-модели (Ф76.9)
+    Hydrate,
 }

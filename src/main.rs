@@ -5,8 +5,8 @@ use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use ob2h::cli::{
-    BenchCommands, Cli, Commands, DbCommands, DreamCommands, PluginCommands, SyncCommands,
-    UpdateCommands, Vec0Commands,
+    BenchCommands, Cli, Commands, DbCommands, DreamCommands, ModelsCommands, PluginCommands,
+    SelfCommands, ServiceCommands, SyncCommands, UpdateCommands, Vec0Commands,
 };
 use chrono::DateTime;
 use ob2h::update::{check_update, current_version, download_and_apply, notify_user, CheckResult};
@@ -134,6 +134,50 @@ async fn main() -> anyhow::Result<()> {
                 report.memories_reindexed, report.graph_nodes_reindexed, report.fingerprint
             );
         }
+        Some(Commands::SelfCmd { command }) => match command {
+            SelfCommands::Uninstall {
+                keep_data,
+                purge_data,
+                silent,
+            } => {
+                let log = ob2h::cli::lifecycle::self_uninstall(
+                    &ctx.settings.data_dir,
+                    keep_data,
+                    purge_data,
+                    silent,
+                    !silent,
+                )?;
+                for line in log {
+                    println!("{line}");
+                }
+            }
+        },
+        Some(Commands::Service { command }) => match command {
+            ServiceCommands::Install => {
+                let exe = std::env::current_exe()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "ob2h".to_string());
+                let msg = ob2h::cli::lifecycle::install_user_daemon(
+                    &exe,
+                    &ctx.settings.data_dir.display().to_string(),
+                )?;
+                println!("{msg}");
+            }
+            ServiceCommands::Uninstall => {
+                let msg = ob2h::cli::lifecycle::uninstall_user_daemon()?;
+                println!("{msg}");
+            }
+        },
+        Some(Commands::Completions { shell }) => {
+            let script = ob2h::cli::lifecycle::generate_shell_completion(&shell)?;
+            print!("{script}");
+        }
+        Some(Commands::Models { command }) => match command {
+            ModelsCommands::Hydrate => {
+                let msg = ob2h::cli::lifecycle::hydrate_models(&ctx.settings.data_dir)?;
+                println!("{msg}");
+            }
+        },
         Some(Commands::Doctor { fix }) => {
             let doctor = ob2h::cli::Doctor::new(ctx.settings.clone(), fix).with_db(ctx.db.clone());
             doctor.run()?;

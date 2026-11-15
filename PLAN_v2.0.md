@@ -268,28 +268,28 @@
 - [x] **75.3** Синхронизация v2: поддержка передачи рёбер `SUPERSEDES`/`CONTRADICTS` в sync-бандлах; CRDT-семантика (`max`) для счётчиков обращений.
 
 #### Фаза 76 — Кроссплатформенный Lifecycle (cargo-dist), self-uninstall и упаковка (оценка: 3–4 дня; скоуп урезан внешним аудитом с 4–5 и двух стеков)
-- [ ] **76.1** Движок предварительной диагностики (`Pre-flight Diagnostics Engine`):
+- [x] **76.1** Движок предварительной диагностики (`Pre-flight Diagnostics Engine`):
   - Проверка инструкций процессора (AVX2, AVX-512, NEON);
   - VC++ Redistributable — **только для `--features onnx`** (динамический onnxruntime.dll); статическая сборка (`crt-static`) не требует;
   - Детекция конфликтующих процессов (`ob2h`, `hermes`, `claude`) с корректной паузой/ожиданием.
-- [ ] **76.2** Упаковка через **cargo-dist** (единый `dist.toml` вместо ручных скриптов): PowerShell-инсталлятор + portable zip (Windows), tarball + Homebrew formula (macOS), musl `tar.gz` + `.deb` (`cargo-deb`) + `.rpm` (`cargo-generate-rpm`), `curl | sh` с SHA256, матрица GitHub Releases. Один опциональный шаблон Inno Setup (ARP-регистрация, тихие флаги, `ob2h self uninstall --silent` при сносе) — при спросе на визард. **Снято с v2.0:** WiX MSI, подписанные dmg/pkg + нотаризация (платный Developer ID), winget-манифест, домен `get.ob2h.dev` с GPG — внешние сервисы/платные подписки, отдельное решение владельца.
-- [ ] **76.3** macOS: Universal2 (x86_64 + aarch64) через cargo-dist (тарбол + Tap). Нотаризация — опция при наличии Developer ID; по умолчанию — документированное прохождение Gatekeeper.
-- [ ] **76.4** Linux: статический musl-бинарник `.tar.gz`, `.deb`/`.rpm`, `curl | sh` с SHA256. **AppImage исключён** (консольному CLI без GUI бесполезен, неудобен для прописки в `mcp.json`).
-- [ ] **76.5** Пользовательские демоны (без системных служб):
+- [x] **76.2** Упаковка через **cargo-dist** (единый `dist.toml` вместо ручных скриптов): PowerShell-инсталлятор + portable zip (Windows), tarball + Homebrew formula (macOS), musl `tar.gz` + `.deb` (`cargo-deb`) + `.rpm` (`cargo-generate-rpm`), `curl | sh` с SHA256, матрица GitHub Releases. Один опциональный шаблон Inno Setup (ARP-регистрация, тихие флаги, `ob2h self uninstall --silent` при сносе) — при спросе на визард. **Снято с v2.0:** WiX MSI, подписанные dmg/pkg + нотаризация (платный Developer ID), winget-манифест, домен `get.ob2h.dev` с GPG — внешние сервисы/платные подписки, отдельное решение владельца.
+- [x] **76.3** macOS: Universal2 (x86_64 + aarch64) через cargo-dist (тарбол + Tap). Нотаризация — опция при наличии Developer ID; по умолчанию — документированное прохождение Gatekeeper.
+- [x] **76.4** Linux: статический musl-бинарник `.tar.gz`, `.deb`/`.rpm`, `curl | sh` с SHA256. **AppImage исключён** (консольному CLI без GUI бесполезен, неудобен для прописки в `mcp.json`).
+- [x] **76.5** Пользовательские демоны (без системных служб):
   - Windows: задача Task Scheduler `ob2h-autodream` в контексте пользователя (прецедент: `scripts/pc/sync-task.ps1`); **Windows Service не регистрируется** (UAC, Session 0, невидимость путей `%USERPROFILE%\.cursor\mcp.json`);
   - macOS: `launchd` LaunchAgent (`com.ob2h.agent.plist`);
   - Linux: `systemd --user` (`ob2h.service`).
-- [ ] **76.6** Zero-Touch IDE & Agent Auto-Discovery:
+- [x] **76.6** Zero-Touch IDE & Agent Auto-Discovery:
   - Сканирование системы на наличие Hermes, Claude Desktop, Cursor, Windsurf, VS Code, Zed, Gemini, Qwen;
   - Автоматическое добавление сервера `ob2h` в соответствующие конфигурации с предварительным бэкапом оригиналов;
   - **JSONC-safe идемпотентный патч:** Cursor/Zed `mcp.json` — JSON с комментариями и висячими запятыми, `serde_json` их теряет при перезаписи; точечная вставка/вырезка ключа `ob2h` с сохранением комментариев (подход `jsonc-parser`/`toml_edit`, прецедент — маркерный патч DSH-установщика), round-trip тест: повторный install не меняет файл, uninstall восстанавливает;
   - Генерация shell completions для PowerShell, Bash, Zsh, Fish;
   - Автоматическая настройка переменной `PATH`.
-- [ ] **76.7** Предзагрузка моделей (First-run Model Hydration):
+- [x] **76.7** Предзагрузка моделей (First-run Model Hydration):
   - Фоновая или инсталляционная загрузка квантованных весов INT8 в системный кэш с отображением прогресс-бара;
   - Обеспечение 0 мс задержки при первом обращении агента.
-- [ ] **76.8** Деинсталляция — встроенная подкоманда `ob2h self uninstall [--keep-data | --purge-data] [--silent]` (Full Teardown Engine внутри бинарника, вместо отдельных `unins000.exe`/скриптов): kill процессов и снятие блокировок (`ob2h.lock`), deregистрация пользовательских задач (Task Scheduler/launchd/systemd --user), reverse unpatch IDE-конфигов, PATH/реестр с `WM_SETTINGCHANGE`, самоудаление через `self-replace` (уже зависимость ADR-15). Uninstaller Inno лишь вызывает `ob2h self uninstall --silent` (MDM-совместимость через флаги).
-- [ ] **76.9** Управление данными и аварийная очистка: выбор `--keep-data`/`--purge-data` в `self uninstall` (CLI-флаги, не GUI-визард); глубокая очистка — **расширение `ob2h doctor --fix`** (зависшие блокировки, мёртвые задачи, битые записи конфигов, сиротские процессы) вместо отдельного бинарника `ob2h cleaner`.
+- [x] **76.8** Деинсталляция — встроенная подкоманда `ob2h self uninstall [--keep-data | --purge-data] [--silent]` (Full Teardown Engine внутри бинарника, вместо отдельных `unins000.exe`/скриптов): kill процессов и снятие блокировок (`ob2h.lock`), deregистрация пользовательских задач (Task Scheduler/launchd/systemd --user), reverse unpatch IDE-конфигов, PATH/реестр с `WM_SETTINGCHANGE`, самоудаление через `self-replace` (уже зависимость ADR-15). Uninstaller Inno лишь вызывает `ob2h self uninstall --silent` (MDM-совместимость через флаги).
+- [x] **76.9** Управление данными и аварийная очистка: выбор `--keep-data`/`--purge-data` в `self uninstall` (CLI-флаги, не GUI-визард); глубокая очистка — **расширение `ob2h doctor --fix`** (зависшие блокировки, мёртвые задачи, битые записи конфигов, сиротские процессы) вместо отдельного бинарника `ob2h cleaner`.
 
 #### Фаза 77 — Финализация, CI/CD релизная матрица, документация и запуск (оценка: 2–3 дня)
 - [ ] **77.1** Настройка кроссплатформенного релизного конвейера в GitHub Actions: сборка, генерация checksums (SHA256) и SBOM. Подпись кода (Authenticode для Windows, Apple Notarization для macOS) — шаги `[optional / gated by secrets]`: выполняются только при наличии секретов подписи в CI, иначе пропускаются с предупреждением (консистентно с 76.2/76.3 и риск-матрицей: платная подпись вне v2.0 по умолчанию).

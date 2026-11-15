@@ -68,6 +68,62 @@ impl Doctor {
             println!();
         }
 
+        // 0. Ф76.1: Pre-flight проверка среды (CPU, рантайм, конфликтующие процессы)
+        let preflight = crate::cli::lifecycle::run_preflight();
+        results.push(DoctorItem {
+            category: "Pre-flight среды (Ф76.1)".to_string(),
+            name: "CPU / Runtime / Процессы".to_string(),
+            status: if !preflight.vcredist_ok {
+                DoctorStatus::Error
+            } else if !preflight.conflicting_processes.is_empty() {
+                DoctorStatus::Warn
+            } else {
+                DoctorStatus::Ok
+            },
+            details: format!(
+                "arch={}, avx2={}, avx512={}, neon={}, vcredist_needed={}, vcredist_ok={}, conflicts={:?}",
+                preflight.arch,
+                preflight.avx2,
+                preflight.avx512,
+                preflight.neon,
+                preflight.vcredist_needed,
+                preflight.vcredist_ok,
+                preflight.conflicting_processes
+            ),
+        });
+
+        // Ф76.8: Emergency --fix очистка (lock-файлы, битые JSON-конфиги .bak)
+        if self.fix {
+            let lock_file = self.settings.data_dir.join("ob2h.lock");
+            if lock_file.exists() && std::fs::remove_file(&lock_file).is_ok() {
+                results.push(DoctorItem {
+                    category: "Аварийная очистка (--fix)".to_string(),
+                    name: "Удаление зависшего ob2h.lock".to_string(),
+                    status: DoctorStatus::Ok,
+                    details: format!("Удалён {}", lock_file.display()),
+                });
+            }
+            for target in crate::cli::lifecycle::discover_ide_configs() {
+                if target.path.exists() {
+                    if let Ok(raw) = std::fs::read_to_string(&target.path) {
+                        if serde_json::from_str::<serde_json::Value>(&raw).is_err()
+                            && crate::cli::lifecycle::unpatch_jsonc_mcp_server(&raw, "ob2h").is_err()
+                        {
+                            let bak = target.path.with_extension("json.bak");
+                            if bak.exists() && std::fs::copy(&bak, &target.path).is_ok() {
+                                results.push(DoctorItem {
+                                    category: "Аварийная очистка (--fix)".to_string(),
+                                    name: format!("Восстановление {} из .bak", target.name),
+                                    status: DoctorStatus::Ok,
+                                    details: format!("Восстановлен {}", target.path.display()),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 1. Проверка директорий и диска
         self.check_directories(&mut results);
 
