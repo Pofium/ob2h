@@ -3,6 +3,15 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [Unreleased]
+
+### Added
+- **Ф78 (заказ владельца)**: дрим читает daily-логы напрямую (`dream_status`/`dream_log` в stats — опциональное поле `daily`: сколько записей потреблено из daily помимо history.jsonl); `Workspace.read_daily_from_offsets` + курсор `.daily_dream_cursor`; daily-оффсеты двигаются только при успехе прогона.
+
+### Fixed
+- **ask_json** (`memory_feedback`/`knowledge_reconcile`/дрим-фазы 2/ревизии): LLM-ответ с пояснительным хвостом после JSON («Note: …») больше не валит парсинг — `clean_json_markdown` вырезает первое сбалансированное JSON-значение (симптом: дрим run 104 — запись съедена, edits=0).
+- **Ralph (75.1)**: `attach_git_head_sha` сохраняет исходную meta finding'а при отсутствии git-корня/ша (ранний `?` терял `ceiling`/`no_trigger` и ломал debt-леджер в `ralph_report`).
+
 ## [2.0.0] - 2026-11-15
 
 ### Added
