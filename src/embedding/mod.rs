@@ -428,13 +428,21 @@ impl EmbeddingWorkerPool {
 #[async_trait]
 impl EmbeddingProvider for EmbeddingWorkerPool {
     async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        let span = tracing::info_span!("embed", count = texts.len());
+        let _enter = span.enter();
+        let started = std::time::Instant::now();
         let _permit = self
             .semaphore
             .acquire()
             .await
             .map_err(|e| anyhow::anyhow!("EmbeddingWorkerPool semaphore closed: {e}"))?;
         let sanitized: Vec<String> = texts.iter().map(|t| sanitize_for_embedding(t)).collect();
-        self.inner.embed(&sanitized).await
+        let res = self.inner.embed(&sanitized).await;
+        crate::graph::telemetry::stage_metrics::record_us(
+            "embed",
+            started.elapsed().as_micros() as u64,
+        );
+        res
     }
 
     fn dim(&self) -> usize {

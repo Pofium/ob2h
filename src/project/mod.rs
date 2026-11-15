@@ -486,6 +486,24 @@ impl ProjectService {
         custom_path: Option<&str>,
         mut incremental: bool,
     ) -> anyhow::Result<AstScanResult> {
+        let span = tracing::info_span!("parse", project_id = %project_id, incremental);
+        let _enter = span.enter();
+        let parse_started = std::time::Instant::now();
+        let res = self.scan_project_inner(project_id, custom_path, &mut incremental);
+        crate::graph::telemetry::stage_metrics::record_us(
+            "parse",
+            parse_started.elapsed().as_micros() as u64,
+        );
+        res
+    }
+
+    fn scan_project_inner(
+        &self,
+        project_id: &str,
+        custom_path: Option<&str>,
+        incremental_ref: &mut bool,
+    ) -> anyhow::Result<AstScanResult> {
+        let mut incremental = *incremental_ref;
         let project = self
             .get_project(project_id)?
             .ok_or_else(|| anyhow::anyhow!("Проект с ID '{}' не найден", project_id))?;

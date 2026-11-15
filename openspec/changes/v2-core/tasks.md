@@ -39,9 +39,9 @@
 - [x] T-74.7 Контроль идемпотентности графа и автоматический откат транзакции при ухудшении поисковых метрик (ADR-13).
 
 ## Фаза 75 — Интеграция цикла агента и наблюдаемость
-- [ ] T-75.1 Автоматическая инвалидация устаревших findings Ralph при смене AST-хешей/сигнатур + `git_head_sha`.
-- [ ] T-75.2 Наблюдаемость: `tracing` spans (`embed`, `parse`, `ppr`, `fts`, `vec`, `dream`, `wal_checkpoint`) и интеграция метрик в `omnes_stats`.
-- [ ] T-75.3 Синхронизация v2: поддержка рёбер `SUPERSEDES`/`CONTRADICTS` в sync-бандлах и CRDT `max` для счётчиков обращений.
+- [x] T-75.1 Автоматическая инвалидация устаревших findings Ralph при смене AST-хешей/сигнатур + `git_head_sha`.
+- [x] T-75.2 Наблюдаемость: `tracing` spans (`embed`, `parse`, `ppr`, `fts`, `vec`, `dream`, `wal_checkpoint`) и интеграция метрик в `omnes_stats`.
+- [x] T-75.3 Синхронизация v2: поддержка рёбер `SUPERSEDES`/`CONTRADICTS` в sync-бандлах и CRDT `max` для счётчиков обращений.
 
 ## Фаза 76 — Кроссплатформенный Lifecycle (cargo-dist), self-uninstall и упаковка
 - [ ] T-76.1 Движок предварительной диагностики (`Pre-flight Diagnostics Engine`: CPU AVX2/NEON, VC++ только при onnx, конфликтующие процессы).

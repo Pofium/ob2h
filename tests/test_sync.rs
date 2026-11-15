@@ -331,3 +331,59 @@ async fn test_run_scheduled_noop_without_config() {
     let ctx = make_ctx(dir.path(), "local", &[]);
     ctx.sync.run_scheduled().await.expect("no-op без peers/after_dream");
 }
+
+/// Ф75.3: репликация рёбер SUPERSEDES/CONTRADICTS (memory_links) и CRDT max для access_count на graph_nodes.
+#[tokio::test]
+async fn test_sync_supersedes_edges_and_graph_access_crdt_max() {
+    let pc_dir = tempdir().expect("pc");
+    let vps_dir = tempdir().expect("vps");
+    let pc = make_ctx(pc_dir.path(), "pc", &["vps"]);
+    let vps = make_ctx(vps_dir.path(), "vps", &["pc"]);
+
+    pc.memory.save("v1", Some("old_k"), "fact", 0.8, "test", None).await.unwrap();
+    pc.memory.save("v2", Some("new_k"), "fact", 0.8, "test", None).await.unwrap();
+    pc.db.with_conn(|c| {
+        let old_id: i64 = c.query_row("SELECT id FROM memories WHERE key = 'old_k'", [], |r| r.get(0))?;
+        let new_id: i64 = c.query_row("SELECT id FROM memories WHERE key = 'new_k'", [], |r| r.get(0))?;
+        c.execute(
+            "INSERT INTO memory_links (from_id, to_id, kind, weight, created_at)
+             VALUES (?1, ?2, 'SUPERSEDES', 1.0, '2026-01-01T00:00:00Z')",
+            rusqlite::params![new_id, old_id],
+        )?;
+        c.execute(
+            "INSERT INTO graph_nodes (node_id, label, node_type, access_count, created_at, updated_at)
+             VALUES ('gn1', 'AuthService', 'Struct', 15, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )?;
+        Ok(())
+    }).unwrap();
+
+    // На VPS есть тот же узел с более новым updated_at, но меньшим access_count = 3
+    vps.db.with_conn(|c| {
+        c.execute(
+            "INSERT INTO graph_nodes (node_id, label, node_type, access_count, created_at, updated_at)
+             VALUES ('gn1', 'AuthService', 'Struct', 3, '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z')",
+            [],
+        )?;
+        Ok(())
+    }).unwrap();
+
+    let bundle_path = pc.sync.export_opts("vps", false).unwrap();
+    vps.sync.import_file(&bundle_path).await.unwrap();
+
+    let (has_supersedes, gn_access): (i64, i64) = vps.db.with_conn(|c| {
+        let s: i64 = c.query_row(
+            "SELECT count(*) FROM memory_links WHERE kind = 'SUPERSEDES'",
+            [],
+            |r| r.get(0),
+        )?;
+        let a: i64 = c.query_row(
+            "SELECT access_count FROM graph_nodes WHERE node_id = 'gn1'",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok((s, a))
+    }).unwrap();
+    assert_eq!(has_supersedes, 1);
+    assert_eq!(gn_access, 15, "CRDT max должен сохранить 15 > 3 даже при проигрыше LWW");
+}

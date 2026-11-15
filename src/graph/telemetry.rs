@@ -129,10 +129,13 @@ impl AccessTelemetryBuffer {
     }
 }
 
-/// Обслуживание SQLite WAL: `PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA optimize` (Ф73.3).
+/// Обслуживание SQLite WAL: `PRAGMA wal_checkpoint(TRUNCATE)` + `PRAGMA optimize` (Ф73.3 / Ф75.2).
 /// Вызывается в цикле autodream и при graceful shutdown MCP-сервера.
 pub fn wal_maintenance(db: &Database) -> anyhow::Result<(i64, i64)> {
-    db.with_conn(|conn| {
+    let span = tracing::info_span!("wal_checkpoint");
+    let _enter = span.enter();
+    let started = std::time::Instant::now();
+    let res = db.with_conn(|conn| {
         let (busy, log_frames, checkpointed) = conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
                 Ok((
@@ -147,7 +150,85 @@ pub fn wal_maintenance(db: &Database) -> anyhow::Result<(i64, i64)> {
         }
         conn.execute_batch("PRAGMA optimize;")?;
         Ok((log_frames, checkpointed))
-    })
+    });
+    let elapsed_us = started.elapsed().as_micros() as u64;
+    stage_metrics::record_us("wal_checkpoint", elapsed_us);
+    if let Ok((log_frames, checkpointed)) = &res {
+        tracing::info!(
+            checkpoint_ms = elapsed_us / 1000,
+            log_frames,
+            checkpointed,
+            "wal_checkpoint"
+        );
+    }
+    res
+}
+
+/// Лёгкие атомарные метрики ключевых этапов для `omnes_stats` (Ф75.2).
+pub mod stage_metrics {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct StageCounter {
+        calls: AtomicU64,
+        total_us: AtomicU64,
+    }
+
+    impl StageCounter {
+        const fn new() -> Self {
+            Self {
+                calls: AtomicU64::new(0),
+                total_us: AtomicU64::new(0),
+            }
+        }
+        fn add(&self, us: u64) {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.total_us.fetch_add(us, Ordering::Relaxed);
+        }
+        fn read(&self) -> (u64, u64) {
+            (
+                self.calls.load(Ordering::Relaxed),
+                self.total_us.load(Ordering::Relaxed),
+            )
+        }
+    }
+
+    static EMBED: StageCounter = StageCounter::new();
+    static PARSE: StageCounter = StageCounter::new();
+    static PPR: StageCounter = StageCounter::new();
+    static FTS: StageCounter = StageCounter::new();
+    static VEC: StageCounter = StageCounter::new();
+    static DREAM: StageCounter = StageCounter::new();
+    static WAL_CKPT: StageCounter = StageCounter::new();
+
+    pub fn record_us(stage: &str, us: u64) {
+        match stage {
+            "embed" => EMBED.add(us),
+            "parse" => PARSE.add(us),
+            "ppr" => PPR.add(us),
+            "fts" => FTS.add(us),
+            "vec" => VEC.add(us),
+            "dream" => DREAM.add(us),
+            "wal_checkpoint" => WAL_CKPT.add(us),
+            _ => {}
+        }
+    }
+
+    pub fn snapshot_summary() -> String {
+        let entries = [
+            ("embed", EMBED.read()),
+            ("parse", PARSE.read()),
+            ("ppr", PPR.read()),
+            ("fts", FTS.read()),
+            ("vec", VEC.read()),
+            ("dream", DREAM.read()),
+            ("wal_checkpoint", WAL_CKPT.read()),
+        ];
+        entries
+            .iter()
+            .map(|(name, (c, us))| format!("{name}:{c}/{}ms", us / 1000))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 /// Negative Feedback / Mute Node (Ф73.2 / Ф73.6):

@@ -145,6 +145,9 @@ impl Dream {
     }
 
     pub async fn run(&self, trigger: &str) -> anyhow::Result<DreamStats> {
+        let span = tracing::info_span!("dream", trigger = %trigger);
+        let _enter = span.enter();
+        let dream_started = std::time::Instant::now();
         let started = utcnow();
         let run_id: i64 = self.db.with_conn(|conn| {
             conn.execute(
@@ -154,7 +157,12 @@ impl Dream {
             Ok(conn.last_insert_rowid())
         })?;
 
-        match self.execute_dream(run_id).await {
+        let out = self.execute_dream(run_id).await;
+        crate::graph::telemetry::stage_metrics::record_us(
+            "dream",
+            dream_started.elapsed().as_micros() as u64,
+        );
+        match out {
             Ok(stats) => {
                 self.finish_run(run_id, "ok", &stats)?;
                 Ok(stats)

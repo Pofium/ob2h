@@ -436,16 +436,66 @@ impl RalphService {
             anyhow::bail!("kind должен быть одним из {KINDS:?}");
         }
         let id = new_id("rfin");
+        let enriched_meta = self.attach_git_head_sha(project_id, meta);
         self.db.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO ralph_findings (id, run_id, iteration_id, project_id, kind, content, \
                  symbols, verdict, meta, created_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, '[]'), 'unconfirmed', ?8, ?9)",
-                params![id, run_id, iteration_id, project_id, kind, content, symbols, meta, utcnow()],
+                params![id, run_id, iteration_id, project_id, kind, content, symbols, enriched_meta, utcnow()],
             )?;
             Ok(())
         })?;
         Ok(id)
+    }
+
+    /// Ф75.1: привязать `git_head_sha` к meta finding'а, если корень проекта — git-репозиторий.
+    fn attach_git_head_sha(&self, project_id: &str, meta: Option<&str>) -> Option<String> {
+        let root = self.project_root(project_id).ok().flatten()?;
+        let sha = crate::dream::conflicts::current_git_head_sha(std::path::Path::new(&root))?;
+        let mut obj = meta
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .filter(|v| v.is_object())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if obj.get("git_head_sha").is_none() {
+            obj["git_head_sha"] = serde_json::json!(sha);
+        }
+        Some(obj.to_string())
+    }
+
+    /// Ф75.1: проверка актуальности finding'а через `git diff <sha>..HEAD -- <file>`.
+    /// Пустой diff подтверждает актуальность независимо от возраста finding'а.
+    pub fn verify_finding_git_fresh(
+        &self,
+        project_id: &str,
+        finding_id: &str,
+        file_path: &str,
+    ) -> anyhow::Result<bool> {
+        let root = match self.project_root(project_id)? {
+            Some(r) => r,
+            None => return Ok(true),
+        };
+        let meta_opt: Option<String> = self.db.with_conn(|conn| {
+            conn.query_row(
+                "SELECT meta FROM ralph_findings WHERE id = ?1",
+                params![finding_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map(|o| o.flatten())
+        })?;
+        let sha = meta_opt
+            .as_deref()
+            .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+            .and_then(|v| v.get("git_head_sha").and_then(|s| s.as_str()).map(String::from));
+        let Some(sha) = sha else {
+            return Ok(true);
+        };
+        Ok(!crate::dream::conflicts::git_file_changed_since(
+            std::path::Path::new(&root),
+            &sha,
+            file_path,
+        ))
     }
 
     /// Ф28.1: stale-findings для dream-ревизии (до limit, глобально).
@@ -961,4 +1011,51 @@ fn rows_to_vec(
         Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?))
     })?;
     Ok(rows.flatten().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn test_ralph_finding_git_head_sha_and_freshness() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        if Command::new("git").args(["-C", &root.to_string_lossy(), "init"]).status().is_err() {
+            return;
+        }
+        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "config", "user.email", "t@t.local"]).status();
+        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "config", "user.name", "T"]).status();
+        std::fs::write(root.join("a.rs"), "pub fn f1() {}\n").unwrap();
+        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "add", "."]).status();
+        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "commit", "-m", "init"]).status();
+
+        let db = Database::in_memory().unwrap();
+        let proj = Arc::new(ProjectService::new(db.conn_arc()));
+        db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO projects (id, name, root_path, created_at, updated_at)
+                 VALUES ('p_ralph', 'p_ralph', ?1, '2026-01-01', '2026-01-01')",
+                params![root.to_string_lossy().to_string()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let ralph = RalphService::new(db.clone(), proj, root.to_path_buf());
+
+        let fid = ralph
+            .add_finding("p_ralph", None, None, "gotcha", "f1 detail", Some("[\"f1\"]"), None)
+            .unwrap();
+        let meta: Option<String> = db
+            .with_conn(|c| c.query_row("SELECT meta FROM ralph_findings WHERE id = ?1", params![fid], |r| r.get(0)))
+            .unwrap();
+        assert!(meta.as_deref().unwrap_or("").contains("git_head_sha"));
+        assert!(ralph.verify_finding_git_fresh("p_ralph", &fid, "a.rs").unwrap());
+
+        std::fs::write(root.join("a.rs"), "pub fn f1(x: i32) {}\n").unwrap();
+        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "add", "."]).status();
+        let _ = Command::new("git").args(["-C", &root.to_string_lossy(), "commit", "-m", "change"]).status();
+        assert!(!ralph.verify_finding_git_fresh("p_ralph", &fid, "a.rs").unwrap());
+    }
 }

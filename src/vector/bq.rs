@@ -204,6 +204,9 @@ pub fn search_table_two_stage(
     limit: usize,
     min_score: f32,
 ) -> rusqlite::Result<Vec<(i64, f32)>> {
+    let span = tracing::info_span!("vec", table = %table, limit);
+    let _enter = span.enter();
+    let started = std::time::Instant::now();
     if limit == 0 || q_vec.is_empty() {
         return Ok(Vec::new());
     }
@@ -296,6 +299,7 @@ pub fn search_table_two_stage(
             .then(a.0.cmp(&b.0))
     });
     scored.truncate(limit);
+    crate::graph::telemetry::stage_metrics::record_us("vec", started.elapsed().as_micros() as u64);
     Ok(scored)
 }
 

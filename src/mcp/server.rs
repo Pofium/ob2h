@@ -1806,10 +1806,11 @@ impl McpServer {
                     })
                     .unwrap_or_default();
 
+                let metrics = crate::graph::telemetry::stage_metrics::snapshot_summary();
                 format!(
-                    "memories={} relations={} documents={} chunks={} graph_nodes={} graph_edges={} dream_runs={} db={}KB backend={} ralph: runs={} iters={} findings={} secrets: records={}",
+                    "memories={} relations={} documents={} chunks={} graph_nodes={} graph_edges={} dream_runs={} db={}KB backend={} ralph: runs={} iters={} findings={} secrets: records={} metrics=[{}]",
                     counts.0, counts.1, counts.2, counts.3, counts.4, counts.5, counts.6, db_size / 1024, backend,
-                    counts.7, counts.8, counts.9, counts.10
+                    counts.7, counts.8, counts.9, counts.10, metrics
                 )
             }
             "omnes_backup" => match self.ctx.backup.create() {

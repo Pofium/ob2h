@@ -293,7 +293,7 @@ impl SyncManager {
         )?;
         // graph_nodes
         self.collect_rows(
-            "SELECT node_id, label, node_type, description, val, hex(embedding) AS embedding, created_at, updated_at, origin, deleted_at, project_id, provenance, confidence, file_path, line_start, line_end, is_god_node
+            "SELECT node_id, label, node_type, description, val, hex(embedding) AS embedding, created_at, updated_at, origin, deleted_at, project_id, provenance, confidence, file_path, line_start, line_end, is_god_node, access_count, trust_score, status
              FROM graph_nodes WHERE ?1 IS NULL OR MAX(updated_at, COALESCE(deleted_at, '')) >= ?1",
             watermark.as_deref(),
             &mut |v| {
@@ -1289,30 +1289,42 @@ impl SyncManager {
         let lstart = l["line_start"].as_i64();
         let lend = l["line_end"].as_i64();
         let is_god = l["is_god_node"].as_i64().unwrap_or(0);
+        let inc_access = l["access_count"].as_i64().unwrap_or(0);
+        let inc_trust = l["trust_score"].as_f64().unwrap_or(1.0);
+        let inc_status = get_s("status").unwrap_or_else(|| "ACTIVE".to_string());
 
-        /// (updated_at, origin, description, val, deleted_at) существующей ноды
-        type NodeRow = (String, String, Option<String>, i64, Option<String>);
+        /// (updated_at, origin, description, val, deleted_at, access_count) существующей ноды
+        type NodeRow = (String, String, Option<String>, i64, Option<String>, i64);
         let existing: Option<NodeRow> = tx
             .query_row(
-                "SELECT updated_at, origin, description, val, deleted_at FROM graph_nodes WHERE node_id = ?1",
+                "SELECT updated_at, origin, description, val, deleted_at, COALESCE(access_count, 0) FROM graph_nodes WHERE node_id = ?1",
                 params![node_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
             )
             .optional()?;
 
-        if let Some((ex_upd, ex_origin, ex_desc, ex_val, ex_deleted)) = &existing {
+        if let Some((ex_upd, ex_origin, ex_desc, ex_val, ex_deleted, ex_access)) = &existing {
             if *ex_upd == inc_upd
                 && node.effective_origin(ex_origin) == inc_origin
                 && *ex_desc == desc_in
                 && *ex_val == val_in
                 && ex_deleted.as_deref() == deleted
+                && *ex_access >= inc_access
             {
                 return Ok(()); // идентичная строка — no-op
             }
         }
 
-        if let Some((ex_upd, ex_origin, _, _, _)) = existing {
+        if let Some((ex_upd, ex_origin, _, _, _, ex_access)) = existing {
+            let merged_access = ex_access.max(inc_access);
             if !Self::incoming_wins(node, &inc_upd, &inc_origin, &ex_upd, &ex_origin) {
+                // Ф75.3: CRDT max для счётчика обращений даже если LWW проиграл
+                if merged_access > ex_access {
+                    tx.execute(
+                        "UPDATE graph_nodes SET access_count = ?1 WHERE node_id = ?2",
+                        params![merged_access, node_id],
+                    )?;
+                }
                 stats.conflicts_lost += 1;
                 return Ok(());
             }
@@ -1320,7 +1332,8 @@ impl SyncManager {
                 "UPDATE graph_nodes SET label=?1, node_type=?2, description=?3, val=?4,
                  embedding=?5, updated_at=?6, origin=?7, deleted_at=?8,
                  project_id=COALESCE(?9, project_id), provenance=?10, confidence=?11,
-                 file_path=?12, line_start=?13, line_end=?14, is_god_node=?15 WHERE node_id=?16",
+                 file_path=?12, line_start=?13, line_end=?14, is_god_node=?15,
+                 access_count=?16, trust_score=?17, status=?18 WHERE node_id=?19",
                 params![
                     get_s("label").unwrap_or_default(),
                     get_s("node_type").unwrap_or_else(|| "Other".into()),
@@ -1337,6 +1350,9 @@ impl SyncManager {
                     lstart,
                     lend,
                     is_god,
+                    merged_access,
+                    inc_trust,
+                    inc_status,
                     node_id,
                 ],
             )?;
@@ -1344,8 +1360,8 @@ impl SyncManager {
             tx.execute(
                 "INSERT INTO graph_nodes (node_id, label, node_type, description, val, embedding,
                  created_at, updated_at, origin, deleted_at, project_id, provenance, confidence,
-                 file_path, line_start, line_end, is_god_node)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                 file_path, line_start, line_end, is_god_node, access_count, trust_score, status)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
                 params![
                     node_id,
                     get_s("label").unwrap_or_default(),
@@ -1364,6 +1380,9 @@ impl SyncManager {
                     lstart,
                     lend,
                     is_god,
+                    inc_access,
+                    inc_trust,
+                    inc_status,
                 ],
             )?;
         }

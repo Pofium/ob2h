@@ -271,6 +271,9 @@ impl GraphService {
         //    поиск по подстроке через trigram-токенайзер), а не полным перебором
         //    `SELECT … FROM graph_nodes` + `LIKE`. Ранжирование (label/desc) прежнее.
         if !words.is_empty() {
+            let fts_span = tracing::info_span!("fts", words = words.len());
+            let _fts_enter = fts_span.enter();
+            let fts_started = std::time::Instant::now();
             let match_expr = words
                 .iter()
                 .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
@@ -328,6 +331,10 @@ impl GraphService {
                     scored.insert(id, score);
                 }
             }
+            crate::graph::telemetry::stage_metrics::record_us(
+                "fts",
+                fts_started.elapsed().as_micros() as u64,
+            );
         }
 
         // 2. Векторный скоринг
@@ -568,8 +575,32 @@ impl GraphService {
         damping: f64,
         weights: &crate::graph::pagerank::PprWeights,
     ) -> anyhow::Result<Vec<PprNodeHit>> {
+        let ppr_span = tracing::info_span!("ppr", query_len = query.len(), limit);
+        let _ppr_enter = ppr_span.enter();
+        let ppr_started = std::time::Instant::now();
         const MAX_SUBGRAPH_NODES: usize = 8000;
         const MAX_HOPS: usize = 2;
+        let res = self
+            .ppr_search_inner(query, project_id, limit, damping, weights, MAX_SUBGRAPH_NODES, MAX_HOPS)
+            .await;
+        crate::graph::telemetry::stage_metrics::record_us(
+            "ppr",
+            ppr_started.elapsed().as_micros() as u64,
+        );
+        res
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn ppr_search_inner(
+        &self,
+        query: &str,
+        project_id: Option<&str>,
+        limit: usize,
+        damping: f64,
+        weights: &crate::graph::pagerank::PprWeights,
+        max_subgraph_nodes: usize,
+        max_hops: usize,
+    ) -> anyhow::Result<Vec<PprNodeHit>> {
 
         // Ф54 + Ф72b.3: окно сидов 50 с учётом проектного пространства имён.
         let found = self.search_for_project(query, project_id, 50, false).await?;
@@ -584,8 +615,8 @@ impl GraphService {
             let mut frontier: Vec<i64> = seed_ids.clone();
             let mut collected_edges: Vec<(i64, i64, String)> = Vec::new();
 
-            for _hop in 0..MAX_HOPS {
-                if frontier.is_empty() || visited.len() >= MAX_SUBGRAPH_NODES {
+            for _hop in 0..max_hops {
+                if frontier.is_empty() || visited.len() >= max_subgraph_nodes {
                     break;
                 }
                 let mut next_frontier: Vec<i64> = Vec::new();
@@ -623,10 +654,10 @@ impl GraphService {
                     })?;
                     for (s, t, lbl) in rows.flatten() {
                         collected_edges.push((s, t, lbl));
-                        if visited.len() < MAX_SUBGRAPH_NODES && visited.insert(s) {
+                        if visited.len() < max_subgraph_nodes && visited.insert(s) {
                             next_frontier.push(s);
                         }
-                        if visited.len() < MAX_SUBGRAPH_NODES && visited.insert(t) {
+                        if visited.len() < max_subgraph_nodes && visited.insert(t) {
                             next_frontier.push(t);
                         }
                     }
