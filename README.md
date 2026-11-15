@@ -1,15 +1,17 @@
 <div align="center">
 
-<img src="docs/assets/banner.jpg" alt="OB2H Banner" width="600" style="border-radius: 12px; margin-bottom: 16px;" />
+<img src="docs/assets/banner.png" alt="ob2h — бренд Omnes" width="640" style="border-radius: 12px; margin-bottom: 16px;" />
 
-# 🧠 OB2H (OmnesBot to Harness)
+# 🐘 ob2h (OmnesBot to Harness)
 
 ### Автономная долговременная память, граф знаний и AST-анализ для AI-агентов
 
-[![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange.svg?logo=rust)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/Release-v1.9.10-brightgreen.svg)](https://github.com/Pofium/ob2h/releases)
-[![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](https://github.com/Pofium/ob2h)
+*Бренд семейства **Omnes** (OmnesProducts): Dark Charcoal `#111827` · Off-White `#F4F5F7` · Brand Orange `#FF6B00`*
+
+[![Rust](https://img.shields.io/badge/Rust-1.80%2B-FF6B00.svg?logo=rust)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/License-MIT-111827.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/Release-v1.9.11-FF6B00.svg)](https://github.com/Pofium/ob2h/releases)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2011%20%7C%20Linux%20%7C%20macOS-111827.svg)](https://github.com/Pofium/ob2h)
 [![CloudTips](https://img.shields.io/badge/%F0%9F%92%B0%20%D0%A7%D0%B0%D0%B5%D0%B2%D1%8B%20%D0%B0%D0%B2%D1%82%D0%BE%D1%80%D1%83-CloudTips%20(РФ)-ff69b4.svg)](https://pay.cloudtips.ru/p/4e7f8019)
 
 [**Быстрый старт**](#-быстрая-установка-в-1-клик) •
@@ -32,9 +34,9 @@
 
 Он даёт агенту возможность:
 1. 🧠 **Помнить всё важное о вас и ваших проектах**: факты, предпочтения, стек технологий и архитектурные решения.
-2. 🏛️ **Строить детерминированный AST-граф кода (вдохновлено Graphify)**: мгновенно сканирует кодовую базу — 31 расширение кода (Rust, Python, TS/TSX, JS/JSX, Go, SQL, PHP, Dart, Java, C#, C/C++, Kotlin, Swift, Ruby, Vue/Svelte, Scala, Lua, Elixir, Shell) плюс веб-разметка и стили (HTML, CSS/SCSS, blade), API-контракты (proto, GraphQL, OpenAPI), IaC (Dockerfile, Terraform, compose, K8s/Helm), манифесты пакетов (Cargo.toml, package.json, pyproject.toml, requirements.txt, go.mod, pubspec.yaml, composer.json) и спец-языки (Jupyter, Solidity, Zig); извлекает классы, функции, интерфейсы, трейты/миксины и связи со 100% точностью и без расхода токенов LLM.
+2. 🏛️ **Строить детерминированный AST-граф кода (вдохновлено Graphify)**: мгновенно сканирует кодовую базу — 31 расширение кода (Rust, Python, TS/TSX, JS/JSX, Go, SQL, PHP, Dart, Java, C#, C/C++, Kotlin, Swift, Ruby, Vue/Svelte, Scala, Lua, Elixir, Shell) плюс веб-разметка и стили (HTML, CSS/SCSS, blade), API-контракты (proto, GraphQL, OpenAPI), IaC (Dockerfile, Terraform, compose, K8s/Helm), манифесты пакетов (Cargo.toml, package.json, pyproject.toml, requirements.txt, go.mod, pubspec.yaml, composer.json) и спец-языки (Jupyter, Solidity, Zig); извлекает классы, функции, интерфейсы, трейты/миксины и связи со 100% точностью и без расхода токенов LLM. Опциональный движок **tree-sitter** (фича `treesitter`: Rust/Python/TS-TSX/Go/Dart, инкрементальный парсинг, fallback на regex при битых файлах, stub-режим для генерированного кода).
 3. 👑 **Выявлять ключевые узлы архитектуры (God Nodes)**: автоматически рассчитывает связность и передает агенту компактный архитектурный дайджест.
-4. 💥 **Оценивать безопасность рефакторинга (Blast Radius / `project_impact`)**: находит все зависимые функции/файлы и оценивает уровень риска изменений (`Low`, `Medium`, `High`).
+4. 💥 **Оценивать безопасность рефакторинга (Blast Radius / `project_impact`)**: находит все зависимые функции/файлы и оценивает уровень риска изменений (`Low`, `Medium`, `High`); учитывает виртуальные вызовы и co-change связи, фильтрует рёбра по порогу `min_confidence` и сразу даёт список **затронутых тестов (TESTED_BY)** — что прогонять после правки функции.
 5. 🔍 **Искать код естественным языком**: гибридный семантический поиск по кодовому графу (RRF $k=60$ + локальный Candle MiniLM 384d).
 6. 📁 **Работать с нулевой настройкой (Zero-Config)**: автоматически определяет корень репозитория, уважает правила `.gitignore` и привязывает сессию.
 7. ⚡ **Реагировать на изменения на лету (File Watcher + Git hooks)**: автоматически обновляет граф при сохранении файлов в IDE.
@@ -51,6 +53,8 @@
 18. 🎓 **Жизненный цикл памяти (v1.9.9)**: уроки (процедурный опыт с confidence и дедуп-укреплением), слоты рабочего контекста (`<agent_slots>` в контексте агента, бюджет 1500 символов), хронология и инкрементальный рекап сессий, провенанс фактов до цитат daily-логов, аудит-леджер операций и скрабинг секретов в конвейерах захвата.
 19. 🖥️ **Окно просмотра (Viewer, v1.9.9–1.9.10)**: нативное окно (`ob2h viewer` или MCP `viewer_open`) — память с FTS-поиском, граф с force-layout, pan/zoom и **разбивкой по темам** (общая память / каждый проект), реплей сессий, уроки/слоты, статистика-дашборд. Строго read-only («ни одной записи»), single-instance, RU/EN, тёмная/светлая тема в стилистике семейства **Omnes** (логотип, палитра, Segoe UI/Consolas), хоткеи Ctrl+1…6 / F5 / Esc. Сборка: `--features gui`; headless отвечает честно.
 20. 🔑 **Секреты во viewer**: вкладка «Секреты» в окне просмотра — инициализация сейфа («Начать сохранять», PIN дважды), разблокировка по локальному PIN, добавление/просмотр (маска, авто-скрытие 15 с)/копирование/удаление с подтверждением. PIN никогда не проходит через чат/MCP/LLM; ключ затирается при блокировке и закрытии окна.
+21. 🕸️ **Глубокий call graph (v1.9.11)**: межфайловое разрешение символов по таблице импортов (`helpers::run()`, `mod.fn()`, `pkg.Func()` — включая алиасы и namespace-импорты TS), статика `Type::method()`, эвристика виртуальных вызовов по единственному кандидату; для Vue/Svelte парсится `<script>` (tree-sitter TS) без потери regex-мостов шаблонов. Качество движка зажато F1-гейтами на эталонах 5 языков (symbol ≥ 0.95, call ≥ 0.90) в `ob2h bench`.
+22. ⏱ **Co-change связи (v1.9.11)**: из истории git (200 коммитов) извлекаются пары файлов, менявшихся вместе ≥3 раз в компактных коммитах — ребро `CO_CHANGES_WITH` ловит межъязыковое зацепление, которое не видит AST (Rust-хендлер ↔ SQL-миграция ↔ Dart-клиент ↔ `.env.example`), и подмешивается в blast radius.
 
 **Кому подходит:** у кого Hermes живёт на двух машинах (ПК + VPS/сервер, работа + дом)
 и кому нужна **приватная** память — все данные остаются на ваших машинах, наружу уходит

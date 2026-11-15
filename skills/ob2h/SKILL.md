@@ -82,7 +82,10 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
 - Полезные запросы v1.7: `project_graph_search("pkg:rust:serde_json")` — пакет и его
   потребители; `project_graph_search("cssclass:<имя>")` — где определён CSS-класс;
   `project_impact("openapi.yaml")` / `project_impact("Dockerfile")` / `project_impact("Cargo.toml")`
-  — что заденет правка контракта/образа/зависимости; `project_call_path` проходит
+  — что заденет правка контракта/образа/зависимости (v1.9.11: аргумент `min_confidence`,
+  дефолт 0.5 — включает эвристики виртуальных вызовов и co-change `CO_CHANGES_WITH`;
+  0.7 — только точные рёбра; в ответе блок «🧪 Затронутые тесты (TESTED_BY)» — что
+  прогонять после правки); `project_call_path` проходит
   фронт → `route:` → хендлер (INFERRED-мосты SERVES_ENDPOINT/PROVIDES_RPC).
 - AutoDreamWorker: гейты ≥4ч и ≥10 событий, lock, git-история правок, бэкапы
   (full/quick, verify, раздельная ротация), ночной bench-гейт (откат дрима при

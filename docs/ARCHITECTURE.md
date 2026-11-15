@@ -396,3 +396,45 @@ whitelist для обходчика (`collect_files`), вотчера (`watcher:
 явные веса в `DEFAULT_PPR_WEIGHTS` — только по замерам (гейт ADR-13), opt-in через
 `OB2H_PPR_WEIGHTS`. God Nodes: `ExternalPackage/BaseImage/CssClass` исключены из кандидатов;
 repo-map включает только файлы кода (`Parser::is_code`).
+
+---
+
+## Аддендум v1.9.11 (2026-11-15) — Фазы 70–71: tree-sitter ядро и глубокий call graph
+
+**Гибридный AST-движок (Ф70, фича `treesitter`).** Диспетчер `AstParserDispatcher`:
+tree-sitter (Rust/Python/TS-TSX/Go/Dart) при поддержке языка, kill-switch
+`OB2H_TREESITTER=0`, fallback на regex при доле ERROR-узлов > 10% (70.9) и для
+генерированного кода (`*.g.dart`, `*.freezed.dart`, `*.pb.dart`, `*.pb.rs`,
+`*.generated.ts` — только публичные сигнатуры через .scm-запросы, 70.15).
+Боевой путь — `IncrementalParser` (LRU-64 деревьев, `Tree::edit` по
+префикс/суффикс-диффу, 70.8). node_id зеркалят regex-схему `fn:|struct:|class:…`
+— привязка памяти/рёбер стабильна при смене бэкенда. Качество зажато F1-гейтами
+на исчерпывающих эталонах `tests/fixtures/ast_golden/` (symbol ≥ 0.95, call ≥ 0.90,
+71.7) в `ob2h bench` (ADR-13).
+
+**Глубокий call graph (Ф71).**
+- *File-scope import table (71.4)*: `CallSite.qualifier` — резолв квалифицированных
+  вызовов по импортам файла (`helpers::run()`, `mod.fn()`, `pkg.Func()`, алиасы,
+  TS namespace), статика `Type::method()` по same-file типу, go-пакеты по каталогу.
+  Receiver-переменная с единственным одноимённым символом файла — эвристика
+  виртуального вызова (`provenance=HEURISTIC`, confidence 0.5). Квалифицированные
+  рёбра — RESOLVED; неоднозначность не разрешается (AMBIGUOUS).
+- *Тестовые узлы (71.2)*: `graph_nodes.kind_detail='test'` (детект 5 языков);
+  исходящие CALLS дают обратную связь TESTED_BY.
+- *Миграция M12 (71.3)*: схема v11→v12 — словарь provenance v2.0
+  (EXTRACTED→SYNTAX, INFERRED→HEURISTIC), `graph_nodes.kind_detail/subtokens/bq_mask`,
+  `file_blobs` (72b.5), sub-токеновая декомпозиция в FTS5 (73.9). Confidence рёбер:
+  HEURISTIC 0.5 / RESOLVED 0.7 / SYNTAX 1.0.
+- *Co-change (71.8)*: `git log --name-only` за 200 коммитов; пары файлов с ≥3
+  совместными изменениями в коммитах ≤10 файлов — ребро `CO_CHANGES_WITH` между
+  file-узлами (`provenance=GIT_HISTORY`, confidence = min(1.0, 0.5+0.1·(count−3)));
+  идемпотентный upsert при каждом скане, переживает full-rescan (чистка только
+  provenance='SYNTAX'). Пойманные связи подмешиваются в `project_impact` и U-PPR (73).
+- *SFC (71.5)*: `.vue`/`.svelte` — гибрид `treesitter:sfc`: regex-мосты Ф48.3
+  (STYLES/BINDS_CLASS/template-IMPORTS) + tree-sitter разбор `<script>`-блоков через
+  TS-грамматику со смещением строк; дедуп по node_id.
+
+**`project_impact` (71.6)**: аргумент `min_confidence` (0.0–1.0, дефолт 0.5 —
+эвристики и co-change проходят; 0.7+ — только точные); в ответе — блок «🧪 Затронутые
+тесты (TESTED_BY)»; пометки `[⏱ co-change]`/`[~ виртуальный вызов]` в дереве.
+AST_EXTRACTOR_VERSION 46: первый скан после апгрейда — полный рескан проекта.
