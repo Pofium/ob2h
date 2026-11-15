@@ -223,6 +223,56 @@ pub fn build_index(conn: &mut Connection, dim: usize, m: Mode, rebuild: bool) ->
     Ok(added)
 }
 
+/// Инкрементальный upsert батча узлов в vec0 внутри `BEGIN IMMEDIATE` (Ф72b.1).
+/// Идемпотентен: удаляет старый rowid (если был) и вставляет актуальный вектор.
+pub fn upsert_nodes_batch(
+    conn: &mut Connection,
+    items: &[(i64, &[f32])],
+    dim: usize,
+    m: Mode,
+) -> rusqlite::Result<usize> {
+    if items.is_empty() {
+        return Ok(0);
+    }
+    register_once();
+    let table = m.table();
+    let ddl = match m {
+        Mode::Int8 => format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS {table} USING vec0(embedding int8[{dim}] distance_metric=cosine)"
+        ),
+        Mode::Bit => format!(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS {table} USING vec0(embedding bit[{dim}])"
+        ),
+    };
+    conn.execute_batch(&ddl)?;
+
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let del_sql = format!("DELETE FROM {table} WHERE rowid = ?1");
+    let ins_sql = match m {
+        Mode::Int8 => format!("INSERT INTO {table}(rowid, embedding) VALUES (?1, vec_int8(?2))"),
+        Mode::Bit => format!("INSERT INTO {table}(rowid, embedding) VALUES (?1, vec_bit(?2))"),
+    };
+    let mut upserted = 0usize;
+    {
+        let mut del = tx.prepare(&del_sql)?;
+        let mut ins = tx.prepare(&ins_sql)?;
+        for (rowid, vec) in items {
+            if vec.len() != dim {
+                continue;
+            }
+            del.execute(rusqlite::params![rowid])?;
+            let payload = match m {
+                Mode::Int8 => int8_payload_from_vec(vec),
+                Mode::Bit => bits_from_vec(vec),
+            };
+            ins.execute(rusqlite::params![rowid, payload])?;
+            upserted += 1;
+        }
+    }
+    tx.commit()?;
+    Ok(upserted)
+}
+
 /// Статистика индексов (без построения).
 pub fn stats(conn: &Connection, dim: usize) -> rusqlite::Result<Vec0Stats> {
     register_once();

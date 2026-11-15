@@ -12,7 +12,7 @@
 - [x] T-72.7 CLI-команда `ob2h bench embeddings`: замер скорости инференса и проверка качества триплетов с отдельным порогом на RU и RU/EN-смешанных триплетах.
 
 ## Фаза 72b — Production Vector Index (vec0 & SIMD)
-- [ ] T-72b.1 Инкрементальный upsert векторов в `vec0` (opt-in `OB2H_VEC0`) в `BEGIN IMMEDIATE`.
+- [x] T-72b.1 Инкрементальный upsert векторов в `vec0` (opt-in `OB2H_VEC0`) в `BEGIN IMMEDIATE`.
 - [ ] T-72b.2 Двухступенчатый конвейер извлечения: ступень 1 — mean-centered Binary Quantization (BQ) + Hamming `popcnt` oversample; ступень 2 — точный FP32/INT8 rescore.
 - [ ] T-72b.3 Партиционирование по пространствам имен: раздельные векторные индексы для `memories` и `ast_nodes` с фильтрацией по `project_id`.
 - [ ] T-72b.4 Регрессионный гейт: проверка recall@10 векторного поиска против brute-force эталона (ADR-13).

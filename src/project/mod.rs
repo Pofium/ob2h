@@ -179,6 +179,19 @@ impl ProjectService {
                     )?;
                 }
                 tx.commit()?;
+                if crate::vector::vec0::enabled() {
+                    let items: Vec<(i64, &[f32])> = chunk
+                        .iter()
+                        .zip(vecs.iter())
+                        .map(|((pk, ..), v)| (*pk, v.as_slice()))
+                        .collect();
+                    let _ = crate::vector::vec0::upsert_nodes_batch(
+                        &mut conn,
+                        &items,
+                        embedder.dim(),
+                        crate::vector::vec0::mode(),
+                    );
+                }
             }
             total_embedded += chunk.len();
         }

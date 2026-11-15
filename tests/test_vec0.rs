@@ -254,3 +254,45 @@ fn recall_metric_basics() {
     assert!((vec0::recall_at_k(&[1, 2, 3, 4], &[1, 2, 9, 4], 4) - 0.75).abs() < 1e-9);
     assert_eq!(vec0::recall_at_k(&[], &[1], 1), 1.0);
 }
+
+/// 72b.1: инкрементальный upsert_nodes_batch обновляет существующий rowid и добавляет новый
+/// в BEGIN IMMEDIATE без пересборки таблицы.
+#[test]
+fn test_upsert_nodes_batch_updates_existing_rowid() {
+    let db = Database::in_memory().expect("db");
+    let vecs = seed_nodes(&db, 5);
+    db.with_conn(|conn| vec0::build_index(conn, DIM, vec0::Mode::Int8, false))
+        .expect("build");
+
+    // Обновляем узел 1 (меняем вектор на противоположный) и добавляем новый rowid 999
+    let mut updated_v1 = vecs[0].clone();
+    for x in &mut updated_v1 {
+        *x = -*x;
+    }
+    let mut new_v = vec![0.0f32; DIM];
+    new_v[0] = 1.0;
+
+    let upserted = db
+        .with_conn(|conn| {
+            vec0::upsert_nodes_batch(
+                conn,
+                &[(1, updated_v1.as_slice()), (999, new_v.as_slice())],
+                DIM,
+                vec0::Mode::Int8,
+            )
+        })
+        .expect("upsert");
+    assert_eq!(upserted, 2);
+
+    let st = db.with_conn(|conn| vec0::stats(conn, DIM)).expect("stats");
+    assert_eq!(st.indexed, 6, "5 исходных + 1 новый rowid, 1-й перезаписан");
+
+    // Проверяем, что KNN по новому вектору 999 находит 999 первым, а поиск по updated_v1 — rowid 1
+    let hits = db
+        .with_conn(|conn| {
+            let payload = vec0::int8_payload_from_vec(&new_v);
+            vec0::knn_int8(conn, &payload, 1)
+        })
+        .expect("knn");
+    assert_eq!(hits, vec![999]);
+}

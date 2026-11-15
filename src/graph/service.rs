@@ -227,6 +227,14 @@ impl GraphService {
                         "UPDATE graph_nodes SET embedding = ?1 WHERE id = ?2",
                         params![blob, rowid],
                     )?;
+                    if crate::vector::vec0::enabled() {
+                        let _ = crate::vector::vec0::upsert_nodes_batch(
+                            conn,
+                            &[(rowid, v.as_slice())],
+                            v.len(),
+                            crate::vector::vec0::mode(),
+                        );
+                    }
                     Ok(())
                 });
             }

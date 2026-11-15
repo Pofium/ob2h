@@ -162,6 +162,21 @@ pub async fn reindex_embeddings(
                 )?;
             }
             tx.commit()?;
+            if crate::vector::vec0::enabled() {
+                if let Some(dim) = vecs.first().map(|v| v.len()).filter(|&d| d > 0) {
+                    let items: Vec<(i64, &[f32])> = chunk
+                        .iter()
+                        .zip(vecs.iter())
+                        .map(|((id, ..), v)| (*id, v.as_slice()))
+                        .collect();
+                    let _ = crate::vector::vec0::upsert_nodes_batch(
+                        conn,
+                        &items,
+                        dim,
+                        crate::vector::vec0::mode(),
+                    );
+                }
+            }
             Ok(())
         })?;
         nodes_done += chunk.len();
