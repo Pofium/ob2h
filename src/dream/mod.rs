@@ -55,6 +55,9 @@ pub struct DreamStats {
     pub run_id: i64,
     pub status: String,
     pub processed: usize,
+    /// Ф78.2: сколько записей потреблено напрямую из daily-логов (None — 0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily: Option<usize>,
     pub edits: usize,
     pub commit: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -173,6 +176,7 @@ impl Dream {
                     run_id,
                     status: "error".to_string(),
                     processed: 0,
+                    daily: None,
                     edits: 0,
                     commit: None,
                     graph_entities: None,
@@ -205,13 +209,28 @@ impl Dream {
 
     async fn execute_dream(&self, run_id: i64) -> anyhow::Result<DreamStats> {
         let dream_cursor = self.workspace.get_dream_cursor()?.unwrap_or(0);
-        let new_records = self.workspace.read_history_from_cursor(dream_cursor, self.settings.dream_batch)?;
+        let mut history_records =
+            self.workspace.read_history_from_cursor(dream_cursor, self.settings.dream_batch)?;
+
+        // Ф78.2: daily-логы читаем напрямую — консолидатор пишет в history.jsonl
+        // только при переполнении токен-бюджета сессии, и при малых сессиях дрим
+        // голодал неделями. Оффсеты двигаются только при успехе всего прогона.
+        let daily_offsets = self.workspace.get_daily_dream_cursor()?;
+        let daily_limit = self.settings.dream_batch.saturating_sub(history_records.len());
+        let (mut daily_records, daily_new_offsets) = self
+            .workspace
+            .read_daily_from_offsets(&daily_offsets, daily_limit)?;
+        let daily_count = daily_records.len();
+        history_records.append(&mut daily_records);
+        let mut new_records = history_records;
+        new_records.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
         if new_records.is_empty() {
             return Ok(DreamStats {
                 run_id,
                 status: "ok".to_string(),
                 processed: 0,
+                daily: None,
                 edits: 0,
                 commit: None,
                 graph_entities: None,
@@ -280,8 +299,19 @@ impl Dream {
             Vec::new()
         });
 
-        let new_cursor = new_records.iter().map(|r| r.cursor).max().unwrap_or(dream_cursor);
+        // .dream_cursor двигают только записи истории (daily-записи имеют cursor=0)
+        let new_cursor = new_records
+            .iter()
+            .filter(|r| r.cursor > dream_cursor)
+            .map(|r| r.cursor)
+            .max()
+            .unwrap_or(dream_cursor);
         self.workspace.set_dream_cursor(new_cursor)?;
+        // Ф78.2: daily-оффсеты — только при успешном прогоне (фаза 1/2 упала →
+        // записи будут переобработаны в следующий раз)
+        if let Err(e) = self.workspace.set_daily_dream_cursor(&daily_new_offsets) {
+            warn!("Дрим: не сохранить daily-курсор: {e}");
+        }
         let _ = self.workspace.compact_history(1000);
 
         let now_str = Utc::now().format("%Y-%m-%d %H:%M").to_string();
@@ -303,6 +333,7 @@ impl Dream {
             run_id,
             status: "ok".to_string(),
             processed: new_records.len(),
+            daily: if daily_count > 0 { Some(daily_count) } else { None },
             edits: edits.len(),
             commit,
             graph_entities: Some(graph_entities),

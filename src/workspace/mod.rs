@@ -2,6 +2,7 @@
 
 pub mod git;
 
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -253,6 +254,105 @@ impl Workspace {
         Ok(())
     }
 
+    /// Ф78.2: дрим-курсор daily-логов — JSON-карта «имя файла → прочитано строк».
+    /// Дрим читает daily-логи напрямую, не дожидаясь консолидации в history.jsonl
+    /// (порог токен-бюджета консолидатора при малых сессиях не достигается неделями).
+    pub fn get_daily_dream_cursor(&self) -> anyhow::Result<HashMap<String, usize>> {
+        let path = self.memory_dir().join(".daily_dream_cursor");
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        let content = fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&content).unwrap_or_default())
+    }
+
+    pub fn set_daily_dream_cursor(&self, offsets: &HashMap<String, usize>) -> anyhow::Result<()> {
+        let path = self.memory_dir().join(".daily_dream_cursor");
+        fs::write(path, serde_json::to_string(offsets)?)?;
+        Ok(())
+    }
+
+    /// Ф78.2: новые daily-записи после сохранённых оффсетов, максимум `limit`,
+    /// файлы по алфавиту имён = хронологически (`YYYY-MM-DD.jsonl`, канонические
+    /// логи log_daily_session; чужие файлы, как и в archive_old_logs, не трогаем).
+    /// Записи возвращаются как HistoryEntry с cursor=0 — они НЕ двигают
+    /// .dream_cursor (историю представляет history.jsonl). Второй элемент —
+    /// карта оффсетов для сохранения ПОСЛЕ успешной обработки: оффсеты
+    /// нетронутых файлов сохраняются, файлы-призраки вычищаются.
+    pub fn read_daily_from_offsets(
+        &self,
+        offsets: &HashMap<String, usize>,
+        limit: usize,
+    ) -> anyhow::Result<(Vec<HistoryEntry>, HashMap<String, usize>)> {
+        let mut records = Vec::new();
+
+        let mut files: Vec<(String, PathBuf)> = match fs::read_dir(self.daily_dir()) {
+            Ok(entries) => entries
+                .flatten()
+                .filter_map(|e| {
+                    let path = e.path();
+                    if !path.is_file() {
+                        return None;
+                    }
+                    let name = path.file_name()?.to_str()?.to_string();
+                    let stem = name.strip_suffix(".jsonl")?;
+                    if stem.len() != 10 || chrono::NaiveDate::parse_from_str(stem, "%Y-%m-%d").is_err()
+                    {
+                        return None;
+                    }
+                    Some((name, path))
+                })
+                .collect(),
+            Err(_) => return Ok((records, HashMap::new())),
+        };
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // оффсеты нетронутых существующих файлов сохраняем, призраки вычищаем
+        let mut new_offsets: HashMap<String, usize> = offsets
+            .iter()
+            .filter(|(k, _)| files.iter().any(|(n, _)| n == *k))
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+
+        for (name, path) in files {
+            if records.len() >= limit {
+                break;
+            }
+            let consumed_before = offsets.get(&name).copied().unwrap_or(0);
+            let file = fs::File::open(&path)?;
+            let mut lines = BufReader::new(file).lines();
+            let mut consumed = consumed_before;
+            for line in lines.by_ref().skip(consumed_before) {
+                if records.len() >= limit {
+                    break;
+                }
+                // счётчик двигаем по каждой строке файла (в т.ч. битой) —
+                // мусор не должен переобрабатываться в каждом дриме
+                consumed += 1;
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => continue,
+                };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let Ok(entry) = serde_json::from_str::<DailyLogEntry>(&line) else {
+                    continue;
+                };
+                records.push(HistoryEntry {
+                    cursor: 0,
+                    timestamp: entry.timestamp,
+                    content: format!(
+                        "user: {}\nassistant: {}",
+                        entry.user_text, entry.assistant_text
+                    ),
+                });
+            }
+            new_offsets.insert(name, consumed);
+        }
+        Ok((records, new_offsets))
+    }
+
     pub fn compact_history(&self, max_entries: usize) -> anyhow::Result<()> {
         let history_file = self.memory_dir().join("history.jsonl");
         if !history_file.exists() {
@@ -367,6 +467,112 @@ mod tests {
         ws.write_file("sub/notes.md", "привет").unwrap();
         assert_eq!(ws.read_file("sub/notes.md").unwrap(), "привет");
         assert!(ws.root().join("sub").join("notes.md").exists());
+    }
+
+    // ---- Ф78.2: daily-курсор дрима ----
+
+    fn write_daily_file(ws: &Workspace, date: &str, entries: &[(&str, &str)]) {
+        use std::io::Write;
+        let path = ws.daily_dir().join(format!("{date}.jsonl"));
+        let mut f = OpenOptions::new().create(true).append(true).open(path).unwrap();
+        for (ts, u) in entries {
+            let e = DailyLogEntry {
+                timestamp: ts.to_string(),
+                user_text: u.to_string(),
+                assistant_text: format!("ответ на {u}"),
+                meta: None,
+            };
+            writeln!(f, "{}", serde_json::to_string(&e).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn daily_reader_returns_entries_and_advances_offsets() {
+        let ws = temp_ws();
+        write_daily_file(&ws, "2026-11-14", &[("2026-11-14T09:00:00Z", "вопрос раз")]);
+        write_daily_file(
+            &ws,
+            "2026-11-15",
+            &[("2026-11-15T09:00:00Z", "вопрос два"), ("2026-11-15T10:00:00Z", "вопрос три")],
+        );
+
+        let (recs, offs) = ws.read_daily_from_offsets(&HashMap::new(), 10).unwrap();
+        assert_eq!(recs.len(), 3, "оба файла, хронологический порядок");
+        assert!(recs[0].content.contains("вопрос раз"));
+        assert!(recs[0].timestamp.starts_with("2026-11-14"));
+        assert_eq!(recs[0].cursor, 0, "daily-записи не двигают .dream_cursor");
+        assert_eq!(offs["2026-11-14.jsonl"], 1);
+        assert_eq!(offs["2026-11-15.jsonl"], 2);
+
+        // повторный вызов с сохранёнными оффсетами — пусто
+        let (recs2, _) = ws.read_daily_from_offsets(&offs, 10).unwrap();
+        assert!(recs2.is_empty(), "всё уже потреблено");
+    }
+
+    #[test]
+    fn daily_reader_partial_limit_keeps_unconsumed() {
+        let ws = temp_ws();
+        write_daily_file(
+            &ws,
+            "2026-11-15",
+            &[("2026-11-15T09:00:00Z", "а"), ("2026-11-15T10:00:00Z", "б"), ("2026-11-15T11:00:00Z", "в")],
+        );
+
+        let (recs, offs) = ws.read_daily_from_offsets(&HashMap::new(), 2).unwrap();
+        assert_eq!(recs.len(), 2);
+        assert_eq!(offs["2026-11-15.jsonl"], 2, "частичное потребление");
+
+        // хвост дочитывается со второй строки
+        let (recs2, offs2) = ws.read_daily_from_offsets(&offs, 10).unwrap();
+        assert_eq!(recs2.len(), 1);
+        assert!(recs2[0].content.contains("в"));
+        assert_eq!(offs2["2026-11-15.jsonl"], 3);
+    }
+
+    #[test]
+    fn daily_reader_skips_broken_lines_and_foreign_files() {
+        let ws = temp_ws();
+        use std::io::Write;
+        let good = ws.daily_dir().join("2026-11-15.jsonl");
+        let mut f = OpenOptions::new().create(true).append(true).open(&good).unwrap();
+        writeln!(f, "{{битый json").unwrap();
+        writeln!(f).unwrap(); // пустая строка
+        let e = DailyLogEntry {
+            timestamp: "2026-11-15T12:00:00Z".to_string(),
+            user_text: "нормальная".to_string(),
+            assistant_text: "запись".to_string(),
+            meta: None,
+        };
+        writeln!(f, "{}", serde_json::to_string(&e).unwrap()).unwrap();
+        // чужой файл (не YYYY-MM-DD.jsonl) — как и в archive_old_logs, не трогаем
+        ws.write_file("daily/omnes-agent-2026-09-04.jsonl", "{\"x\":1}").unwrap();
+
+        let (recs, offs) = ws.read_daily_from_offsets(&HashMap::new(), 10).unwrap();
+        assert_eq!(recs.len(), 1, "битая и пустая строки пропущены, чужой файл не читается");
+        assert!(recs[0].content.contains("нормальная"));
+        assert_eq!(offs["2026-11-15.jsonl"], 3, "битые строки тоже считаются потреблёнными");
+        assert!(!offs.contains_key("omnes-agent-2026-09-04.jsonl"));
+    }
+
+    #[test]
+    fn daily_reader_prunes_ghost_offsets() {
+        let ws = temp_ws();
+        let mut stale = HashMap::new();
+        stale.insert("2026-01-01.jsonl".to_string(), 5usize); // файла больше нет
+
+        let (recs, offs) = ws.read_daily_from_offsets(&stale, 10).unwrap();
+        assert!(recs.is_empty());
+        assert!(offs.is_empty(), "оффсеты удалённых файлов вычищаются");
+    }
+
+    #[test]
+    fn daily_cursor_roundtrip() {
+        let ws = temp_ws();
+        assert!(ws.get_daily_dream_cursor().unwrap().is_empty());
+        let mut m = HashMap::new();
+        m.insert("2026-11-15.jsonl".to_string(), 7usize);
+        ws.set_daily_dream_cursor(&m).unwrap();
+        assert_eq!(ws.get_daily_dream_cursor().unwrap(), m);
     }
 }
 
