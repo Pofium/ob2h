@@ -60,6 +60,9 @@ tree-sitter-python = { version = "0.25", optional = true }
 tree-sitter-go = { version = "0.25", optional = true }
 tree-sitter-typescript = { version = "0.23", optional = true }
 tree-sitter-dart = { version = "0.3", optional = true }
+# Ф72.2 (PLAN_v2.0): FastEmbed / ONNX Runtime под опциональной фичей `onnx`
+# (по умолчанию ВЫКЛЮЧЕНА: zero-dependency сборка остаётся на Candle).
+fastembed = { version = "4", optional = true }
 
 [dev-dependencies]
 tempfile = "3.17"
@@ -89,5 +92,7 @@ treesitter = [
     "dep:tree-sitter-typescript",
     "dep:tree-sitter-dart",
 ]
+# Ф72.2 (PLAN_v2.0): High-Performance ONNX инференс через fastembed/ort.
+onnx = ["dep:fastembed"]
 
 

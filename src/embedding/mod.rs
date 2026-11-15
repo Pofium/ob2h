@@ -2,7 +2,10 @@
 
 pub mod api;
 pub mod fake;
+#[cfg(feature = "onnx")]
+pub mod fastembed_local;
 pub mod local_bert;
+pub mod onnx_spec;
 
 use async_trait::async_trait;
 use lru::LruCache;
@@ -102,6 +105,64 @@ impl EmbeddingProvider for LazyEmbeddingProvider {
             inner.dim()
         } else {
             384
+        }
+    }
+}
+
+#[cfg(feature = "onnx")]
+struct LazyOnnxProvider {
+    inner: tokio::sync::OnceCell<Arc<dyn EmbeddingProvider>>,
+    settings: Settings,
+    expected_dim: usize,
+}
+
+#[cfg(feature = "onnx")]
+impl LazyOnnxProvider {
+    fn new(settings: Settings) -> Self {
+        let spec = onnx_spec::resolve_onnx_model_spec(&settings.embed_model);
+        Self {
+            inner: tokio::sync::OnceCell::new(),
+            settings,
+            expected_dim: spec.dim,
+        }
+    }
+
+    async fn get_inner(&self) -> anyhow::Result<&Arc<dyn EmbeddingProvider>> {
+        self.inner
+            .get_or_try_init(|| async {
+                let s = self.settings.clone();
+                tokio::task::spawn_blocking(move || -> Arc<dyn EmbeddingProvider> {
+                    match fastembed_local::FastembedLocal::new(&s.embed_model) {
+                        Ok(fe) => {
+                            set_backend("onnx");
+                            Arc::new(fe)
+                        }
+                        Err(e) => {
+                            warn!("Не удалось загрузить ONNX-модель fastembed: {e}; fallback на Candle");
+                            init_local_sync(&s)
+                        }
+                    }
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("spawn_blocking error for onnx init: {e}"))
+            })
+            .await
+    }
+}
+
+#[cfg(feature = "onnx")]
+#[async_trait]
+impl EmbeddingProvider for LazyOnnxProvider {
+    async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        let inner = self.get_inner().await?;
+        inner.embed(texts).await
+    }
+
+    fn dim(&self) -> usize {
+        if let Some(inner) = self.inner.get() {
+            inner.dim()
+        } else {
+            self.expected_dim
         }
     }
 }
@@ -228,6 +289,19 @@ pub fn provider_for(settings: &Settings) -> Arc<dyn EmbeddingProvider> {
             info!("Используется Fake провайдер эмбеддингов (offline test mode)");
             set_backend("fake");
             Arc::new(FakeEmbedding::new(384))
+        }
+        "onnx" | "fastembed" => {
+            #[cfg(feature = "onnx")]
+            {
+                let s = settings.clone();
+                // Ленивая инициализация ONNX-модели в spawn_blocking (холодный старт <100мс)
+                Arc::new(LazyOnnxProvider::new(s))
+            }
+            #[cfg(not(feature = "onnx"))]
+            {
+                warn!("OB2H_EMBED_PROVIDER=onnx задан, но бинарник собран без --features onnx; fallback на Candle");
+                Arc::new(LazyEmbeddingProvider::new(settings.clone()))
+            }
         }
         _ => {
             // "local" — ленивая асинхронная загрузка через LazyEmbeddingProvider
