@@ -844,7 +844,16 @@ impl GraphService {
             final_scores.push((id, score));
         }
 
-        final_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        final_scores.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let ta = text_ranks.get(&a.0).copied().unwrap_or(usize::MAX);
+                    let tb = text_ranks.get(&b.0).copied().unwrap_or(usize::MAX);
+                    ta.cmp(&tb)
+                })
+                .then_with(|| a.0.cmp(&b.0))
+        });
         let top_ids: Vec<(i64, f64)> = final_scores.into_iter().take(limit).collect();
 
         if top_ids.is_empty() {

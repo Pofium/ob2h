@@ -3,6 +3,7 @@
 pub mod ast;
 pub mod ast_backend;
 pub mod ast_golden;
+pub mod blob_cache;
 pub mod chunker;
 pub mod cochange;
 pub mod hooks;
@@ -532,13 +533,24 @@ impl ProjectService {
             std::collections::HashMap::new()
         };
 
-        let mut scan_res = self.ast_dispatcher.scan_directory(
+        let mut restore_cb = |rel_path: &str, bytes: &[u8], out: &mut AstScanResult| -> bool {
+            let conn = self.conn.lock().unwrap();
+            crate::project::blob_cache::try_restore_ast(
+                &conn,
+                rel_path,
+                bytes,
+                AST_EXTRACTOR_VERSION,
+                out,
+            )
+        };
+        let mut scan_res = self.ast_dispatcher.scan_directory_with_cache(
             path_obj,
             if incremental {
                 Some(&known_hashes)
             } else {
                 None
             },
+            Some(&mut restore_cb),
         );
         let now = Utc::now().to_rfc3339();
 
@@ -976,6 +988,21 @@ impl ProjectService {
         }
 
         tx.commit()?;
+        let emb_fp = conn
+            .query_row(
+                "SELECT value FROM kv WHERE key = 'embedding_fingerprint'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap_or_default();
+        let _ = crate::project::blob_cache::save_blobs_for_scan(
+            &conn,
+            path_obj,
+            project_id,
+            AST_EXTRACTOR_VERSION,
+            &emb_fp,
+            &scan_res,
+        );
 
         info!(
             "Сканирование проекта '{}' завершено: файлов {}, узлов {}, связей {}, строк {}",

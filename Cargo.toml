@@ -46,6 +46,7 @@ zeroize = { version = "1.8", features = ["derive"] }
 getrandom = "0.2"
 rpassword = "7"
 lru = "0.12"
+blake3 = "1"
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"], optional = true }
 sys-locale = { version = "0.3.2", optional = true }
 # Бренд-логотип viewer (PNG из OmnesProducts). Крейт уже транзитивный в дереве

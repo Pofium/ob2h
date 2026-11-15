@@ -85,7 +85,7 @@ async fn test_code_nodes_embedding_and_hybrid_search() -> anyhow::Result<()> {
     assert!(!text_only.is_empty());
     assert_eq!(text_only[0].label, "connect_database");
 
-    let vec_target_text = "Function connect_database in src/db/conn.rs: Инициализация пула соединений с базой данных SQLite";
+    let vec_target_text = "// File: src/db/conn.rs | Scope: Function connect_database (Инициализация пула соединений с базой данных SQLite)\nИнициализация пула соединений с базой данных SQLite";
     let vec_only = graph_service.search_project_nodes_hybrid(
         &proj.id,
         vec_target_text,

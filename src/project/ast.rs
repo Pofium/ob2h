@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Извлеченный узел графа кода.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AstNode {
     pub node_id: String,
     pub label: String,
@@ -32,7 +32,7 @@ pub struct AstNode {
 }
 
 /// Извлеченное ребро графа кода.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AstEdge {
     pub source_node_id: String,
     pub target_node_id: String,
@@ -55,7 +55,7 @@ pub struct AstEdge {
 /// Ord — для дедупа после CST+line-based проходов (71.1).
 /// 71.4: `qualifier` — приёмник квалифицированного вызова (`helpers::run`,
 /// `mod.fn`, `pkg.Func`, `obj.method`) или `self`/`cls`; None — голый вызов.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct CallSite {
     pub rel_path: String,
     pub line: usize,
@@ -1967,6 +1967,17 @@ impl AstCodeExtractor {
         known_hashes: Option<&HashMap<String, String>>,
         parse_one: &mut dyn FnMut(&str, &str, &mut AstScanResult) -> String,
     ) -> AstScanResult {
+        self.scan_directory_with_cache(root, known_hashes, None, parse_one)
+    }
+
+    /// Ф72b.5: скан каталога с content-addressed кэшем (`file_blobs` / blake3).
+    pub fn scan_directory_with_cache(
+        &self,
+        root: &Path,
+        known_hashes: Option<&HashMap<String, String>>,
+        mut try_restore: Option<&mut dyn FnMut(&str, &[u8], &mut AstScanResult) -> bool>,
+        parse_one: &mut dyn FnMut(&str, &str, &mut AstScanResult) -> String,
+    ) -> AstScanResult {
         let mut result = AstScanResult::default();
         let mut files_to_scan = Vec::new();
 
@@ -1994,6 +2005,12 @@ impl AstCodeExtractor {
                             "AST: файл {} ({} байт) превышает cap {} байт для '{}' — пропущен без парсинга",
                             rel_path, bytes.len(), spec.max_bytes, spec.name
                         );
+                        continue;
+                    }
+                }
+
+                if let Some(ref mut restore_fn) = try_restore {
+                    if restore_fn(&rel_path, &bytes, &mut result) {
                         continue;
                     }
                 }

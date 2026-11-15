@@ -2228,9 +2228,19 @@ impl AstParserDispatcher {
         root: &std::path::Path,
         known_hashes: Option<&std::collections::HashMap<String, String>>,
     ) -> AstScanResult {
+        self.scan_directory_with_cache(root, known_hashes, None)
+    }
+
+    /// Ф72b.5: скан каталога с content-addressed кэшем (`file_blobs`).
+    pub fn scan_directory_with_cache(
+        &self,
+        root: &std::path::Path,
+        known_hashes: Option<&std::collections::HashMap<String, String>>,
+        try_restore: Option<&mut dyn FnMut(&str, &[u8], &mut AstScanResult) -> bool>,
+    ) -> AstScanResult {
         self.regex
             .extractor()
-            .scan_directory_with(root, known_hashes, &mut |rel_path, content, out| {
+            .scan_directory_with_cache(root, known_hashes, try_restore, &mut |rel_path, content, out| {
                 self.parse_source(rel_path, content, out)
             })
     }
