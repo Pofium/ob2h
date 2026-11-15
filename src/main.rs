@@ -113,6 +113,25 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
             }
         }
+        Some(Commands::Reindex {
+            embeddings,
+            batch_size,
+        }) => {
+            if !embeddings {
+                anyhow::bail!("Укажите --embeddings для переиндексации векторов");
+            }
+            let report = ob2h::cli::reindex::reindex_embeddings(
+                &ctx.db,
+                &ctx.embedder,
+                batch_size,
+                true,
+            )
+            .await?;
+            println!(
+                "Переиндексация завершена: memories={}, graph_nodes={}, fingerprint={}",
+                report.memories_reindexed, report.graph_nodes_reindexed, report.fingerprint
+            );
+        }
         Some(Commands::Doctor { fix }) => {
             let doctor = ob2h::cli::Doctor::new(ctx.settings.clone(), fix).with_db(ctx.db.clone());
             doctor.run()?;

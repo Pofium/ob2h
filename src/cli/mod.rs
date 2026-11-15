@@ -5,6 +5,7 @@ pub mod db;
 pub mod dedup;
 pub mod doctor;
 pub mod lessons;
+pub mod reindex;
 pub mod secrets;
 pub use lessons::LessonsCommands;
 pub use secrets::{SecretsCli, SecretsCommands};
@@ -143,6 +144,15 @@ pub enum Commands {
         /// Сохранить агрегаты как baseline в docs/bench_baseline.md
         #[arg(long)]
         save_baseline: bool,
+    },
+    /// Пакетная переиндексация векторов при смене модели/бэкенда/чанкера (Ф72.4)
+    Reindex {
+        /// Переиндексировать эмбеддинги memories и graph_nodes
+        #[arg(long)]
+        embeddings: bool,
+        /// Размер батча (1..=128)
+        #[arg(long, default_value_t = 32)]
+        batch_size: usize,
     },
 }
 
