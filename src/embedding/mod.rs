@@ -400,6 +400,14 @@ impl EmbeddingProvider for CachedEmbeddingProvider {
     }
 }
 
+/// Санитайзер текста перед векторизацией (Ф72.6): удаляет API-ключи, токены и секреты.
+pub fn sanitize_for_embedding(text: &str) -> String {
+    if !crate::lifecycle::redact::enabled() || text.is_empty() {
+        return text.to_string();
+    }
+    crate::lifecycle::redact::redact_with(&[], text)
+}
+
 /// Выделенный пул воркеров с семафором для изоляции тяжелого инференса от Tokio MCP (Ф72.5).
 pub struct EmbeddingWorkerPool {
     inner: Arc<dyn EmbeddingProvider>,
@@ -425,7 +433,8 @@ impl EmbeddingProvider for EmbeddingWorkerPool {
             .acquire()
             .await
             .map_err(|e| anyhow::anyhow!("EmbeddingWorkerPool semaphore closed: {e}"))?;
-        self.inner.embed(texts).await
+        let sanitized: Vec<String> = texts.iter().map(|t| sanitize_for_embedding(t)).collect();
+        self.inner.embed(&sanitized).await
     }
 
     fn dim(&self) -> usize {
@@ -551,5 +560,32 @@ mod tests {
         assert!(pool.is_ready());
         let res = pool.embed(&["hello".to_string()]).await.unwrap();
         assert_eq!(res.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_worker_pool_sanitizes_secrets_before_embedding() {
+        struct CaptureProvider(Mutex<Vec<String>>);
+        #[async_trait]
+        impl EmbeddingProvider for CaptureProvider {
+            async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+                self.0.lock().unwrap().extend_from_slice(texts);
+                Ok(texts.iter().map(|_| vec![1.0, 0.0, 0.0, 0.0]).collect())
+            }
+            fn dim(&self) -> usize {
+                4
+            }
+        }
+
+        let cap = Arc::new(CaptureProvider(Mutex::new(Vec::new())));
+        let pool = EmbeddingWorkerPool::new(cap.clone(), 2);
+        let input = vec![
+            "API_KEY=supersecretvalue12345 sk-abcdef1234567890abcdef Bearer tok_9876543210".to_string(),
+        ];
+        pool.embed(&input).await.unwrap();
+        let seen = cap.0.lock().unwrap();
+        assert!(!seen[0].contains("supersecretvalue12345"));
+        assert!(!seen[0].contains("sk-abcdef1234567890abcdef"));
+        assert!(!seen[0].contains("tok_9876543210"));
+        assert!(seen[0].contains("[REDACTED"));
     }
 }
