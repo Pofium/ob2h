@@ -576,6 +576,18 @@ impl MemoryService {
         limit: usize,
         min_score: f32,
     ) -> anyhow::Result<Vec<(i64, f64)>> {
+        self.search_vector_for_project(query, None, limit, min_score)
+            .await
+    }
+
+    /// Векторный поиск в пространстве `memories` с опциональной фильтрацией по `project_id` (Ф72b.3).
+    pub async fn search_vector_for_project(
+        &self,
+        query: &str,
+        project_id: Option<&str>,
+        limit: usize,
+        min_score: f32,
+    ) -> anyhow::Result<Vec<(i64, f64)>> {
         if !self.embedder.is_ready() {
             // Stale-While-Revalidate (Ф72.5): не блокируем MCP-запрос при холодном старте,
             // запускаем прогрев в фоне и отвечаем по FTS5 + графу.
@@ -597,7 +609,14 @@ impl MemoryService {
 
         let q_vec = self.embedder.embed_query(query).await?;
         let scored = self.db.with_conn(|conn| {
-            crate::vector::bq::search_table_two_stage(conn, "memories", None, &q_vec, limit, min_score)
+            crate::vector::bq::search_namespace(
+                conn,
+                crate::vector::bq::VectorNamespace::Memories,
+                project_id,
+                &q_vec,
+                limit,
+                min_score,
+            )
         })?;
         Ok(scored.into_iter().map(|(id, s)| (id, s as f64)).collect())
     }

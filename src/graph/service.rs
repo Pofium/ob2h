@@ -244,6 +244,17 @@ impl GraphService {
     }
 
     pub async fn search(&self, query: &str, limit: usize, expand_hops: bool) -> anyhow::Result<GraphSearchResult> {
+        self.search_for_project(query, None, limit, expand_hops).await
+    }
+
+    /// Поиск по кодовому/знаниевому графу с опциональным партиционированием по `project_id` (Ф72b.3).
+    pub async fn search_for_project(
+        &self,
+        query: &str,
+        project_id: Option<&str>,
+        limit: usize,
+        expand_hops: bool,
+    ) -> anyhow::Result<GraphSearchResult> {
         let words: Vec<String> = query
             .split_whitespace()
             .filter(|w| w.chars().count() >= 3)
@@ -318,10 +329,9 @@ impl GraphService {
         // 2. Векторный скоринг
         if let Ok(q_vec) = self.embedder.embed_query(query).await {
             let q_vec = &q_vec;
-                // Ф35.1: при OB2H_VEC0=1 — vec0 (binary-первый проход + рескоринг
-                // настоящими векторами); индекс не готов/пуст → прежний полный
-                // перебор (флаг off — поведение не меняется вовсе).
-                let vec0_hits: Vec<(i64, f32)> = if crate::vector::vec0::enabled() {
+                // Ф35.1: при OB2H_VEC0=1 (без фильтра project_id) — vec0;
+                // иначе — партиционированный BQ two-stage по пространству AstNodes (Ф72b.3).
+                let vec0_hits: Vec<(i64, f32)> = if project_id.is_none() && crate::vector::vec0::enabled() {
                     let os = crate::vector::vec0::oversample();
                     self.db
                         .with_conn(|conn| crate::vector::vec0::search(conn, q_vec, limit, os))
@@ -334,10 +344,10 @@ impl GraphService {
                     vec0_hits
                 } else {
                     self.db.with_conn(|conn| {
-                        crate::vector::bq::search_table_two_stage(
+                        crate::vector::bq::search_namespace(
                             conn,
-                            "graph_nodes",
-                            None,
+                            crate::vector::bq::VectorNamespace::AstNodes,
+                            project_id,
                             q_vec,
                             limit,
                             0.0,

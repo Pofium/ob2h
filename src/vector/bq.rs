@@ -8,6 +8,37 @@ use rusqlite::{params, Connection};
 
 use crate::vector::similarity::{cosine, deserialize, top_k};
 
+/// Пространство имён для партиционированного векторного индекса (Ф72b.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorNamespace {
+    /// Долговременная память (`memories`).
+    Memories,
+    /// Узлы кодового/знаниевого графа (`graph_nodes`).
+    AstNodes,
+}
+
+impl VectorNamespace {
+    /// Имя SQL-таблицы пространства имён.
+    pub fn table(self) -> &'static str {
+        match self {
+            Self::Memories => "memories",
+            Self::AstNodes => "graph_nodes",
+        }
+    }
+}
+
+/// Поиск по партиционированному пространству имён с фильтрацией по `project_id` (Ф72b.3).
+pub fn search_namespace(
+    conn: &Connection,
+    ns: VectorNamespace,
+    project_id: Option<&str>,
+    q_vec: &[f32],
+    limit: usize,
+    min_score: f32,
+) -> rusqlite::Result<Vec<(i64, f32)>> {
+    search_table_two_stage(conn, ns.table(), project_id, q_vec, limit, min_score)
+}
+
 /// Дефолтный oversample для первой ступени BQ (400..800 кандидатов).
 pub const DEFAULT_BQ_OVERSAMPLE: usize = 400;
 
@@ -396,5 +427,53 @@ mod tests {
         b[0] = 0b0010_1010; // 1 бит
         b[47] = 0b1010_1011; // 1 бит
         assert_eq!(hamming_distance(&a, &b), 2);
+    }
+
+    #[test]
+    fn test_namespace_partitioning_isolates_memories_and_ast_nodes_by_project_id() {
+        let db = Database::in_memory().expect("db");
+        let v_a = vec![1.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let v_b = vec![0.99f32, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let mask_a = quantize_mean_centered(&v_a, None);
+        let mask_b = quantize_mean_centered(&v_b, None);
+
+        db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO memories (key, content, category, embedding, bq_mask, project_id, created_at, updated_at) \
+                 VALUES ('m_a', 'alpha', 'general', ?1, ?2, 'proj_a', datetime('now'), datetime('now'))",
+                params![serialize_q(&v_a), mask_a],
+            )?;
+            conn.execute(
+                "INSERT INTO memories (key, content, category, embedding, bq_mask, project_id, created_at, updated_at) \
+                 VALUES ('m_b', 'beta', 'general', ?1, ?2, 'proj_b', datetime('now'), datetime('now'))",
+                params![serialize_q(&v_b), mask_b],
+            )?;
+            conn.execute(
+                "INSERT INTO graph_nodes (node_id, node_type, label, embedding, bq_mask, project_id, created_at, updated_at) \
+                 VALUES ('fn:a', 'function', 'fn_a', ?1, ?2, 'proj_a', datetime('now'), datetime('now'))",
+                params![serialize_q(&v_a), mask_a],
+            )?;
+            conn.execute(
+                "INSERT INTO graph_nodes (node_id, node_type, label, embedding, bq_mask, project_id, created_at, updated_at) \
+                 VALUES ('fn:b', 'function', 'fn_b', ?1, ?2, 'proj_b', datetime('now'), datetime('now'))",
+                params![serialize_q(&v_b), mask_b],
+            )?;
+            Ok(())
+        })
+        .expect("seed");
+
+        db.with_conn(|conn| {
+            let mem_a = search_namespace(conn, VectorNamespace::Memories, Some("proj_a"), &v_a, 10, 0.0)?;
+            assert_eq!(mem_a.len(), 1);
+            let key: String = conn.query_row("SELECT key FROM memories WHERE id = ?1", params![mem_a[0].0], |r| r.get(0))?;
+            assert_eq!(key, "m_a");
+
+            let ast_b = search_namespace(conn, VectorNamespace::AstNodes, Some("proj_b"), &v_a, 10, 0.0)?;
+            assert_eq!(ast_b.len(), 1);
+            let nid: String = conn.query_row("SELECT node_id FROM graph_nodes WHERE id = ?1", params![ast_b[0].0], |r| r.get(0))?;
+            assert_eq!(nid, "fn:b");
+            Ok(())
+        })
+        .expect("search");
     }
 }
