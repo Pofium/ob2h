@@ -2,7 +2,21 @@
 
 use rusqlite::{params, Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
+
+/// M13 (v2.0, Ф73–Ф74): телеметрия U-PPR (`access_count`, `trust_score`, `status`
+/// для `SUPERSEDED`/`ACTIVE` на `graph_nodes`), временны́е границы `valid_until` и
+/// `git_head_sha` (git-anchored facts) на `memories`.
+pub const MIGRATION_V13: &str = r#"
+ALTER TABLE graph_nodes ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE graph_nodes ADD COLUMN trust_score REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE graph_nodes ADD COLUMN status TEXT NOT NULL DEFAULT 'ACTIVE';
+ALTER TABLE memories ADD COLUMN valid_until TEXT;
+ALTER TABLE memories ADD COLUMN git_head_sha TEXT;
+ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'ACTIVE';
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_status ON graph_nodes(status);
+CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status);
+"#;
 
 /// M2 (v0.9+): столбцы синхронизации. origin='' означает «создано/изменено этим
 /// узлом» (при экспорте нормализуется в origin из peers.json); deleted_at —
@@ -616,6 +630,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(MIGRATION_V12)?;
         populate_fts_subtokens(conn)?;
         conn.execute_batch(MIGRATION_V12_FTS_REBUILD)?;
+        conn.execute_batch(MIGRATION_V13)?;
     } else {
         if current_version < 2 {
             conn.execute_batch(MIGRATION_V2)?;
@@ -651,6 +666,9 @@ pub fn migrate(conn: &Connection) -> Result<()> {
             conn.execute_batch(MIGRATION_V12)?;
             populate_fts_subtokens(conn)?;
             conn.execute_batch(MIGRATION_V12_FTS_REBUILD)?;
+        }
+        if current_version < 13 {
+            conn.execute_batch(MIGRATION_V13)?;
         }
     }
 

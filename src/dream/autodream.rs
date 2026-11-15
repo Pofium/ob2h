@@ -132,6 +132,7 @@ impl AutoDreamWorker {
                 }
 
                 self.prune_daily();
+                let _ = crate::graph::telemetry::wal_maintenance(&self.db);
                 self.release_lock();
 
                 // after_dream: обмен с пирами (best-effort, не роняет дрим)

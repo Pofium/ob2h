@@ -49,6 +49,8 @@ pub struct AppContext {
     pub watcher: Arc<crate::project::ProjectWatcher>,
     /// Фоновые AST-сканы (project_scan без таймаута MCP-клиента).
     pub scan_jobs: Arc<crate::project::ScanJobManager>,
+    /// Буферизованная телеметрия обращений для U-PPR (Ф73.3).
+    pub telemetry: Arc<crate::graph::telemetry::AccessTelemetryBuffer>,
 }
 
 pub struct McpServer {
@@ -201,6 +203,10 @@ impl McpServer {
 
         // stdin закрыт — дожидаемся хвостовых задач.
         while tasks.join_next().await.is_some() {}
+
+        // Ф73.3: сброс буферизованной телеметрии и усечение WAL при graceful shutdown.
+        let _ = self.ctx.telemetry.flush(&self.ctx.db);
+        let _ = crate::graph::telemetry::wal_maintenance(&self.ctx.db);
 
         Ok(())
     }

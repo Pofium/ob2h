@@ -106,6 +106,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         project.clone(),
         db.conn_arc(),
     ));
+    let telemetry = Arc::new(crate::graph::telemetry::AccessTelemetryBuffer::default());
 
     Ok(Arc::new(AppContext {
         settings,
@@ -131,6 +132,7 @@ pub fn init_app(settings: Settings) -> anyhow::Result<Arc<AppContext>> {
         active_project_id,
         watcher,
         scan_jobs,
+        telemetry,
     }))
 }
 
