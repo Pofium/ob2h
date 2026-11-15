@@ -864,10 +864,6 @@ impl McpServer {
                 }
             }
             "memory_feedback" => {
-                let key = match args.get("key").and_then(|v| v.as_str()) {
-                    Some(k) => k,
-                    None => return "[Error] key is required".to_string(),
-                };
                 let verdict = match args.get("verdict").and_then(|v| v.as_str()) {
                     Some(v) => v,
                     None => {
@@ -876,6 +872,25 @@ impl McpServer {
                     }
                 };
                 let note = args.get("note").and_then(|v| v.as_str());
+                if let Some(node_id) = args.get("node_id").and_then(|v| v.as_str()) {
+                    return match crate::graph::telemetry::mute_graph_node(&self.ctx.db, node_id) {
+                        Ok(Some(trust_score)) => {
+                            self.audit_op(
+                                "memory_feedback",
+                                vec![node_id.to_string()],
+                                serde_json::json!({ "node_id": node_id, "verdict": verdict, "trust_score": trust_score, "note": note }),
+                                "memory_feedback",
+                            );
+                            format!("node muted node_id={node_id} trust_score={trust_score:.3}")
+                        }
+                        Ok(None) => format!("not found node_id={node_id}"),
+                        Err(e) => format!("[Error] {e}"),
+                    };
+                }
+                let key = match args.get("key").and_then(|v| v.as_str()) {
+                    Some(k) => k,
+                    None => return "[Error] key is required".to_string(),
+                };
                 match self.ctx.memory.record_feedback(key, verdict, note) {
                     Ok(Some(trust)) => {
                         self.audit_op(
@@ -1083,7 +1098,10 @@ impl McpServer {
                     ..Default::default()
                 };
                 match self.ctx.memory.build_context(limit, query, &opts).await {
-                    Ok(ctx) => ctx,
+                    Ok(ctx) => {
+                        let _ = self.ctx.telemetry.maybe_flush(&self.ctx.db);
+                        ctx
+                    }
                     Err(e) => format!("[Error] {e}"),
                 }
             }
@@ -1509,6 +1527,9 @@ impl McpServer {
                         .await
                     {
                         if !pc.records.is_empty() {
+                            let mem_ids: Vec<i64> = pc.records.iter().map(|r| r.0.id).collect();
+                            self.ctx.telemetry.record_memory_hits(&mem_ids);
+                            let _ = self.ctx.telemetry.maybe_flush(&self.ctx.db);
                             memory_block = format!(
                                 "memory_confidence: {:.3}\nmemory_nodes: {} (truncated={}, {} ms)\n{}",
                                 pc.confidence,
@@ -1549,6 +1570,9 @@ impl McpServer {
                                     )
                                     .await
                                 {
+                                    let hit_ids: Vec<i64> = hits.iter().map(|h| h.node_id).collect();
+                                    self.ctx.telemetry.record_graph_hits(&hit_ids);
+                                    let _ = self.ctx.telemetry.maybe_flush(&self.ctx.db);
                                     let lines: Vec<String> = hits
                                         .iter()
                                         .map(|h| {
@@ -2072,7 +2096,19 @@ impl McpServer {
                         min_confidence,
                     )
                 }) {
-                    Ok(imp) => imp.markdown_summary,
+                    Ok(imp) => {
+                        if let Ok(pks) = self.ctx.db.with_conn(|conn| {
+                            let mut stmt = conn.prepare(
+                                "SELECT id FROM graph_nodes WHERE project_id = ?1 AND (node_id = ?2 OR label = ?2) LIMIT 16",
+                            )?;
+                            let rows = stmt.query_map(rusqlite::params![id, imp.target_symbol], |r| r.get::<_, i64>(0))?;
+                            Ok(rows.flatten().collect::<Vec<_>>())
+                        }) {
+                            self.ctx.telemetry.record_graph_hits(&pks);
+                            let _ = self.ctx.telemetry.maybe_flush(&self.ctx.db);
+                        }
+                        imp.markdown_summary
+                    }
                     Err(e) => format!("[Error] {e}"),
                 }
             }

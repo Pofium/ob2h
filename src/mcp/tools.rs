@@ -430,18 +430,19 @@ pub fn list_tools() -> Vec<McpToolDef> {
                 "required": ["symbol_or_path"]
             }),
         },
-        // 26. memory_feedback (v1.3, Фаза 23)
+        // 26. memory_feedback (v1.3, Фаза 23; +node_id Mute Node в v2.0 Ф73.6)
         McpToolDef {
             name: "memory_feedback".to_string(),
-            description: "Фидбек по записи памяти: корректирует trust (доверие). helpful +0.15 | unhelpful −0.2 | outdated −0.3. Записи с trust < 0.15 помечаются candidate_for_forget (не удаляются автоматически).".to_string(),
+            description: "Фидбек по записи памяти или узлу графа: корректирует trust (helpful +0.15 | unhelpful −0.2 | outdated −0.3) либо при передаче node_id выполняет Mute Node (trust_score *= 0.3).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "key": { "type": "string", "description": "Ключ воспоминания" },
+                    "key": { "type": "string", "description": "Ключ воспоминания (обязателен без node_id)" },
+                    "node_id": { "type": "string", "description": "ID узла графа (graph_nodes.node_id или числовой pk) для Mute Node (trust_score *= 0.3, Ф73.6)" },
                     "verdict": { "type": "string", "enum": ["helpful", "unhelpful", "outdated"], "description": "Вердикт агента по полезности записи" },
                     "note": { "type": "string", "description": "Комментарий (опционально)" }
                 },
-                "required": ["key", "verdict"]
+                "required": ["verdict"]
             }),
         },
         // 27–33. Ralph Knowledge Layer (v1.3, Фазы 26–27; контракт — спека §5)
