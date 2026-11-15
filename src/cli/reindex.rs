@@ -191,16 +191,16 @@ mod tests {
         let db = Database::in_memory().unwrap();
         db.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO memories (key, content, category, importance) VALUES ('k1', 'тест памяти', 'fact', 0.8)",
+                "INSERT INTO memories (key, content, category, importance, created_at, updated_at) VALUES ('k1', 'тест памяти', 'fact', 0.8, '2026-11-15T00:00:00Z', '2026-11-15T00:00:00Z')",
                 [],
             )?;
             conn.execute(
-                "INSERT INTO graph_nodes (node_id, label, node_type, file_path, provenance) VALUES ('fn:a:f', 'f', 'Function', 'src/a.rs', 'SYNTAX')",
+                "INSERT INTO graph_nodes (node_id, label, node_type, file_path, provenance, created_at, updated_at) VALUES ('fn:a:f', 'f', 'Function', 'src/a.rs', 'SYNTAX', '2026-11-15T00:00:00Z', '2026-11-15T00:00:00Z')",
                 [],
             )?;
             // Генерированный stub должен пропускаться
             conn.execute(
-                "INSERT INTO graph_nodes (node_id, label, node_type, file_path, provenance) VALUES ('fn:b:g', 'g', 'Function', 'lib/foo.g.dart', 'SYNTAX')",
+                "INSERT INTO graph_nodes (node_id, label, node_type, file_path, provenance, created_at, updated_at) VALUES ('fn:b:g', 'g', 'Function', 'lib/foo.g.dart', 'SYNTAX', '2026-11-15T00:00:00Z', '2026-11-15T00:00:00Z')",
                 [],
             )?;
             Ok(())
