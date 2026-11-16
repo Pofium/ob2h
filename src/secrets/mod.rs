@@ -3,6 +3,7 @@
 pub mod crypto;
 pub mod ipc;
 pub mod pin_input;
+pub mod pin_spawn;
 pub mod service;
 
 /// Локальное окно ввода PIN (egui/eframe) — только при feature `gui`.
@@ -11,4 +12,5 @@ pub mod pin_gui;
 
 pub use crypto::KdfParams;
 pub use ipc::{IpcClient, IpcServer};
+pub use pin_spawn::{dialog_decision, parse_outcome, spawn_allowed, timeout_secs_from_env, PinPromptOutcome};
 pub use service::SecretsService;

@@ -126,6 +126,90 @@ impl McpServer {
             crate::lifecycle::audit::record(conn, "agent", action, &targets, details, tool)
         });
     }
+}
+
+/// Операция secrets_set/secrets_get для [`McpServer::secrets_op_with_pin_dialog`].
+enum SecretsOp<'a> {
+    Set {
+        name: &'a str,
+        value: &'a str,
+        hint: Option<&'a str>,
+    },
+    Get {
+        name: &'a str,
+    },
+}
+
+impl McpServer {
+    /// Выполнить операцию без диалога (аудит — только при успехе, Ф68/ADR-21:
+    /// имена, никогда значения).
+    fn run_secrets_op(&self, op: &SecretsOp<'_>) -> Result<String, String> {
+        match op {
+            SecretsOp::Set { name, value, hint } => {
+                self.ctx
+                    .secrets
+                    .set(name, value, *hint)
+                    .map(|_| {
+                        self.audit_op(
+                            "secrets_set",
+                            vec![(*name).to_string()],
+                            serde_json::json!({ "hint": hint }),
+                            "secrets_set",
+                        );
+                        format!("✓ Секрет \"{name}\" успешно зашифрован и сохранен")
+                    })
+                    .map_err(|e| e.to_string())
+            }
+            SecretsOp::Get { name } => self
+                .ctx
+                .secrets
+                .get(name)
+                .map(|val| {
+                    self.audit_op(
+                        "secrets_get",
+                        vec![(*name).to_string()],
+                        serde_json::json!({}),
+                        "secrets_get",
+                    );
+                    val.to_string()
+                })
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    /// Issue #1: `secrets_set`/`secrets_get` при locked сейфе — PIN-диалог
+    /// через spawn-хелпер `ob2h secrets ask-pin` (гейт: gui-сборка +
+    /// `OB2H_PIN_GUI!=0`; таймаут `OB2H_PIN_TIMEOUT_SECS`). PIN вводится
+    /// локально в окне — через MCP/LLM/чат не проходит (ADR-18); в аудит
+    /// попадает только имя операции (ADR-21). Headless/отмена/таймаут
+    /// возвращают контракт v2.0.0 (locked-ошибка с подсказкой про CLI);
+    /// отмена — `[Error] ввод PIN отменён пользователем` без ретраев окна.
+    async fn secrets_op_with_pin_dialog(&self, op: SecretsOp<'_>) -> String {
+        match self.run_secrets_op(&op) {
+            Ok(msg) => msg,
+            Err(err) => {
+                // Диалог имеет смысл только при locked; иные ошибки — как раньше.
+                if !err.contains("secrets locked") {
+                    return err;
+                }
+                let outcome = crate::secrets::pin_spawn::prompt_pin_via_helper().await;
+                match crate::secrets::dialog_decision(&outcome, &err) {
+                    Ok(pin) => {
+                        // verifier-проверка PIN + сессия с новым TTL; неверный
+                        // PIN — контрактная ошибка «неверный PIN-код».
+                        if let Err(e) = self.ctx.secrets.unlock(&pin) {
+                            return e.to_string();
+                        }
+                        match self.run_secrets_op(&op) {
+                            Ok(msg) => msg,
+                            Err(e) => e,
+                        }
+                    }
+                    Err(msg) => msg,
+                }
+            }
+        }
+    }
 
     pub fn truncate(&self, text: &str) -> String {
         let max_chars = self.ctx.settings.max_tool_output_chars;
@@ -2230,19 +2314,8 @@ impl McpServer {
                 };
                 let hint = args.get("hint").and_then(|v| v.as_str());
 
-                match self.ctx.secrets.set(name, value, hint) {
-                    Ok(()) => {
-                        // Ф68: в аудит — только имя (значение не пишется НИКОГДА, ADR-21)
-                        self.audit_op(
-                            "secrets_set",
-                            vec![name.to_string()],
-                            serde_json::json!({ "hint": hint }),
-                            "secrets_set",
-                        );
-                        format!("✓ Секрет \"{name}\" успешно зашифрован и сохранен")
-                    }
-                    Err(e) => format!("{e}"),
-                }
+                self.secrets_op_with_pin_dialog(SecretsOp::Set { name, value, hint })
+                    .await
             }
             "secrets_get" => {
                 let name = match args.get("name").and_then(|v| v.as_str()) {
@@ -2250,19 +2323,7 @@ impl McpServer {
                     None => return "[Error] name is required".to_string(),
                 };
 
-                match self.ctx.secrets.get(name) {
-                    Ok(val) => {
-                        // Ф68: фиксация доступа к значению секрета (имя, не значение)
-                        self.audit_op(
-                            "secrets_get",
-                            vec![name.to_string()],
-                            serde_json::json!({}),
-                            "secrets_get",
-                        );
-                        val.to_string()
-                    }
-                    Err(e) => format!("{e}"),
-                }
+                self.secrets_op_with_pin_dialog(SecretsOp::Get { name }).await
             }
             "secrets_delete" => {
                 let name = match args.get("name").and_then(|v| v.as_str()) {

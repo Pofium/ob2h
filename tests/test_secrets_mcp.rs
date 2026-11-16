@@ -82,3 +82,25 @@ async fn test_secrets_mcp_flow() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Issue #1: гейт PIN-диалога из MCP. При `OB2H_PIN_GUI=0` поведение v2.0.0 —
+/// прежняя locked-ошибка с подсказкой про CLI (окно из MCP не спавнится).
+#[tokio::test]
+async fn test_secrets_locked_pin_gui_gate_preserves_v2_contract() {
+    let tmp = tempdir().expect("tempdir");
+    let mut settings = Settings::default();
+    settings.data_dir = tmp.path().to_path_buf();
+    settings.embed_provider = "fake".to_string();
+
+    let ctx = init_app(settings).expect("init_app");
+    ctx.secrets.init("1234", None).expect("init vault");
+    let server = McpServer::new(ctx);
+
+    std::env::set_var("OB2H_PIN_GUI", "0");
+    let res = server
+        .call_tool("secrets_get", json!({ "name": "api_key" }))
+        .await;
+    std::env::remove_var("OB2H_PIN_GUI");
+    assert!(res.contains("[Error] secrets locked"), "got: {res}");
+    assert!(res.contains("secrets unlock"), "подсказка про CLI сохранена: {res}");
+}

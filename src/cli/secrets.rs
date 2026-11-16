@@ -28,6 +28,14 @@ pub enum SecretsCommands {
         /// Имя секрета
         name: String,
     },
+    /// Скрытый хелпер PIN-диалога для MCP (issue #1): окно в отдельном процессе,
+    /// результат — JSON в stdout. Не для ручного вызова.
+    #[command(hide = true)]
+    AskPin {
+        /// Назначение ввода: unlock | new | confirm
+        #[arg(long, default_value = "unlock")]
+        purpose: String,
+    },
 }
 
 /// Итог попытки графического ввода PIN.
@@ -149,6 +157,40 @@ fn resolve_new_pin(invalid_msg: &str, mismatch_msg: &str) -> anyhow::Result<Opti
     }
 }
 
+/// Парсинг `--purpose` хелпера ask-pin (issue #1). Неизвестное — unlock (дефолт).
+pub fn parse_purpose(raw: &str) -> PinPurpose {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "new" => PinPurpose::New,
+        "confirm" => PinPurpose::Confirm,
+        "current" => PinPurpose::Current,
+        _ => PinPurpose::Unlock,
+    }
+}
+
+/// Итог окна ask-pin → (JSON stdout, код выхода).
+///
+/// Гейт окна — как в CLI: gui-сборка и `OB2H_PIN_GUI!=0`; иначе «недоступно».
+/// PIN уходит только в stdout родительского процесса ob2h — не в логи/аудит
+/// (ADR-18/ADR-21).
+fn ask_pin_outcome_json(purpose: PinPurpose) -> (String, i32) {
+    #[cfg(feature = "gui")]
+    {
+        if !crate::secrets::pin_input::gui_disabled_by_env() {
+            return match crate::secrets::pin_gui::ask_pin(purpose) {
+                Ok(Some(pin)) => (
+                    serde_json::json!({ "outcome": "pin", "pin": pin }).to_string(),
+                    0,
+                ),
+                Ok(None) => (r#"{"outcome":"cancelled"}"#.to_string(), 0),
+                Err(_) => (r#"{"outcome":"unavailable"}"#.to_string(), 1),
+            };
+        }
+    }
+    #[cfg(not(feature = "gui"))]
+    let _ = purpose;
+    (r#"{"outcome":"unavailable"}"#.to_string(), 1)
+}
+
 pub struct SecretsCli;
 
 #[cfg(test)]
@@ -169,6 +211,25 @@ mod tests {
     #[test]
     fn tty_gate_passes_for_terminal() {
         assert!(ensure_terminal_input(true).is_ok());
+    }
+
+    /// Issue #1: парсинг --purpose хелпера ask-pin.
+    #[test]
+    fn ask_pin_purpose_parsing() {
+        assert_eq!(parse_purpose("unlock"), PinPurpose::Unlock);
+        assert_eq!(parse_purpose("NEW"), PinPurpose::New);
+        assert_eq!(parse_purpose(" confirm "), PinPurpose::Confirm);
+        // Неизвестное и пустое — дефолт unlock.
+        assert_eq!(parse_purpose("что-то"), PinPurpose::Unlock);
+        assert_eq!(parse_purpose(""), PinPurpose::Unlock);
+    }
+
+    /// Issue #1: JSON-протокол хелпера — в не-gui окружении недоступно (exit 1).
+    #[test]
+    fn ask_pin_outcome_json_unavailable_without_gui() {
+        let (json, code) = ask_pin_outcome_json(PinPurpose::Unlock);
+        assert_eq!(json, r#"{"outcome":"unavailable"}"#);
+        assert_eq!(code, 1);
     }
 }
 
@@ -340,6 +401,17 @@ impl SecretsCli {
                     Err(e) => {
                         eprintln!("❌ {e}");
                     }
+                }
+            }
+
+            SecretsCommands::AskPin { purpose } => {
+                // Issue #1: окно eframe — главный поток ЭТОГО процесса; результат —
+                // JSON в stdout родителя. Родитель (MCP-сервер) разблокирует себя сам.
+                let purpose = parse_purpose(&purpose);
+                let (json, code) = ask_pin_outcome_json(purpose);
+                println!("{json}");
+                if code != 0 {
+                    std::process::exit(code);
                 }
             }
         }

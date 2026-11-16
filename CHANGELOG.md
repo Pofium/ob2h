@@ -8,6 +8,7 @@
 ### Added
 - **Ф78 (заказ владельца)**: дрим читает daily-логы напрямую (`dream_status`/`dream_log` в stats — опциональное поле `daily`: сколько записей потреблено из daily помимо history.jsonl); `Workspace.read_daily_from_offsets` + курсор `.daily_dream_cursor`; daily-оффсеты двигаются только при успехе прогона.
 - **Issue #2.3 — ETA прогрева эмбеддера**: degraded-ответ `memory_search` при `warming_up_embeddings` дополнен оценкой `warming_seconds_left` (скользящее среднее последних 10 прогревов, kv `metrics.embedder_warm_*`); без истории — `warming_seconds_elapsed` с пометкой «первый прогрев».
+- **Issue #1 — PIN-диалог сейфа из MCP**: `secrets_set`/`secrets_get` при locked сейфе спавнят скрытый хелпер `ob2h secrets ask-pin` (тот же бинарник, окно eframe в отдельном процессе); PIN вводится локально в окне и по локальному pipe попадает в сервер (Argon2id+verifier, новый TTL) — через MCP/LLM/чат PIN не проходит (ADR-18). Гейты: gui-сборка + `OB2H_PIN_GUI!=0` (дефолт on); таймаут окна `OB2H_PIN_TIMEOUT_SECS` (дефолт 60); Cancelled → `[Error] ввод PIN отменён пользователем` без ретраев; headless/без-gui — контракт v2.0.0 с подсказкой про CLI. Поток UX: docs/HERMES_INTEGRATION (аддендум v2.0.1).
 
 ### Changed
 - **Issue #2.4 — CLI backup**: добавлены подкоманды `ob2h backup create [--scope full|quick]` и `ob2h backup verify <path>` (хелп и доки согласованы); старые флаговые формы `ob2h backup --scope ...` / `--verify <path>` сохранены.
