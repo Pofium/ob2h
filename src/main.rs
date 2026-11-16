@@ -5,8 +5,8 @@ use std::sync::Arc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use ob2h::cli::{
-    BenchCommands, Cli, Commands, DbCommands, DreamCommands, ModelsCommands, PluginCommands,
-    SelfCommands, ServiceCommands, SyncCommands, UpdateCommands, Vec0Commands,
+    BackupCommands, BenchCommands, Cli, Commands, DbCommands, DreamCommands, ModelsCommands,
+    PluginCommands, SelfCommands, ServiceCommands, SyncCommands, UpdateCommands, Vec0Commands,
 };
 use chrono::DateTime;
 use ob2h::update::{check_update, current_version, download_and_apply, notify_user, CheckResult};
@@ -211,7 +211,17 @@ async fn main() -> anyhow::Result<()> {
                 println!("{output}");
             }
         },
-        Some(Commands::Backup { scope, verify }) => {
+        Some(Commands::Backup {
+            command,
+            scope,
+            verify,
+        }) => {
+            // Issue #2.4: подкоманды create/verify; старые формы (--scope, --verify) живы.
+            let (scope, verify) = match command {
+                Some(BackupCommands::Create { scope }) => (scope, None),
+                Some(BackupCommands::Verify { path }) => (scope, Some(path)),
+                None => (scope, verify),
+            };
             if let Some(path) = verify {
                 let report = ctx.backup.verify(std::path::Path::new(&path))?;
                 println!("{report}");

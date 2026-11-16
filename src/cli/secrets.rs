@@ -44,6 +44,20 @@ enum GuiPrompt {
     Cancelled,
 }
 
+/// Контрактовая ошибка при неинтерактивном stdin (issue #2.1): rpassword без
+/// терминала висит вечно — автоматизация должна получать отказ сразу.
+const PIN_NO_TTY_ERROR: &str = "[Error] PIN-запрос требует интерактивный терминал или GUI-сборку [Подсказка: OB2H_PIN_GUI=1 + билд с --features gui, либо выполните unlock вручную]";
+
+/// Чистая логика TTY-гейта (вынесена для тестов): `Ok(())` — терминальный ввод
+/// разрешён; `Err(msg)` — контрактовая ошибка для неинтерактивного stdin.
+fn ensure_terminal_input(is_tty: bool) -> Result<(), String> {
+    if is_tty {
+        Ok(())
+    } else {
+        Err(PIN_NO_TTY_ERROR.to_string())
+    }
+}
+
 /// Запрашивает одиночный PIN через локальное окно (feature `gui`).
 ///
 /// Вызывается до первого `.await` команды: окну eframe нужен главный поток процесса.
@@ -95,6 +109,8 @@ fn resolve_pin(purpose: PinPurpose, terminal_prompt: &str) -> anyhow::Result<Opt
             Ok(None)
         }
         GuiPrompt::Unavailable => {
+            ensure_terminal_input(std::io::IsTerminal::is_terminal(&std::io::stdin()))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
             let pin = rpassword::prompt_password(terminal_prompt)?.trim().to_string();
             Ok(Some(pin))
         }
@@ -112,6 +128,8 @@ fn resolve_new_pin(invalid_msg: &str, mismatch_msg: &str) -> anyhow::Result<Opti
             Ok(None)
         }
         GuiPrompt::Unavailable => {
+            ensure_terminal_input(std::io::IsTerminal::is_terminal(&std::io::stdin()))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
             let pin = rpassword::prompt_password("Введите новый PIN (ровно 4 цифры): ")?
                 .trim()
                 .to_string();
@@ -132,6 +150,27 @@ fn resolve_new_pin(invalid_msg: &str, mismatch_msg: &str) -> anyhow::Result<Opti
 }
 
 pub struct SecretsCli;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #2.1: неинтерактивный stdin — контрактовая ошибка, не зависание.
+    #[test]
+    fn no_tty_gives_contract_error() {
+        let err = ensure_terminal_input(false).expect_err("non-tty должен отклоняться");
+        assert!(err.starts_with("[Error] PIN-запрос требует интерактивный терминал"));
+        assert!(err.contains("[Подсказка:"));
+        // Подсказка упоминает оба выхода: GUI-сборку и ручной CLI unlock.
+        assert!(err.contains("--features gui"));
+        assert!(err.contains("unlock"));
+    }
+
+    #[test]
+    fn tty_gate_passes_for_terminal() {
+        assert!(ensure_terminal_input(true).is_ok());
+    }
+}
 
 impl SecretsCli {
     pub async fn handle(

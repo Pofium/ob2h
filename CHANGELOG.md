@@ -7,8 +7,14 @@
 
 ### Added
 - **Ф78 (заказ владельца)**: дрим читает daily-логы напрямую (`dream_status`/`dream_log` в stats — опциональное поле `daily`: сколько записей потреблено из daily помимо history.jsonl); `Workspace.read_daily_from_offsets` + курсор `.daily_dream_cursor`; daily-оффсеты двигаются только при успехе прогона.
+- **Issue #2.3 — ETA прогрева эмбеддера**: degraded-ответ `memory_search` при `warming_up_embeddings` дополнен оценкой `warming_seconds_left` (скользящее среднее последних 10 прогревов, kv `metrics.embedder_warm_*`); без истории — `warming_seconds_elapsed` с пометкой «первый прогрев».
+
+### Changed
+- **Issue #2.4 — CLI backup**: добавлены подкоманды `ob2h backup create [--scope full|quick]` и `ob2h backup verify <path>` (хелп и доки согласованы); старые флаговые формы `ob2h backup --scope ...` / `--verify <path>` сохранены.
 
 ### Fixed
+- **Issue #2.1 — CLI secrets без TTY**: `secrets unlock/init/rekey/list/show` при stdin ≠ TTY больше не зависают на `rpassword` — сразу контрактная ошибка `[Error] PIN-запрос требует интерактивный терминал или GUI-сборку [Подсказка: …]` (живой тест v2.0.0: `ob2h secrets unlock </dev/null` не завершался >2 мин).
+- **Issue #2.2 — `memory_feedback` без key**: контрактная ошибка с подсказкой, где взять key (поле `key` результата `memory_search`/`memory_save`), и что id уроков (`lsn_*`) не подходит.
 - **ask_json** (`memory_feedback`/`knowledge_reconcile`/дрим-фазы 2/ревизии): LLM-ответ с пояснительным хвостом после JSON («Note: …») больше не валит парсинг — `clean_json_markdown` вырезает первое сбалансированное JSON-значение (симптом: дрим run 104 — запись съедена, edits=0).
 - **Ralph (75.1)**: `attach_git_head_sha` сохраняет исходную meta finding'а при отсутствии git-корня/ша (ранний `?` терял `ceiling`/`no_trigger` и ломал debt-леджер в `ralph_report`).
 

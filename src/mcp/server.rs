@@ -705,9 +705,19 @@ impl McpServer {
                 };
 
                 let warming_up = !self.ctx.memory.is_embedder_ready();
+                // Issue #2.3: ETA прогрева (фиксация старта/усреднение завершённого).
+                let warm_suffix = if warming_up {
+                    format!(
+                        " ({})",
+                        crate::memory::format_warming_suffix(&self.ctx.memory.warmup_eta())
+                    )
+                } else {
+                    self.ctx.memory.warmup_eta();
+                    String::new()
+                };
                 if hits.is_empty() {
                     if warming_up {
-                        return "ничего не найдено\n[degraded_mode: \"warming_up_embeddings\"]".to_string();
+                        return format!("ничего не найдено\n[degraded_mode: \"warming_up_embeddings\"{warm_suffix}]");
                     }
                     return "ничего не найдено".to_string();
                 }
@@ -815,7 +825,9 @@ impl McpServer {
                         "\n[warn] эмбеддинги деградированы (fallback: fake) — семантический режим недостоверен",
                     );
                 } else if warming_up {
-                    out.push_str("\n[degraded_mode: \"warming_up_embeddings\"]");
+                    out.push_str(&format!(
+                        "\n[degraded_mode: \"warming_up_embeddings\"{warm_suffix}]"
+                    ));
                 }
                 out
             }
@@ -889,7 +901,10 @@ impl McpServer {
                 }
                 let key = match args.get("key").and_then(|v| v.as_str()) {
                     Some(k) => k,
-                    None => return "[Error] key is required".to_string(),
+                    None => {
+                        return "[Error] key is required [Подсказка: key записи памяти из memory_search/memory_save; id уроков (lsn_*) не подходит — feedback только про записи памяти]"
+                            .to_string()
+                    }
                 };
                 match self.ctx.memory.record_feedback(key, verdict, note) {
                     Ok(Some(trust)) => {

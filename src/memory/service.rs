@@ -13,6 +13,7 @@ use crate::graph::pagerank::{
     MAX_ITER,
 };
 use crate::vector::{rrf_merge, serialize_q, similarity::{cosine, deserialize}};
+use chrono::Utc;
 
 /// Ф31.1: порог identity-дубля при save («одно и то же» → тихий UPDATE).
 pub const COS_IDENTITY: f32 = 0.98;
@@ -25,6 +26,63 @@ pub struct MemoryHit {
     pub record: MemoryRecord,
     pub score: f64,
     pub match_type: String, // "fts" | "vector" | "hybrid"
+}
+
+/// Оценка прогрева эмбеддера (issue #2.3): elapsed текущего прогрева и оценка
+/// остатка по среднему времени прошлых прогревов (kv `metrics.embedder_warm_*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WarmupEta {
+    /// Секунд с начала текущего прогрева (0 — прогрева нет/завершён).
+    pub elapsed_secs: u64,
+    /// Оценка оставшихся секунд; None — истории прогревов ещё нет.
+    pub left_secs: Option<u64>,
+}
+
+/// kv-ключи ETA-трекера прогрева (issue #2.3).
+pub(crate) const KV_WARM_STARTED: &str = "metrics.embedder_warm_started_ts";
+pub(crate) const KV_WARM_AVG: &str = "metrics.embedder_warm_avg_secs";
+pub(crate) const KV_WARM_SAMPLES: &str = "metrics.embedder_warm_samples";
+/// Метка старта старше этого порога (рестарт сервера посреди прогрева) не
+/// усредняется и не даёт ETA.
+const WARM_STALE_SECS: i64 = 3600;
+/// Ёмкость скользящего среднего (последние N завершённых прогревов).
+const WARM_SAMPLES_CAP: f64 = 10.0;
+
+/// Чистая логика ETA (вынесена для тестов): по готовности эмбеддера, метке
+/// старта и среднему прошлых прогревов — elapsed и оценка остатка.
+pub fn warmup_eta_from(
+    is_ready: bool,
+    started_ts: Option<i64>,
+    now_ts: i64,
+    avg_secs: Option<f64>,
+) -> WarmupEta {
+    if is_ready {
+        return WarmupEta {
+            elapsed_secs: 0,
+            left_secs: Some(0),
+        };
+    }
+    let elapsed = started_ts
+        .filter(|st| *st > 0 && now_ts - *st >= 0)
+        .map(|st| (now_ts - st) as u64)
+        .unwrap_or(0);
+    let left = avg_secs.map(|a| (a - elapsed as f64).max(0.0).round() as u64);
+    WarmupEta {
+        elapsed_secs: elapsed,
+        left_secs: left,
+    }
+}
+
+/// Суффикс degraded-маркера `warming_up_embeddings` (issue #2.3): с историей
+/// прогревов — ETA, без неё — честный elapsed с пометкой первого прогрева.
+pub fn format_warming_suffix(eta: &WarmupEta) -> String {
+    match eta.left_secs {
+        Some(left) => format!("warming_seconds_left={left}"),
+        None => format!(
+            "warming_seconds_elapsed={} (первый прогрев — ETA неизвестен)",
+            eta.elapsed_secs
+        ),
+    }
 }
 
 pub struct MemoryService {
@@ -48,6 +106,89 @@ impl MemoryService {
     /// Готов ли эмбеддер к немедленному инференсу (false во время холодного старта, Ф72.5).
     pub fn is_embedder_ready(&self) -> bool {
         self.embedder.is_ready()
+    }
+
+    /// Среднее время прошлых прогревов, сек (None — история ещё не набрана).
+    fn warm_avg_secs(&self) -> Option<f64> {
+        let samples: f64 = self
+            .db
+            .get_kv(KV_WARM_SAMPLES)
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0);
+        if samples < 1.0 {
+            return None;
+        }
+        self.db
+            .get_kv(KV_WARM_AVG)
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+    }
+
+    /// Issue #2.3: ETA прогрева эмбеддера для degraded-ответа memory_search.
+    ///
+    /// Сторона-эффект (дешёвая, раз за жизненный цикл): старт незавершённого
+    /// прогрева фиксируется в kv; завершённый прогрев усредняется
+    /// (скользящее среднее до [`WARM_SAMPLES_CAP`] замеров) и метка сбрасывается.
+    pub fn warmup_eta(&self) -> WarmupEta {
+        let now = Utc::now().timestamp();
+        let ready = self.embedder.is_ready();
+        let started: Option<i64> = self
+            .db
+            .get_kv(KV_WARM_STARTED)
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok())
+            .filter(|st| *st > 0);
+
+        if ready {
+            // Прогрев завершён: усреднить длительность (незастарелую) и сбросить метку.
+            if let Some(st) = started {
+                let duration = now - st;
+                if (0..=WARM_STALE_SECS).contains(&duration) {
+                    let avg: f64 = self
+                        .db
+                        .get_kv(KV_WARM_AVG)
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.0);
+                    let n: f64 = self
+                        .db
+                        .get_kv(KV_WARM_SAMPLES)
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0.0);
+                    let new_n = (n + 1.0).min(WARM_SAMPLES_CAP);
+                    let new_avg = if n < 1.0 {
+                        duration as f64
+                    } else {
+                        avg + (duration as f64 - avg) / new_n
+                    };
+                    let _ = self.db.set_kv(KV_WARM_AVG, &format!("{new_avg:.1}"));
+                    let _ = self.db.set_kv(KV_WARM_SAMPLES, &format!("{}", new_n as i64));
+                }
+                let _ = self.db.set_kv(KV_WARM_STARTED, "0");
+            }
+            return WarmupEta {
+                elapsed_secs: 0,
+                left_secs: Some(0),
+            };
+        }
+
+        // Прогрев идёт: без метки — зафиксировать старт (первый degraded-запрос).
+        let started = match started {
+            Some(st) => Some(st),
+            None => {
+                let _ = self.db.set_kv(KV_WARM_STARTED, &now.to_string());
+                Some(now)
+            }
+        };
+        let avg = self.warm_avg_secs();
+        warmup_eta_from(false, started, now, avg)
     }
 
     /// Сохранить воспоминание (upsert по ключу).

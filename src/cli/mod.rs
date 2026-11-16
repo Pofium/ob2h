@@ -39,10 +39,12 @@ pub enum Commands {
     },
     /// Создать бэкап (full|quick) или проверить существующий (backup verify <path>)
     Backup {
-        /// Скоуп создания: full (вся БД) | quick (память+воркспейс, Ф24)
+        #[command(subcommand)]
+        command: Option<BackupCommands>,
+        /// Скоуп создания: full (вся БД) | quick (память+воркспейс, Ф24) — форма без подкоманды
         #[arg(short, long, default_value = "full")]
         scope: String,
-        /// Проверить существующий бэкап (каталог бэкапа или файл БД) вместо создания
+        /// Проверить существующий бэкап (каталог бэкапа или файл БД) — старый флаговый синтаксис
         #[arg(long)]
         verify: Option<String>,
     },
@@ -181,6 +183,23 @@ pub enum Commands {
         /// Только показать ожидающие миграции без изменения БД
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+/// Подкоманды backup (issue #2.4: согласование доков/хелпа — `backup create`,
+/// `backup verify <path>`; старые флаговые формы сохранены).
+#[derive(Subcommand, Debug)]
+pub enum BackupCommands {
+    /// Создать бэкап (full — вся БД | quick — память+воркспейс, Ф24)
+    Create {
+        /// Скоуп создания: full | quick
+        #[arg(short, long, default_value = "full")]
+        scope: String,
+    },
+    /// Проверить существующий бэкап (каталог бэкапа или файл БД)
+    Verify {
+        /// Путь к бэкапу
+        path: String,
     },
 }
 

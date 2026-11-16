@@ -170,3 +170,22 @@ async fn test_audit_prune_retention() -> anyhow::Result<()> {
     assert!(ob2h::lifecycle::audit::prune_weekly(&ctx.db, 90)?.is_none());
     Ok(())
 }
+
+/// Issue #2.2: `memory_feedback` без key — контрактная ошибка с подсказкой,
+/// где взять key (и что id уроков не подходит), а не голое «key is required».
+#[tokio::test]
+async fn test_memory_feedback_missing_key_contract_hint() {
+    let tmp = tempdir().expect("tempdir");
+    let ctx = make_ctx(&tmp.path());
+    let server = McpServer::new(ctx);
+
+    let out = server
+        .call_tool(
+            "memory_feedback",
+            serde_json::json!({ "verdict": "helpful", "note": "полезно" }),
+        )
+        .await;
+    assert!(out.contains("[Error] key is required"), "got: {out}");
+    assert!(out.contains("memory_search"), "подсказка с источником key: {out}");
+    assert!(out.contains("lsn_"), "подсказка про id уроков: {out}");
+}
