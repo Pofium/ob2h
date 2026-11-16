@@ -56,13 +56,13 @@ impl AstParserBackend for RegexBackend {
 }
 
 /// Языки с реализованным CST→AST-маппингом в `AstScanResult`:
-/// Ф70.3 — rust; Ф70.4/70.5/70.6/70.12 добавят ts/python/go/dart.
+/// Ф70.3 — rust; Ф70.4/70.5/70.6/70.12 — ts/python/go/dart; Ф78b — asm (GAS).
 #[cfg(feature = "treesitter")]
 pub fn has_mapper(lang: &str) -> bool {
-    matches!(lang, "rust" | "python" | "go" | "dart" | "ts" | "tsx")
+    matches!(lang, "rust" | "python" | "go" | "dart" | "ts" | "tsx" | "asm")
 }
 
-/// Язык tree-sitter для пути по расширению: rust | python | ts | go | dart.
+/// Язык tree-sitter для пути по расширению: rust | python | ts | go | dart | asm.
 #[cfg(feature = "treesitter")]
 pub fn lang_for_path(rel_path: &str) -> Option<&'static str> {
     let ext = rel_path.rsplit('.').next()?;
@@ -73,6 +73,7 @@ pub fn lang_for_path(rel_path: &str) -> Option<&'static str> {
         "tsx" | "jsx" => "tsx",
         "go" => "go",
         "dart" => "dart",
+        "s" | "asm" => "asm",
         _ => return None,
     })
 }
@@ -121,6 +122,7 @@ pub mod ts {
             "tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
             "go" => tree_sitter_go::LANGUAGE.into(),
             "dart" => tree_sitter_dart::LANGUAGE.into(),
+            "asm" => tree_sitter_asm::LANGUAGE.into(),
             _ => return None,
         })
     }
@@ -282,6 +284,7 @@ pub mod ts {
             "go" => map_go(rel_path, content, root, out),
             "dart" => map_dart(rel_path, content, root, out),
             "ts" | "tsx" => map_ts_js(rel_path, content, root, out),
+            "asm" => map_asm(rel_path, content, root, out),
             _ => {} // has_mapper не пропускает прочие языки
         }
     }
@@ -2033,6 +2036,252 @@ pub mod ts {
         };
         q.as_ref()
     }
+
+    /// Ф78b (issue #3): CST→AST маппинг GAS-ассемблера, зеркалит regex-путь
+    /// parse_asm (node_id обязаны совпадать — стабильность привязки памяти и
+    /// Ralph-findings). Спайк T-78b.1 (kind'ы грамматики tree-sitter-asm 0.24,
+    /// generic RubixDev — зафиксированы на asm-gas эталоне):
+    /// `program` → `meta` (`meta_ident` + `ident`/`reg`/`word`/`string`) |
+    /// `label` (`ident` + ":") | `instruction` (`word`-опкод + операнды
+    /// `ident`/`reg`/`word`/`string`) | `ERROR`. `.equ NAME, v` — хвост
+    /// `, v` грамматика не принимает (ERROR-узел ~1-2% — в пределах
+    /// fallback-порога 70.9). NASM/MASM-контент сюда не доходит: диспетчер
+    /// снифает диалект до выбора бэкенда.
+    pub fn map_asm(rel_path: &str, content: &str, root: Node, out: &mut AstScanResult) {
+        use crate::project::ast::{
+            asm_call_target, asm_dialect, asm_finish_scan, asm_label_skipped, ImportRef,
+        };
+
+        push_file_node(out, rel_path, content);
+        let file_node_id = format!("file:{rel_path}");
+        let src = content.as_bytes();
+        let total_lines = content.lines().count().max(1);
+        let ext = rel_path.rsplit('.').next().unwrap_or("");
+        let dialect = asm_dialect(content, ext);
+        let mut section_is_code = true;
+        let mut entry_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        fn text_of<'t>(node: Node<'t>, src: &[u8]) -> String {
+            node.utf8_text(src)
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        }
+        fn first_child_of<'t>(node: Node<'t>, kind: &str) -> Option<Node<'t>> {
+            for i in 0..node.child_count() {
+                let c = node.child(i)?;
+                if c.kind() == kind {
+                    return Some(c);
+                }
+            }
+            None
+        }
+        // после опкода: полный хвост строки — классификация как в regex-пути
+        // (косвенные `qword ptr [x]`, комментарии, @PLT)
+        fn instr_tail<'t>(node: Node<'t>, src: &[u8]) -> Option<String> {
+            let text = text_of(node, src);
+            let mut parts = text.splitn(2, char::is_whitespace);
+            let _opcode = parts.next()?;
+            let tail = parts.next()?.trim().to_string();
+            if tail.is_empty() {
+                None
+            } else {
+                Some(tail)
+            }
+        }
+
+        let mut cursor = root.walk();
+        let children: Vec<Node> = root.children(&mut cursor).collect();
+        for node in &children {
+            match node.kind() {
+                "meta" => {
+                    let dir = first_child_of(*node, "meta_ident")
+                        .map(|m| text_of(m, src).to_ascii_lowercase())
+                        .unwrap_or_default();
+                    // имя символа — второй named-ребёнок (первый — meta_ident)
+                    let name_node = node.named_child(1).or_else(|| node.named_child(0));
+                    match dir.as_str() {
+                        ".globl" | ".global" => {
+                            if let Some(name) = name_node.map(|n| text_of(n, src)) {
+                                if !name.is_empty() {
+                                    entry_names.insert(name);
+                                }
+                            }
+                        }
+                        ".text" => section_is_code = true,
+                        ".data" | ".bss" | ".rodata" | ".tbss" | ".tdata" | ".note"
+                        | ".eh_frame" | ".debug" | ".comment" => section_is_code = false,
+                        ".section" => {
+                            let name = name_node
+                                .map(|c| text_of(c, src).to_ascii_lowercase())
+                                .unwrap_or_default();
+                            section_is_code = name.contains("text")
+                                || name.contains("init")
+                                || name.contains("plt")
+                                || name.contains("fini");
+                        }
+                        ".equ" => {
+                            // хвост `, v` — ERROR-узел (грамматика не принимает),
+                            // имя после .equ — named_child(1)
+                            if let Some(name) = name_node.map(|n| text_of(n, src)) {
+                                if !name.is_empty() && !asm_label_skipped(&name) {
+                                    let node_id = format!("data:{rel_path}:{name}");
+                                    out.nodes.push(AstNode {
+                                        node_id: node_id.clone(),
+                                        label: name.clone(),
+                                        node_type: "Data".to_string(),
+                                        description: format!(
+                                            "Asm константа `{name}` в {rel_path} (строка {})",
+                                            node.start_position().row + 1
+                                        ),
+                                        file_path: rel_path.to_string(),
+                                        line_start: node.start_position().row + 1,
+                                        line_end: node.end_position().row + 1,
+                                    });
+                                    out.edges.push(AstEdge {
+                                        source_node_id: file_node_id.clone(),
+                                        target_node_id: node_id,
+                                        label: "DEFINES".to_string(),
+                                        weight: 1.0,
+                                        context: text_of(*node, src),
+                                        provenance: "EXTRACTED".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        ".macro" => {
+                            if let Some(name) = name_node.map(|n| text_of(n, src)) {
+                                if !name.is_empty() {
+                                    // конец макроса — ближайший meta с .endm
+                                    let mut line_end = node.end_position().row + 1;
+                                    for fwd in children
+                                        .iter()
+                                        .skip(children.iter().position(|c| c == node).unwrap_or(0) + 1)
+                                    {
+                                        if fwd.kind() == "meta" {
+                                            let d = first_child_of(*fwd, "meta_ident")
+                                                .map(|m| text_of(m, src).to_ascii_lowercase())
+                                                .unwrap_or_default();
+                                            if d == ".endm" {
+                                                line_end = fwd.end_position().row + 1;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    let node_id = format!("macro:{rel_path}:{name}");
+                                    out.nodes.push(AstNode {
+                                        node_id: node_id.clone(),
+                                        label: name.clone(),
+                                        node_type: "Macro".to_string(),
+                                        description: format!(
+                                            "Asm макрос `{name}` ({dialect:?}) в {rel_path}"
+                                        ),
+                                        file_path: rel_path.to_string(),
+                                        line_start: node.start_position().row + 1,
+                                        line_end,
+                                    });
+                                    out.edges.push(AstEdge {
+                                        source_node_id: file_node_id.clone(),
+                                        target_node_id: node_id,
+                                        label: "DEFINES".to_string(),
+                                        weight: 1.0,
+                                        context: text_of(*node, src),
+                                        provenance: "EXTRACTED".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        ".include" => {
+                            for i in 0..node.child_count() {
+                                if let Some(c) = node.child(i) {
+                                    if c.kind() == "string" {
+                                        let raw = text_of(c, src);
+                                        let path =
+                                            raw.trim_matches(|ch| ch == '"' || ch == '<' || ch == '>');
+                                        if !path.is_empty() {
+                                            out.edges.push(AstEdge {
+                                                source_node_id: file_node_id.clone(),
+                                                target_node_id: format!("module:{path}"),
+                                                label: "IMPORTS".to_string(),
+                                                weight: 1.0,
+                                                context: text_of(*node, src),
+                                                provenance: "EXTRACTED".to_string(),
+                                            });
+                                            out.imports.push(ImportRef {
+                                                rel_path: rel_path.to_string(),
+                                                module: path.to_string(),
+                                                item: None,
+                                                alias: None,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                "label" => {
+                    let name = first_child_of(*node, "ident")
+                        .map(|n| text_of(n, src))
+                        .unwrap_or_default();
+                    if !name.is_empty() && !asm_label_skipped(&name) {
+                        let (node_id, node_type, description) = if section_is_code {
+                            let entry = if entry_names.contains(&name) { " (entry)" } else { "" };
+                            (
+                                format!("fn:{rel_path}:{name}"),
+                                "Function",
+                                format!("Asm функция `{name}`{entry} в {rel_path}"),
+                            )
+                        } else {
+                            (
+                                format!("data:{rel_path}:{name}"),
+                                "Data",
+                                format!("Asm данные `{name}` в {rel_path}"),
+                            )
+                        };
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: name.clone(),
+                            node_type: node_type.to_string(),
+                            description,
+                            file_path: rel_path.to_string(),
+                            line_start: node.start_position().row + 1,
+                            line_end: node.end_position().row + 1,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.clone(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: text_of(*node, src),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                }
+                "instruction" => {
+                    // опкод — первый word-ребёнок
+                    let opcode = first_child_of(*node, "word")
+                        .map(|w| text_of(w, src).to_ascii_lowercase())
+                        .unwrap_or_default();
+                    if matches!(opcode.as_str(), "call" | "callq" | "bl" | "jal" | "jalr") {
+                        if let Some(tail) = instr_tail(*node, src) {
+                            if let Some(target) = asm_call_target(&tail) {
+                                out.call_sites.push(CallSite {
+                                    rel_path: rel_path.to_string(),
+                                    line: node.start_position().row + 1,
+                                    name: target,
+                                    qualifier: None,
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        asm_finish_scan(rel_path, total_lines, &entry_names, out);
+    }
 }
 /// Создаётся один раз на скан (конструирование regex'ов дорогое).
 pub struct AstParserDispatcher {
@@ -2103,11 +2352,28 @@ impl AstParserDispatcher {
             }
             if let Some(lang) = lang_for_path(rel_path) {
                 if has_mapper(lang) {
-                    // 70.8: инкрементальный парсинг (LRU-кэш деревьев + Tree::edit);
-                    // 70.9: ошибка (в т.ч. доля ERROR > порога) — fallback на regex
-                    if let Ok(tree) = self.incremental.parse_tree(rel_path, content, lang) {
-                        ts::map_tree(lang, rel_path, content, tree.root_node(), out);
-                        return format!("treesitter:{lang}");
+                    // Ф78b (issue #3): asm — tree-sitter только для GAS-диалекта;
+                    // NASM/MASM-контент (сниффинг до выбора бэкенда) → regex,
+                    // generic-грамматик для них на crates.io нет.
+                    let dialect_ok = if lang == "asm" {
+                        !matches!(
+                            crate::project::ast::asm_dialect(
+                                content,
+                                rel_path.rsplit('.').next().unwrap_or(""),
+                            ),
+                            crate::project::ast::AsmDialect::Nasm
+                                | crate::project::ast::AsmDialect::Masm
+                        )
+                    } else {
+                        true
+                    };
+                    if dialect_ok {
+                        // 70.8: инкрементальный парсинг (LRU-кэш деревьев + Tree::edit);
+                        // 70.9: ошибка (в т.ч. доля ERROR > порога) — fallback на regex
+                        if let Ok(tree) = self.incremental.parse_tree(rel_path, content, lang) {
+                            ts::map_tree(lang, rel_path, content, tree.root_node(), out);
+                            return format!("treesitter:{lang}");
+                        }
                     }
                 }
             }

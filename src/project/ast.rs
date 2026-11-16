@@ -213,6 +213,10 @@ pub enum Parser {
     K8s,
     /// Ф51: манифесты пакетов (диспетчер по имени файла).
     Manifest,
+    /// Ф78 (issue #3): ассемблер — `asm-gas` (`.s`/`.S`) и `asm-intel`
+    /// (`.asm`); диалект (GAS AT&T / GAS Intel / NASM / MASM) — сниффингом
+    /// контента, не расширением.
+    Asm,
 }
 
 /// Спецификация языка/формата в реестре [`LANGS`].
@@ -1193,6 +1197,60 @@ function put {
 "#,
         sample_rel: "",
     },
+    LangSpec {
+        name: "asm-gas",
+        matcher: Matcher::Ext(&["s"]),
+        node_types: &["File", "Function", "Macro", "Data"],
+        edge_labels: &["IMPORTS", "DEFINES", "CALLS"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Asm,
+        fixture: r#".globl my_func
+
+.text
+my_func:
+    call    other_func
+    ret
+
+.section .rodata
+msg:
+    .string "hello"
+
+.equ    CONST, 42
+
+.macro  PROLOGUE
+    push    %rbp
+.endm
+"#,
+        sample_rel: "",
+    },
+    LangSpec {
+        name: "asm-intel",
+        matcher: Matcher::Ext(&["asm"]),
+        node_types: &["File", "Function", "Macro", "Data"],
+        edge_labels: &["IMPORTS", "DEFINES", "CALLS"],
+        max_bytes: DEFAULT_CAP_BYTES,
+        parser: Parser::Asm,
+        fixture: r#"%include "io.asm"
+
+section .text
+global my_start
+
+my_start:
+    call    do_work
+    ret
+
+section .data
+value:
+    dq 0
+
+%define LIMIT 100
+
+%macro SAVE_REGS 0
+    push rax
+%endmacro
+"#,
+        sample_rel: "",
+    },
 ];
 
 impl LangSpec {
@@ -1557,6 +1615,229 @@ pub(crate) const PY_CALL_SKIP: &[&str] = &[
     "raise", "global", "nonlocal",
 ];
 
+/// Ключевые слова/типы C, не считающиеся вызовами (T-78.9, issue #3).
+pub(crate) const C_CALL_SKIP: &[&str] = &[
+    "if", "while", "for", "switch", "sizeof", "return", "defined", "case", "do", "else", "goto",
+    "typedef", "struct", "union", "enum", "static", "const", "void", "int", "char", "long",
+    "short", "unsigned", "signed", "float", "double", "volatile", "register", "inline", "extern",
+];
+
+// ── Ф78 (issue #3): ассемблер — диалекты, skip-листы, сниффинг ──
+
+/// Диалект ассемблера (сниффинг по контенту — расширение не решает: `.asm`
+/// делят NASM и MASM, `.s` бывает Intel-синтаксиса).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsmDialect {
+    /// GAS AT&T (вывод gcc/clang, ядра, libc).
+    GasAtt,
+    /// GAS Intel (`.intel_syntax noprefix`) — тот же экстрактор.
+    GasIntel,
+    /// NASM (`section .text`, `%macro`, `global`).
+    Nasm,
+    /// MASM/ml64 (`PROC/ENDP`, `SEGMENT`, `.MODEL`).
+    Masm,
+}
+
+/// Сниффинг диалекта (design §1, issue #3): первые ~256 строк, первый
+/// уверенный признак; иначе — дефолт по расширению (`s` → GAS, `asm` → NASM).
+/// Токен-проверка (регистронезависимая): NASM-маркеры — `%define`/`%macro`/
+/// `%endmacro`/`%include`/`section`/`global`/`extern`-в-начале; MASM —
+/// `PROC`/`ENDP`/`SEGMENT`/`MACRO`/`END`/`.MODEL` как токены (строки вида
+/// `MyFunc PROC`, `DATA SEGMENT`); GAS Intel — `.intel_syntax`. Приоритет
+/// NASM перед MASM — конструктивный дефолт при конфликте (design §8).
+pub fn asm_dialect(content: &str, default_by_ext: &str) -> AsmDialect {
+    let default = match default_by_ext {
+        "asm" => AsmDialect::Nasm,
+        _ => AsmDialect::GasAtt,
+    };
+    for line in content.lines().take(256) {
+        let lower = line.trim_start().to_ascii_lowercase();
+        if lower.starts_with(';') || lower.starts_with('#') || lower.starts_with("//") {
+            continue; // комментарии и препроцессор не голосуют
+        }
+        let toks: Vec<&str> = lower.split_whitespace().collect();
+        // NASM
+        if toks.iter().any(|t| {
+            matches!(*t, "%define" | "%macro" | "%endmacro" | "%include" | "%line")
+        }) || toks.first() == Some(&"section")
+            || toks.first() == Some(&"global")
+            || toks.first() == Some(&"extern")
+        {
+            return AsmDialect::Nasm;
+        }
+        // MASM
+        if toks.iter()
+            .any(|t| matches!(*t, "proc" | "endp" | "segment" | "macro" | ".model"))
+            || toks.first() == Some(&"end")
+        {
+            return AsmDialect::Masm;
+        }
+        // GAS Intel
+        if lower.starts_with(".intel_syntax") {
+            return AsmDialect::GasIntel;
+        }
+        if lower.starts_with(".att_syntax") {
+            return AsmDialect::GasAtt;
+        }
+    }
+    default
+}
+
+/// Skip-лист меток (design §2, прецедент RUST_CALL_SKIP): шумовые метки не
+/// становятся узлами и не дают call_sites. Точка/`@` — локальные и
+/// компиляторные метки (`.L*`, `.LBB0_3`, NASM `.loop`, MASM `@@`), числовые
+/// метки `1:`–`9:` отсекаются классом символов идентификатора.
+pub const ASM_LABEL_SKIP: &[&str] = &[".", "@", "__x86.get_pc_thunk."];
+
+/// Суффиксы компиляторных расщеплений (`foo.cold`, `foo.plt`, `foo.got`).
+pub const ASM_LABEL_SKIP_SUFFIXES: &[&str] = &[".cold", ".plt", ".got", ".part"];
+
+/// Шумовая метка (design §2)? — префиксы [`ASM_LABEL_SKIP`], суффиксы
+/// [`ASM_LABEL_SKIP_SUFFIXES`]; числовые метки отсекаются regex-классом.
+pub fn asm_label_skipped(name: &str) -> bool {
+    ASM_LABEL_SKIP.iter().any(|p| name.starts_with(p))
+        || ASM_LABEL_SKIP_SUFFIXES.iter().any(|s| name.ends_with(s))
+}
+
+/// Регистры x86-64/AArch64 (design §4): операнд-регистр — не вызов
+/// (`call rax` в Intel-синтаксисе, `bl lr`).
+pub const ASM_REG_SKIP: &[&str] = &[
+    // x86-64: полные
+    "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "rip", "eiz",
+    // x86-64: r8–r15 и подрегистры
+    "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "r8d", "r9d", "r10d", "r11d", "r12d",
+    "r13d", "r14d", "r15d", "r8w", "r9w", "r10w", "r11w", "r12w", "r13w", "r14w", "r15w", "r8b",
+    "r9b", "r10b", "r11b", "r12b", "r13b", "r14b", "r15b",
+    // x86: 32/16/8-битные
+    "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp", "ax", "bx", "cx", "dx", "si", "di",
+    "bp", "sp", "al", "bl", "cl", "dl", "ah", "bh", "ch", "dh", "sil", "dil", "bpl", "spl",
+    // сегментные/системные
+    "cs", "ds", "es", "fs", "gs", "ss", "st", "mxcsr",
+    // SIMD (частые индексы)
+    "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10",
+    "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5",
+    "ymm6", "ymm7", "ymm8", "ymm9", "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15", "mm0",
+    "mm1", "mm2", "mm3", "mm4", "mm5", "mm6", "mm7",
+    // AArch64: общие
+    "wzr", "xzr", "lr", "fp", "pc", "nzcv",
+    // AArch64: x0–x30 / w0–w30
+    "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14",
+    "x15", "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27",
+    "x28", "x29", "x30", "w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "w9", "w10", "w11",
+    "w12", "w13", "w14", "w15", "w16", "w17", "w18", "w19", "w20", "w21", "w22", "w23", "w24",
+    "w25", "w26", "w27", "w28", "w29", "w30",
+    // RISC-V (jalr/j-операнды)
+    "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3", "a4", "a5",
+    "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "t3", "t4", "t5",
+    "t6", "zero",
+];
+
+/// Регистр/спец-имя как операнд вызова (issue #3, design §4)?
+pub fn is_asm_register(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    ASM_REG_SKIP.contains(&lower.as_str())
+}
+
+/// Операнд `call`/`bl` → имя цели (None — косвенный вызов/регистр/shadow):
+/// `*`/`[`/`%` — косвенные, `@PLT`/`@GOT*`-суффиксы снимаются (резолв по
+/// имени символа), `#`/`;`-хвост — комментарий. Общий для regex-пути и
+/// ts::map_asm (паритет классификации операндов).
+pub(crate) fn asm_call_target(operand: &str) -> Option<String> {
+    let op = operand.trim();
+    if op.starts_with('*') || op.starts_with('[') || op.starts_with('%') {
+        return None; // косвенные: call *%rax, call [rbx], call qword ptr [%rip+x]
+    }
+    // хвост-комментарий
+    let head = op
+        .split(['#', ';'])
+        .next()
+        .unwrap_or(op)
+        .trim()
+        .to_string();
+    // Intel-модификаторы перед операндом: `call qword ptr [x]` уже отсечён
+    // `[`; `call short foo` / `call near ptr foo` — снять модификаторы.
+    const PREFIXES: &[&str] = &["short", "near", "far", "byte", "word", "dword", "qword", "ptr"];
+    let mut name = head.as_str();
+    loop {
+        let lower = name.to_ascii_lowercase();
+        let mut stripped = false;
+        for p in PREFIXES {
+            if lower.starts_with(p) {
+                let rest = name[p.len()..].trim_start();
+                if !rest.is_empty() && rest != name {
+                    name = rest;
+                    stripped = true;
+                }
+                break;
+            }
+        }
+        if !stripped {
+            break;
+        }
+    }
+    // PLT/GOT-суффиксы: `foo@PLT` → `foo` (резолв по имени C-символа;
+    // регистронезависимо)
+    let name = match name.to_ascii_lowercase().find("@plt").or_else(|| name.to_ascii_lowercase().find("@got")) {
+        Some(i) => &name[..i],
+        None => name,
+    };
+    // косвенный операнд проявился после снятия модификаторов (`qword ptr [x]`)
+    if name.starts_with('[') || name.starts_with('%') || name.starts_with('*') {
+        return None;
+    }
+    if name.is_empty() || asm_label_skipped(name) || is_asm_register(name) {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+/// Общий финиш-проход asm-экстракции (regex-путь и ts::map_asm — паритет
+/// node_id/line_end/entry-пометок): у GAS/NASM меток-функций нет END —
+/// line_end до следующей Function-метки или до конца файла (MASM уже закрыт
+/// ENDP); entry-метки (.globl/global/PUBLIC) — пометка «(entry)» в
+/// description; дедуп call_sites (sort + dedup, 71.1).
+pub(crate) fn asm_finish_scan(
+    rel_path: &str,
+    total_lines: usize,
+    entry_names: &HashSet<String>,
+    out: &mut AstScanResult,
+) {
+    let mut fn_idx: Vec<usize> = out
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| {
+            n.file_path == rel_path
+                && n.node_type == "Function"
+                && n.line_end == n.line_start
+        })
+        .map(|(i, _)| i)
+        .collect();
+    fn_idx.sort_by_key(|&i| out.nodes[i].line_start);
+    for (k, &idx) in fn_idx.iter().enumerate() {
+        let next_start = fn_idx
+            .get(k + 1)
+            .map(|&next| out.nodes[next].line_start.saturating_sub(1))
+            .unwrap_or(total_lines);
+        out.nodes[idx].line_end = next_start.max(out.nodes[idx].line_start);
+    }
+
+    for n in out.nodes.iter_mut() {
+        if n.file_path == rel_path
+            && n.node_type == "Function"
+            && entry_names.contains(&n.label)
+            && !n.description.contains("(entry)")
+        {
+            n.description.push_str(" (entry)");
+        }
+    }
+
+    out.call_sites.sort_by(|a, b| {
+        (&a.rel_path, a.line, &a.name).cmp(&(&b.rel_path, b.line, &b.name))
+    });
+    out.call_sites.dedup();
+}
+
 /// AST-экстрактор для проектов.
 #[allow(dead_code)]
 pub struct AstCodeExtractor {
@@ -1740,6 +2021,29 @@ pub struct AstCodeExtractor {
     sh_fn_paren_re: Regex,
     sh_fn_kw_re: Regex,
     sh_source_re: Regex,
+
+    /// Ф78: ассемблер — entry-директивы (.globl/global/PUBLIC).
+    asm_entry_re: Regex,
+    /// Ф78: include-директивы (#include / %include / INCLUDE).
+    asm_include_re: Regex,
+    /// Ф78: метки `name:` (GAS/NASM; MASM тоже допускает).
+    asm_label_re: Regex,
+    /// Ф78: начало макроса (.macro / %macro / name MACRO).
+    asm_macro_start_re: Regex,
+    /// Ф78: конец макроса (.endm / %endmacro / ENDM).
+    asm_macro_end_re: Regex,
+    /// Ф78: MASM-процедуры `name PROC` (line_end — из парного ENDP).
+    asm_masm_proc_re: Regex,
+    asm_masm_endp_re: Regex,
+    /// Ф78: константы (.equ name, v / name EQU v / %define name v).
+    asm_equ_re: Regex,
+    /// Ф78: NASM/MASM метки данных `name db/dw/dd/dq/resb/...`.
+    asm_data_label_re: Regex,
+    /// Ф78: инструкции вызова call/callq/bl/jal/jalr (операнд — отдельно).
+    asm_call_re: Regex,
+    /// Issue #3/T-78.9: вызовы в C/C++ (call_sites отсутствовали — цепочка
+    /// C → asm не собиралась вовсе).
+    c_call_re: Regex,
 }
 
 impl Default for AstCodeExtractor {
@@ -1936,6 +2240,36 @@ impl AstCodeExtractor {
             sh_fn_paren_re: Regex::new(r"(?m)^\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*\(\s*\)\s*\{?").unwrap(),
             sh_fn_kw_re: Regex::new(r"(?m)^\s*function\s+([a-zA-Z_][a-zA-Z0-9_-]*)").unwrap(),
             sh_source_re: Regex::new(r#"(?m)^\s*(?:source|\.)\s+([^"'`\s;|&]+)"#).unwrap(),
+
+            // Asm patterns (Ф78, issue #3): операнд call — \S+ классифицируется
+            // кодом (регистры/косвенные/метки-skip); идентификатор — [\w.$@]
+            // (GAS-символы с точкой/долларом).
+            asm_entry_re: Regex::new(
+                r"(?im)^\s*(?:\.globl|\.global|global|public)\s+([A-Za-z_.$@?][\w.$@]*)",
+            )
+            .unwrap(),
+            asm_include_re: Regex::new(
+                r#"(?im)^[ \t]*(?:#[ \t]*include|%\s*include|INCLUDE)[ \t]+["<]?([A-Za-z0-9_./\\-]+)[">]?"#,
+            )
+            .unwrap(),
+            asm_label_re: Regex::new(r"^\s*([A-Za-z_.$@?][\w.$@]*)\s*:").unwrap(),
+            asm_macro_start_re: Regex::new(
+                r"(?i)^\s*(?:\.macro\s+([A-Za-z_.$@][\w.$@]*)|%macro\s+([A-Za-z_.$@][\w.$@]*)|([A-Za-z_][\w]*)\s+MACRO\b)",
+            )
+            .unwrap(),
+            asm_macro_end_re: Regex::new(r"(?i)^\s*(?:\.endm\b|%endmacro\b|ENDM\b)").unwrap(),
+            asm_masm_proc_re: Regex::new(r"(?i)^\s*([A-Za-z_][\w]*)\s+PROC\b").unwrap(),
+            asm_masm_endp_re: Regex::new(r"(?i)^\s*(?:([A-Za-z_][\w]*)\s+)?ENDP\b").unwrap(),
+            asm_equ_re: Regex::new(
+                r"(?i)^\s*(?:\.equ\s+([A-Za-z_.$@][\w.$@]*)\s*,|([A-Za-z_][\w]*)\s+EQU\s+|%define\s+([A-Za-z_][\w]*))",
+            )
+            .unwrap(),
+            asm_data_label_re: Regex::new(
+                r"(?i)^\s*([A-Za-z_][\w]*)\s+(?:db|dw|dd|dq|dt|resb|resw|resd|resq|rest|byte|word|dword|qword|times)\b",
+            )
+            .unwrap(),
+            asm_call_re: Regex::new(r"(?i)^\s*(?:call|callq|bl|jal|jalr)\s+(.+?)\s*$").unwrap(),
+            c_call_re: Regex::new(r"([A-Za-z_]\w*)\s*\(").unwrap(),
         }
     }
 
@@ -3511,6 +3845,34 @@ impl AstCodeExtractor {
             }
         }
 
+        // T-78.9 (issue #3): call_sites для C/C++ — без них кросс-языковые
+        // цепочки C → asm (и C → C) не собирались вовсе. Определения функций —
+        // на нулевом отступе (тела — с отступом); `#`/комментарии мимо;
+        // ключевые слова — в C_CALL_SKIP. Декларации в отступе дают
+        // call_site без enclosing-функции — type-pass их отбрасывает.
+        for (i, line) in lines.iter().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with('#') || t.starts_with("//") || t.starts_with("/*") || t.starts_with('*')
+            {
+                continue;
+            }
+            if t.len() == line.len() {
+                continue; // нулевой отступ — топ-уровень (определения/типы)
+            }
+            for cap in self.c_call_re.captures_iter(t) {
+                let name = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+                if C_CALL_SKIP.contains(&name) {
+                    continue;
+                }
+                out.call_sites.push(CallSite {
+                    rel_path: rel_path.to_string(),
+                    line: i + 1,
+                    name: name.to_string(),
+                    qualifier: None,
+                });
+            }
+        }
+
         // 2. Классы и структуры
         for (i, line) in lines.iter().enumerate() {
             if let Some(cap) = self.cpp_class_re.captures(line) {
@@ -4880,6 +5242,359 @@ impl AstCodeExtractor {
                 }
             }
         }
+    }
+
+    /// Ф78 (issue #3): ассемблер — единый линейный проход с сниффингом диалекта
+    /// (design §5). Узлы: `Function` (метки кода, MASM `PROC/ENDP` с line_end
+    /// из `ENDP`), `Macro` (`.macro`/`%macro`/`MACRO`), `Data` (метки
+    /// data-секций, `.equ`/`EQU`/`%define`, `db/dw/dd/dq`-метки). Рёбра:
+    /// `DEFINES`, `IMPORTS` (include-директивы); `CALLS` — call_sites +
+    /// существующий type-pass (`Function` — общий тип: кросс-языковой резолв
+    /// C → asm без специфики). Entry-метки (`.globl`/`global`/`PUBLIC`) —
+    /// пометка «(entry)» в description. Skip-листы: [`ASM_LABEL_SKIP`],
+    /// [`ASM_LABEL_SKIP_SUFFIXES`], [`ASM_REG_SKIP`].
+    fn parse_asm(
+        &self,
+        rel_path: &str,
+        file_node_id: &str,
+        content: &str,
+        out: &mut AstScanResult,
+    ) {
+        let ext = rel_path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let dialect = asm_dialect(content, &ext);
+        let lines: Vec<&str> = content.lines().collect();
+        let total_lines = lines.len().max(1);
+
+        // include-директивы → IMPORTS + ImportRef (type-pass строит пути для
+        // кросс-файлового резолва)
+        for cap in self.asm_include_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: format!("module:{}", m.as_str()),
+                    label: "IMPORTS".to_string(),
+                    weight: 1.0,
+                    context: cap.get(0).map(|c| c.as_str().trim().to_string()).unwrap_or_default(),
+                    provenance: "EXTRACTED".to_string(),
+                });
+                out.imports.push(ImportRef {
+                    rel_path: rel_path.to_string(),
+                    module: m.as_str().to_string(),
+                    item: None,
+                    alias: None,
+                });
+            }
+        }
+
+        // entry-директивы — до основного прохода (.globl может стоять раньше метки)
+        let mut entry_names: HashSet<String> = HashSet::new();
+        for cap in self.asm_entry_re.captures_iter(content) {
+            if let Some(m) = cap.get(1) {
+                entry_names.insert(m.as_str().to_string());
+            }
+        }
+
+        // Состояние прохода: текущая секция (GAS-дефолт — код), открытый макрос
+        // и MASM-процедура (node_id + строка начала).
+        let mut section_is_code = true;
+        let mut macro_open: Option<(String, usize)> = None;
+        let mut proc_open: Option<(String, usize)> = None;
+
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            // препроцессорные `#`-строки (.S) — не символы (include уже обработан)
+            if trimmed.starts_with('#') {
+                continue;
+            }
+
+            // внутри макроса — только его конец
+            if let Some((macro_node_id, _)) = &macro_open {
+                if self.asm_macro_end_re.is_match(line) {
+                    if let Some(node) = out
+                        .nodes
+                        .iter_mut()
+                        .find(|n| n.node_id == *macro_node_id)
+                    {
+                        node.line_end = i + 1;
+                    }
+                    macro_open = None;
+                }
+                continue;
+            }
+
+            // начало макроса (.macro / %macro / name MACRO)
+            if let Some(cap) = self.asm_macro_start_re.captures(line) {
+                let Some(name) = cap
+                    .get(1)
+                    .or_else(|| cap.get(2))
+                    .or_else(|| cap.get(3))
+                    .map(|m| m.as_str())
+                else {
+                    continue;
+                };
+                let node_id = format!("macro:{}:{}", rel_path, name);
+                out.nodes.push(AstNode {
+                    node_id: node_id.clone(),
+                    label: name.to_string(),
+                    node_type: "Macro".to_string(),
+                    description: format!("Asm макрос `{}` ({:?}) в {}", name, dialect, rel_path),
+                    file_path: rel_path.to_string(),
+                    line_start: i + 1,
+                    line_end: i + 1,
+                });
+                out.edges.push(AstEdge {
+                    source_node_id: file_node_id.to_string(),
+                    target_node_id: node_id.clone(),
+                    label: "DEFINES".to_string(),
+                    weight: 1.0,
+                    context: trimmed.to_string(),
+                    provenance: "EXTRACTED".to_string(),
+                });
+                macro_open = Some((node_id, i + 1));
+                continue;
+            }
+
+            // секции → состояние «код/данные»
+            match dialect {
+                AsmDialect::GasAtt | AsmDialect::GasIntel => {
+                    let lower = trimmed.to_ascii_lowercase();
+                    if lower.starts_with(".text") {
+                        section_is_code = true;
+                        continue;
+                    }
+                    if lower.starts_with(".data")
+                        || lower.starts_with(".bss")
+                        || lower.starts_with(".rodata")
+                        || lower.starts_with(".tbss")
+                        || lower.starts_with(".tdata")
+                        || lower.starts_with(".note")
+                        || lower.starts_with(".eh_frame")
+                        || lower.starts_with(".debug")
+                        || lower.starts_with(".comment")
+                    {
+                        section_is_code = false;
+                        continue;
+                    }
+                    if lower.starts_with(".section") {
+                        let name = lower.split_whitespace().nth(1).unwrap_or("");
+                        section_is_code = name.contains("text")
+                            || name.contains("init")
+                            || name.contains("plt")
+                            || name.contains("fini");
+                        continue;
+                    }
+                }
+                AsmDialect::Nasm => {
+                    let lower = trimmed.to_ascii_lowercase();
+                    if lower.starts_with("section") {
+                        let name = lower.split_whitespace().nth(1).unwrap_or("");
+                        section_is_code = !name.contains("data") && !name.contains("bss");
+                        continue;
+                    }
+                }
+                AsmDialect::Masm => {
+                    let lower = trimmed.to_ascii_lowercase();
+                    if lower.starts_with(".code") {
+                        section_is_code = true;
+                        continue;
+                    }
+                    if lower.starts_with(".data") {
+                        section_is_code = false;
+                        continue;
+                    }
+                    // `NAME SEGMENT` — по имени сегмента
+                    let toks: Vec<&str> = lower.split_whitespace().collect();
+                    if toks.len() >= 2 && toks[1] == "segment" {
+                        let name = toks[0];
+                        section_is_code = name.contains("code") || name.contains("text");
+                        continue;
+                    }
+                }
+            }
+
+            // MASM PROC/ENDP
+            if dialect == AsmDialect::Masm {
+                if let Some(cap) = self.asm_masm_endp_re.captures(line) {
+                    if cap.get(0).unwrap().as_str().to_ascii_lowercase().contains("endp") {
+                        if let Some((node_id, _)) = &proc_open {
+                            if let Some(node) = out
+                                .nodes
+                                .iter_mut()
+                                .find(|n| n.node_id == *node_id)
+                            {
+                                node.line_end = i + 1;
+                            }
+                        }
+                        proc_open = None;
+                        continue;
+                    }
+                }
+                if let Some(cap) = self.asm_masm_proc_re.captures(line) {
+                    if let Some(name) = cap.get(1) {
+                        let node_id = format!("fn:{}:{}", rel_path, name.as_str());
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: name.as_str().to_string(),
+                            node_type: "Function".to_string(),
+                            description: format!(
+                                "Asm процедура `{}` (MASM) в {}",
+                                name.as_str(),
+                                rel_path
+                            ),
+                            file_path: rel_path.to_string(),
+                            line_start: i + 1,
+                            line_end: i + 1,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id.clone(),
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: trimmed.to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                        proc_open = Some((node_id, i + 1));
+                        continue;
+                    }
+                }
+            }
+
+            // константы: .equ / EQU / %define
+            if let Some(cap) = self.asm_equ_re.captures(line) {
+                let name = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3));
+                if let Some(name) = name {
+                    let node_id = format!("data:{}:{}", rel_path, name.as_str());
+                    out.nodes.push(AstNode {
+                        node_id: node_id.clone(),
+                        label: name.as_str().to_string(),
+                        node_type: "Data".to_string(),
+                        description: format!(
+                            "Asm константа `{}` в {} (строка {})",
+                            name.as_str(),
+                            rel_path,
+                            i + 1
+                        ),
+                        file_path: rel_path.to_string(),
+                        line_start: i + 1,
+                        line_end: i + 1,
+                    });
+                    out.edges.push(AstEdge {
+                        source_node_id: file_node_id.to_string(),
+                        target_node_id: node_id,
+                        label: "DEFINES".to_string(),
+                        weight: 1.0,
+                        context: trimmed.to_string(),
+                        provenance: "EXTRACTED".to_string(),
+                    });
+                }
+                continue;
+            }
+
+            // метки данных NASM/MASM (`msg db`, `value dq`) — в GAS эти
+            // «инструкции» не встречаются (там .byte/.quad), а `call qword ptr`
+            // иначе миспарсится как data-метка `call`
+            if matches!(dialect, AsmDialect::Nasm | AsmDialect::Masm) {
+                if let Some(cap) = self.asm_data_label_re.captures(line) {
+                    if let Some(name) = cap.get(1) {
+                        if !asm_label_skipped(name.as_str()) {
+                            let node_id = format!("data:{}:{}", rel_path, name.as_str());
+                            out.nodes.push(AstNode {
+                                node_id: node_id.clone(),
+                                label: name.as_str().to_string(),
+                                node_type: "Data".to_string(),
+                                description: format!(
+                                    "Asm данные `{}` в {} (строка {})",
+                                    name.as_str(),
+                                    rel_path,
+                                    i + 1
+                                ),
+                                file_path: rel_path.to_string(),
+                                line_start: i + 1,
+                                line_end: i + 1,
+                            });
+                            out.edges.push(AstEdge {
+                                source_node_id: file_node_id.to_string(),
+                                target_node_id: node_id,
+                                label: "DEFINES".to_string(),
+                                weight: 1.0,
+                                context: trimmed.to_string(),
+                                provenance: "EXTRACTED".to_string(),
+                            });
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            // метка `name:` — Function (код) или Data (данные)
+            if let Some(cap) = self.asm_label_re.captures(line) {
+                if let Some(name) = cap.get(1) {
+                    let name_str = name.as_str();
+                    if !asm_label_skipped(name_str) {
+                        let (node_id, node_type, description) = if section_is_code {
+                            let entry = if entry_names.contains(name_str) { " (entry)" } else { "" };
+                            (
+                                format!("fn:{}:{}", rel_path, name_str),
+                                "Function",
+                                format!("Asm функция `{}`{} в {}", name_str, entry, rel_path),
+                            )
+                        } else {
+                            (
+                                format!("data:{}:{}", rel_path, name_str),
+                                "Data",
+                                format!("Asm данные `{}` в {}", name_str, rel_path),
+                            )
+                        };
+                        out.nodes.push(AstNode {
+                            node_id: node_id.clone(),
+                            label: name_str.to_string(),
+                            node_type: node_type.to_string(),
+                            description,
+                            file_path: rel_path.to_string(),
+                            line_start: i + 1,
+                            line_end: i + 1,
+                        });
+                        out.edges.push(AstEdge {
+                            source_node_id: file_node_id.to_string(),
+                            target_node_id: node_id,
+                            label: "DEFINES".to_string(),
+                            weight: 1.0,
+                            context: trimmed.to_string(),
+                            provenance: "EXTRACTED".to_string(),
+                        });
+                    }
+                    // метка и инструкция на одной строке (`loop: dec eax`)
+                    let after = &trimmed[name_str.len() + 1..];
+                    if let Some(cap) = self.asm_call_re.captures(after) {
+                        if let Some(target) = cap.get(1).and_then(|m| asm_call_target(m.as_str())) {
+                            out.call_sites.push(CallSite {
+                                rel_path: rel_path.to_string(),
+                                line: i + 1,
+                                name: target,
+                                qualifier: None,
+                            });
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            // инструкции вызова (call/callq/bl/jal/jalr) — операнд классифицирует
+            // asm_call_target (регистры/косвенные/шумовые — мимо)
+            if let Some(cap) = self.asm_call_re.captures(line) {
+                if let Some(target) = cap.get(1).and_then(|m| asm_call_target(m.as_str())) {
+                    out.call_sites.push(CallSite {
+                        rel_path: rel_path.to_string(),
+                        line: i + 1,
+                        name: target,
+                        qualifier: None,
+                    });
+                }
+            }
+        }
+
+        // Общий финиш: line_end для GAS/NASM-меток, entry-пометки, дедуп call_sites.
+        asm_finish_scan(rel_path, total_lines, &entry_names, out);
     }
 
     /// Ф49.1: Protocol Buffers — package → Module, service → Service,
@@ -7048,6 +7763,7 @@ impl Parser {
             Parser::Manifest => {
                 ex.parse_manifest(rel_path, file_node_id, content, out);
             }
+            Parser::Asm => ex.parse_asm(rel_path, file_node_id, content, out),
         }
     }
 }
@@ -8207,6 +8923,38 @@ pub fn resolve_calls(scan: &mut AstScanResult) -> usize {
                         target = Some((ti, format!("typepass:import:{}", tn.file_path), false));
                         break;
                     }
+                }
+            }
+
+            // T-78.9 (issue #3): C → asm — линкерная семантика: C-функция
+            // вызывает символ, определённый в asm-файле, по имени глобально
+            // (include-путей к .s/.asm нет: заголовок ≠ файл реализации).
+            // Мост — только C-источники и только единственный asm-кандидат
+            // (несколько — AMBIGUOUS, ребро не выдумываем).
+            if target.is_none()
+                && (site.rel_path.ends_with(".c")
+                    || site.rel_path.ends_with(".h")
+                    || site.rel_path.ends_with(".cpp")
+                    || site.rel_path.ends_with(".cc")
+                    || site.rel_path.ends_with(".cxx")
+                    || site.rel_path.ends_with(".hpp"))
+            {
+                let asm_cands: Vec<usize> = cands
+                    .iter()
+                    .copied()
+                    .filter(|&ti| {
+                        let f = scan.nodes[ti].file_path.to_ascii_lowercase();
+                        f.ends_with(".s") || f.ends_with(".asm")
+                    })
+                    .collect();
+                if asm_cands.len() == 1 && scan.nodes[asm_cands[0]].node_id != scan.nodes[ci].node_id
+                {
+                    let tn = &scan.nodes[asm_cands[0]];
+                    target = Some((
+                        asm_cands[0],
+                        format!("typepass:asm-bridge:{}", tn.file_path),
+                        false,
+                    ));
                 }
             }
         }

@@ -375,6 +375,10 @@ whitelist для обходчика (`collect_files`), вотчера (`watcher:
 
 **Словарь `node_type`:**
 - код: `Module | Struct | Class | Interface | Trait | Enum | Function | Table | File`
+- asm (Ф78, issue #3): `Function` (метки кода, MASM `PROC/ENDP`), `Macro`
+  (`.macro`/`%macro`/`MACRO`), `Data` (метки data-секций, `.equ`/`EQU`/`%define`,
+  `db/dw/dd/dq`-метки) — `Function` осознанно общий с прочими языками: кросс-языковой
+  резолв `CALLS` через type-pass без специфики
 - веб (Ф48): `Element` (el:), `CssClass` (cssclass:), `CssId` (cssid:), `CssVar` (cssvar:),
   `Stylesheet` (css:), цели `File` (file:)
 - контракты (Ф49): `Service` (service:/svc:), `Endpoint` (endpoint:), `Schema` (schema:),
@@ -446,3 +450,44 @@ AST_EXTRACTOR_VERSION 46: первый скан после апгрейда — 
 - **Dream Reconcile (Ф74, ADR-27, ADR-28):** `src/dream/conflicts.rs`, предфильтрация (`category` + Entity Overlap + `cosine > 0.82`), offline/online детектор, рёбра `SUPERSEDES`/`CONTRADICTS`, `knowledge_reconcile`, `DreamBudget`, откат при деградации bench.
 - **Наблюдаемость и Ralph (Ф75):** `git_head_sha` свежесть findings, `tracing` spans (`embed`, `parse`, `vec`, `fts`, `ppr`, `dream`, `wal_checkpoint`) и вывод метрик в `omnes_stats`.
 - **Lifecycle и упаковка (Ф76–77, ADR-29):** `src/cli/lifecycle.rs`, `dist-workspace.toml`, `ob2h migrate --dry-run`, `ob2h self uninstall`, `ob2h doctor --fix`.
+
+## Аддендум v2.0.1 (2026-11-16) — Фаза 78/78b: AST-поддержка ассемблера (issue #3)
+
+**Реестр (Ф78, regex-волна).** Две записи `LANGS`: `asm-gas` (`Ext(&["s"])` — матчер
+нижнит регистр, покрывает и препроцессорный `.S`) и `asm-intel` (`Ext(&["asm"])`).
+Диалект (GAS AT&T / GAS Intel / NASM / MASM) — **сниффингом контента**
+(`asm_dialect`, первые ~256 строк, токен-признаки: `%define`/`section`/`global` →
+NASM; `PROC`/`ENDP`/`SEGMENT`/`.MODEL` → MASM; `.intel_syntax` → GAS Intel), не
+расширением. Экстрактор `Parser::Asm` — один линейный проход: секции → состояние
+код/данные; метки → `fn:`/`data:`; `PROC/ENDP` (MASM, line_end из `ENDP`);
+макросы трёх диалектов → `macro:`; `.equ`/`EQU`/`%define` и `db/dw/…`-метки (NASM/
+MASM — в GAS `call qword ptr` иначе миспарсится) → `Data`; `#include`/`%include`/
+`INCLUDE`/`.include` → `IMPORTS`+`ImportRef`; entry-метки (`.globl`/`global`/
+`PUBLIC`) → «(entry)» в description. Skip-листы: `ASM_LABEL_SKIP` (`.L*`, `@`,
+`__x86.get_pc_thunk.*`), `ASM_LABEL_SKIP_SUFFIXES` (`.cold/.plt/.got/.part`),
+`ASM_REG_SKIP` (x86-64/AArch64/RISC-V); косвенные (`*`/`[`/`%`-операнды) — не
+call_sites; `@PLT`/`@GOT`-суффиксы снимаются. `max_bytes = DEFAULT_CAP_BYTES`
+(ADR-AST-4: дизасм-дампы не должны раздувать граф).
+
+**Кросс-языковые CALLS.** C/C++ получил сбор call_sites (T-78.9 — без него цепочки
+C → asm не существовали вовсе: определения — col 0, тела — с отступом, ключевые
+слова в `C_CALL_SKIP`). Мост C → asm — линкерная семантика: bare-вызов из
+C-источника резолвится в **единственный** asm-кандидат по имени
+(`typepass:asm-bridge:`, RESOLVED; несколько кандидатов — AMBIGUOUS, ребро не
+выдумывается). Отклонение от спеки: Function-заглушки для ненайденных целей не
+создаются — как у прочих языков, резолв только в существующие узлы.
+
+**Tree-sitter-волна (Ф78b, фича `treesitter`).** Грамматика `tree-sitter-asm` 0.24
+(RubixDev, generic) — только для GAS-диалекта: диспетчер снифает диалект до выбора
+бэкенда, NASM/MASM-контент остаётся на regex (грамматик нет на crates.io). Спайк
+T-78b.1 зафиксировал CST kind'ы: `program → meta (meta_ident+ident/reg/word/string)
+| label (ident+«:») | instruction (word-опкод+операнды) | ERROR`; хвост
+`.equ X, v` грамматика не принимает (ERROR ~1–2% — в пороге fallback 70.9).
+`ts::map_asm` зеркалит node_id regex-пути (паритет проверен тестом), инкрементальный
+LRU (70.8), ERROR-fallback (70.9) и kill-switch `OB2H_TREESITTER=0` — переиспользованы
+диспетчером. Качество — F1-гейты 70.11/71.7 против эталона `asm-gas`
+(`tests/fixtures/ast_golden/{asm-gas,asm-nasm,asm-masm}/`, symbol/call ≥ 0.95/0.90);
+эталоны вшиты (`load_embedded`, 8 языков).
+
+**Границы.** Не-цели (proposal): CFG-рёбра переходов (`jmp`/`jcc`/`b`), дизасм
+бинарников, разрешение косвенных вызовов, generated-stub маски для `.s`.

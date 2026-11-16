@@ -1,0 +1,19 @@
+{
+  "language": "asm-gas",
+  "fixture": "source.s",
+  "call_extraction": "current",
+  "required_symbols": [
+    { "name": "crypto_init", "kind": "Function" },
+    { "name": "crypto_start", "kind": "Function" },
+    { "name": "setup_stack", "kind": "Function" },
+    { "name": "msg_str", "kind": "Data" },
+    { "name": "AES_BLOCK", "kind": "Data" },
+    { "name": "SAVE_REGS", "kind": "Macro" }
+  ],
+  "required_calls": [
+    { "from": "crypto_init", "to": "setup_stack" },
+    { "from": "crypto_start", "to": "crypto_init" },
+    { "from": "crypto_start", "to": "setup_stack" }
+  ],
+  "notes": "Списки исчерпывающие (71.7, F1-гейт): символы — все узлы фикстуры (fn/data/macro), вызовы — все RESOLVED CALLS. GAS AT&T: метки кода — Function (entry-пометка по .globl), .rodata-метка и .equ — Data, .macro — Macro. Косвенные/регистровые операнды отсутствуют по построению."
+}

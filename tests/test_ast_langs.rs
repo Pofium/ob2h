@@ -1109,3 +1109,249 @@ impl S {
     // ROUTE-атрибут над многострочной сигнатурой всё ещё ловится
     assert_has_edge(&res, "ROUTE");
 }
+
+// ── Фаза 78 (issue #3): ассемблер — asm-gas / asm-intel ──
+
+use ob2h::project::ast::{asm_dialect, asm_label_skipped, AsmDialect};
+
+/// T-78.1: сниффинг диалекта — четыре мини-файла (по одному на диалект).
+#[test]
+fn test_asm_dialect_sniffing() {
+    let gas = r#".globl my_func
+.text
+my_func:
+    call other
+    ret
+"#;
+    assert_eq!(asm_dialect(gas, "s"), AsmDialect::GasAtt);
+
+    let gas_intel = r#".intel_syntax noprefix
+my_func:
+    mov rax, rbx
+    ret
+"#;
+    assert_eq!(asm_dialect(gas_intel, "s"), AsmDialect::GasIntel);
+
+    let nasm = r#"%include "io.asm"
+section .text
+global my_start
+my_start:
+    call do_work
+    ret
+"#;
+    assert_eq!(asm_dialect(nasm, "asm"), AsmDialect::Nasm);
+
+    let masm = r#".MODEL SMALL
+.CODE
+MyProc PROC
+    ret
+MyProc ENDP
+END
+"#;
+    assert_eq!(asm_dialect(masm, "asm"), AsmDialect::Masm);
+
+    // Дефолт по расширению: .s → GAS AT&T, .asm → NASM.
+    assert_eq!(asm_dialect("    nop\n", "s"), AsmDialect::GasAtt);
+    assert_eq!(asm_dialect("    nop\n", "asm"), AsmDialect::Nasm);
+    // GAS `.data`/`.text` — не MASM (design §8: смешение NASM/MASM — не ложный MASM).
+    let gas_sections = ".text\nfoo:\n  ret\n.data\nmsg:\n  .string \"x\"\n";
+    assert_eq!(asm_dialect(gas_sections, "s"), AsmDialect::GasAtt);
+    // комментарии не голосуют
+    assert_eq!(asm_dialect("; NASM-комментарий\ncall foo\n", "s"), AsmDialect::GasAtt);
+}
+
+/// T-78.2/78.3: `.S` (верхний регистр) матчится на asm-gas; GAS-фикстура
+/// даёт узлы из словаря и entry-пометку.
+#[test]
+fn test_asm_gas_nodes_and_uppercase_ext() {
+    assert_eq!(LangSpec::for_path("kernel.S").unwrap().name, "asm-gas");
+    assert_eq!(LangSpec::for_path("boot.S").unwrap().name, "asm-gas");
+    assert_eq!(LangSpec::for_path("n.asm").unwrap().name, "asm-intel");
+
+    let res = parse("asm-gas", "src/boot.S");
+    assert_has_node(&res, "my_func");
+    assert_has_node(&res, "CONST");
+    assert_has_node(&res, "PROLOGUE");
+    assert_has_edge(&res, "DEFINES");
+    // entry-пометка: .globl my_func
+    let f = res.nodes.iter().find(|n| n.label == "my_func").unwrap();
+    assert!(f.description.contains("(entry)"), "desc={}", f.description);
+    assert_eq!(f.node_type, "Function");
+    // .rodata-метка — Data
+    let msg = res.nodes.iter().find(|n| n.label == "msg").unwrap();
+    assert_eq!(msg.node_type, "Data");
+}
+
+/// T-78.3: NASM-фикстура — global/section/%define/%macro; MASM — PROC/ENDP
+/// line_end и PUBLIC-entry.
+#[test]
+fn test_asm_intel_nasm_and_masm() {
+    let res = parse("asm-intel", "src/n.asm");
+    // NASM-фикстура: my_start (code label), value (dq), LIMIT (%define), SAVE_REGS (%macro)
+    assert_has_node(&res, "my_start");
+    assert_has_node(&res, "value");
+    assert_has_node(&res, "LIMIT");
+    assert_has_node(&res, "SAVE_REGS");
+
+    // MASM: PROC даёт line_end из парного ENDP; PUBLIC — entry-пометка.
+    let ex = AstCodeExtractor::new();
+    let mut m = AstScanResult::default();
+    ex.parse_file(
+        "src/win.asm",
+        r#".MODEL SMALL
+.CODE
+PUBLIC my_proc
+my_proc PROC
+    call helper
+    ret
+my_proc ENDP
+
+_DATA SEGMENT
+gvar dw 0
+_DATA ENDS
+END
+"#,
+        &mut m,
+    );
+    let proc_node = m.nodes.iter().find(|n| n.label == "my_proc").unwrap();
+    assert_eq!(proc_node.node_type, "Function");
+    assert!(proc_node.description.contains("(entry)"));
+    assert!(proc_node.line_end > proc_node.line_start, "line_end из ENDP");
+    let gvar = m.nodes.iter().find(|n| n.label == "gvar").unwrap();
+    assert_eq!(gvar.node_type, "Data");
+}
+
+/// T-78.6: шумовые метки (skip-листы) не дают узлов и call_sites.
+#[test]
+fn test_asm_skip_lists() {
+    assert!(asm_label_skipped(".L1"));
+    assert!(asm_label_skipped(".LBB0_3"));
+    assert!(asm_label_skipped("@@"));
+    assert!(asm_label_skipped("__x86.get_pc_thunk.bp"));
+    assert!(asm_label_skipped("foo.cold"));
+    assert!(asm_label_skipped("foo.plt"));
+    assert!(!asm_label_skipped("my_func"));
+    assert!(!asm_label_skipped("aes_encrypt"));
+
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    ex.parse_file(
+        "src/noisy.s",
+        r#".text
+real_func:
+    call .Llocal
+    call rax
+    call *%rax
+    call [rbx]
+    call qword ptr [rip+other]
+    call foo@PLT
+    ret
+.L1:
+.LBB0_3:
+1:
+__x86.get_pc_thunk.bp:
+.cold:
+"#,
+        &mut res,
+    );
+    let labels = ["L1", "LBB0_3", "__x86.get_pc_thunk.bp", "cold"];
+    for l in labels {
+        assert!(
+            !res.nodes.iter().any(|n| n.label == l),
+            "шумовая метка {l} не должна становиться узлом"
+        );
+    }
+    // числовая метка `1:` отсекается классом символов
+    assert!(!res.nodes.iter().any(|n| n.node_id.ends_with(":1")));
+    // call_sites: только foo (по имени, @PLT снят) и .Llocal? нет — .L skip.
+    let names: Vec<&str> = res.call_sites.iter().map(|c| c.name.as_str()).collect();
+    assert!(
+        names.iter().all(|n| *n == "foo"),
+        "шумовые/регистровые/косвенные операнды не дают call_sites: {names:?}"
+    );
+}
+
+/// T-78.5: call_sites GAS → резолв CALLS type-pass'ом (same-file).
+#[test]
+fn test_asm_calls_resolved_same_file() {
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    ex.parse_file(
+        "src/main.s",
+        r#".text
+.globl entry
+entry:
+    call helper
+    ret
+
+helper:
+    ret
+"#,
+        &mut res,
+    );
+    let added = ob2h::project::ast::resolve_calls(&mut res);
+    assert!(added >= 1, "ожидалось CALLS-ребро entry→helper");
+    let edge = res
+        .edges
+        .iter()
+        .find(|e| e.label == "CALLS" && e.provenance == "RESOLVED")
+        .expect("RESOLVED CALLS");
+    assert!(edge.source_node_id.ends_with(":entry"));
+    assert!(edge.target_node_id.ends_with(":helper"));
+}
+
+/// T-78.9: кросс-языковая цепочка C → asm через type-pass (образец
+/// test_incremental_crossfile.rs; call_sites у C появились только здесь).
+#[test]
+fn test_asm_crossfile_c_to_asm_calls() {
+    let ex = AstCodeExtractor::new();
+    let mut res = AstScanResult::default();
+    // asm-файл: определения функций
+    ex.parse_file(
+        "src/aes.S",
+        r#".text
+.globl aes_encrypt
+aes_encrypt:
+    ret
+
+.globl aes_decrypt
+aes_decrypt:
+    ret
+"#,
+        &mut res,
+    );
+    // C-файл: вызов asm-метки (extern-декларация — не Function-узел,
+    // резолв по имени через by_name)
+    ex.parse_file(
+        "src/crypto.c",
+        r#"#include "aes.h"
+
+void encrypt_block(uint8_t* out) {
+    aes_encrypt(out);
+}
+
+void decrypt_block(uint8_t* in) {
+    aes_decrypt(in);
+}
+"#,
+        &mut res,
+    );
+    let added = ob2h::project::ast::resolve_calls(&mut res);
+    let asm_calls: Vec<_> = res
+        .edges
+        .iter()
+        .filter(|e| {
+            e.label == "CALLS"
+                && (e.target_node_id.contains("aes_encrypt") || e.target_node_id.contains("aes_decrypt"))
+        })
+        .collect();
+    assert_eq!(asm_calls.len(), 2, "обе цепочки C → asm: {added} рёбер");
+    for e in asm_calls {
+        assert!(
+            e.source_node_id.starts_with("fn:src/crypto.c:"),
+            "источник — C-функция: {}",
+            e.source_node_id
+        );
+        assert_eq!(e.provenance, "RESOLVED");
+    }
+}

@@ -64,6 +64,9 @@ tree-sitter-python = { version = "0.25", optional = true }
 tree-sitter-go = { version = "0.25", optional = true }
 tree-sitter-typescript = { version = "0.23", optional = true }
 tree-sitter-dart = { version = "0.3", optional = true }
+# Ф78b (issue #3): generic asm-грамматика (RubixDev) — только GAS-диалект;
+# NASM/MASM остаются на regex (грамматик на crates.io нет).
+tree-sitter-asm = { version = "0.24", optional = true }
 # Ф72.2 (PLAN_v2.0): FastEmbed / ONNX Runtime под опциональной фичей `onnx`
 # (по умолчанию ВЫКЛЮЧЕНА: zero-dependency сборка остаётся на Candle).
 fastembed = { version = "4", optional = true }
@@ -95,6 +98,7 @@ treesitter = [
     "dep:tree-sitter-go",
     "dep:tree-sitter-typescript",
     "dep:tree-sitter-dart",
+    "dep:tree-sitter-asm",
 ]
 # Ф72.2 (PLAN_v2.0): High-Performance ONNX инференс через fastembed/ort.
 onnx = ["dep:fastembed"]

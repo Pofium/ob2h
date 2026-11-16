@@ -1,0 +1,19 @@
+{
+  "language": "asm-nasm",
+  "fixture": "source.asm",
+  "call_extraction": "current",
+  "required_symbols": [
+    { "name": "nasm_entry", "kind": "Function" },
+    { "name": "nasm_helper", "kind": "Function" },
+    { "name": "print_char", "kind": "Function" },
+    { "name": "answer", "kind": "Data" },
+    { "name": "magic", "kind": "Data" },
+    { "name": "LIMIT", "kind": "Data" },
+    { "name": "PUSH_ALL", "kind": "Macro" }
+  ],
+  "required_calls": [
+    { "from": "nasm_entry", "to": "nasm_helper" },
+    { "from": "nasm_helper", "to": "print_char" }
+  ],
+  "notes": "Списки исчерпывающие (71.7, F1-гейт): символы — все узлы фикстуры, вызовы — все RESOLVED CALLS. NASM: section-метки не узлы, global — entry-пометка, dq/equ/%define — Data, %macro — Macro. Реестровая запись — asm-intel (Matcher::Ext asm), диалект — сниффингом контента."
+}

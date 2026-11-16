@@ -29,9 +29,9 @@ fn parse(rel_path: &str, source: &str) -> AstScanResult {
 #[test]
 fn golden_fixtures_integrity() {
     let items = load_all(&fixtures_dir()).expect("загрузка ast_golden");
-    assert_eq!(items.len(), 5, "эталоны для rust, python, ts, go, dart");
+    assert_eq!(items.len(), 8, "эталоны rust, python, ts, go, dart + asm-gas/nasm/masm (Ф78)");
     let langs: Vec<&str> = items.iter().map(|(_, g)| g.language.as_str()).collect();
-    for lang in ["rust", "python", "ts", "go", "dart"] {
+    for lang in ["rust", "python", "ts", "go", "dart", "asm-gas", "asm-nasm", "asm-masm"] {
         assert!(langs.contains(&lang), "нет эталона {lang}");
     }
     for (fixture_path, g) in &items {
@@ -133,10 +133,14 @@ fn f1_gates_regex_backend() {
         let src = std::fs::read_to_string(fixture_path).expect("фикстура читается");
         let res = parse(&g.fixture, &src);
 
+        // Ф78 (issue #3): у asm Macro/Data — первоклассные символы словаря
         let predicted: HashSet<(String, String)> = res
             .nodes
             .iter()
-            .filter(|n| SYMBOL_TYPES.contains(&n.node_type.as_str()))
+            .filter(|n| {
+                SYMBOL_TYPES.contains(&n.node_type.as_str())
+                    || matches!(n.node_type.as_str(), "Macro" | "Data")
+            })
             .map(|n| (n.label.clone(), n.node_type.clone()))
             .collect();
         let required: HashSet<(String, String)> = g
@@ -191,7 +195,8 @@ fn f1_gates_regex_backend() {
 }
 
 /// Гейт 71.7 под tree-sitter (Фаза 70 — ядро глубокого call graph): все 5
-/// языков дают и symbol F1 ≥ 0.95, и call F1 ≥ 0.90.
+/// языков дают и symbol F1 ≥ 0.95, и call F1 ≥ 0.90. Ф78b: asm-gas — через
+/// ts::map_asm; asm-nasm/asm-masm остаются на regex (грамматик нет).
 #[cfg(feature = "treesitter")]
 #[test]
 fn f1_gates_treesitter_backend() {
@@ -201,21 +206,32 @@ fn f1_gates_treesitter_backend() {
     for (fixture_path, g) in &items {
         let src = std::fs::read_to_string(fixture_path).expect("фикстура читается");
         let lang = match g.language.as_str() {
-            "rust" => "rust",
-            "python" => "python",
-            "ts" => "ts",
-            "go" => "go",
-            "dart" => "dart",
+            "rust" => Some("rust"),
+            "python" => Some("python"),
+            "ts" => Some("ts"),
+            "go" => Some("go"),
+            "dart" => Some("dart"),
+            "asm-gas" => Some("asm"),
+            "asm-nasm" | "asm-masm" => None, // regex-экстрактор (диалект-гейт диспетчера)
             other => panic!("неизвестный язык {other}"),
         };
         let mut res = AstScanResult::default();
-        ts::parse_source(&g.fixture, &src, lang, &mut res).expect("tree-sitter разбор");
+        match lang {
+            Some(lang) => {
+                ts::parse_source(&g.fixture, &src, lang, &mut res).expect("tree-sitter разбор")
+            }
+            None => AstCodeExtractor::new().parse_file(&g.fixture, &src, &mut res),
+        }
         resolve_calls(&mut res);
 
+        // Ф78 (issue #3): у asm Macro/Data — первоклассные символы словаря
         let predicted: HashSet<(String, String)> = res
             .nodes
             .iter()
-            .filter(|n| SYMBOL_TYPES.contains(&n.node_type.as_str()))
+            .filter(|n| {
+                SYMBOL_TYPES.contains(&n.node_type.as_str())
+                    || matches!(n.node_type.as_str(), "Macro" | "Data")
+            })
             .map(|n| (n.label.clone(), n.node_type.clone()))
             .collect();
         let required: HashSet<(String, String)> = g

@@ -1,0 +1,18 @@
+{
+  "language": "asm-masm",
+  "fixture": "source.asm",
+  "call_extraction": "current",
+  "required_symbols": [
+    { "name": "win_entry", "kind": "Function" },
+    { "name": "win_helper", "kind": "Function" },
+    { "name": "win_tail", "kind": "Function" },
+    { "name": "buffer", "kind": "Data" },
+    { "name": "limit_v", "kind": "Data" },
+    { "name": "MYMACRO", "kind": "Macro" }
+  ],
+  "required_calls": [
+    { "from": "win_entry", "to": "win_helper" },
+    { "from": "win_helper", "to": "win_tail" }
+  ],
+  "notes": "Списки исчерпывающие (71.7, F1-гейт): символы — все узлы фикстуры, вызовы — все RESOLVED CALLS. MASM: PROC/ENDP дают line_end, PUBLIC — entry-пометка, dw/EQU — Data, MACRO/ENDM — Macro. Реестровая запись — asm-intel, диалект — сниффингом контента."
+}

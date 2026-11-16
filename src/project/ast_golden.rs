@@ -135,6 +135,26 @@ const EMBEDDED_RAW: &[(&str, &str, &str, &str)] = &[
         include_str!("../../tests/fixtures/ast_golden/ts/source.ts"),
         include_str!("../../tests/fixtures/ast_golden/ts/expected.json"),
     ),
+    // Ф78 (issue #3): ассемблер — три диалекта; вызовы обязательны уже на
+    // regex-волне (call_extraction: "current").
+    (
+        "asm-gas",
+        "source.s",
+        include_str!("../../tests/fixtures/ast_golden/asm-gas/source.s"),
+        include_str!("../../tests/fixtures/ast_golden/asm-gas/expected.json"),
+    ),
+    (
+        "asm-nasm",
+        "source.asm",
+        include_str!("../../tests/fixtures/ast_golden/asm-nasm/source.asm"),
+        include_str!("../../tests/fixtures/ast_golden/asm-nasm/expected.json"),
+    ),
+    (
+        "asm-masm",
+        "source.asm",
+        include_str!("../../tests/fixtures/ast_golden/asm-masm/source.asm"),
+        include_str!("../../tests/fixtures/ast_golden/asm-masm/expected.json"),
+    ),
 ];
 
 /// Вшитый эталон: спецификация + исходник фикстуры.
@@ -179,13 +199,13 @@ mod tests {
     }
 
     #[test]
-    fn load_all_reads_all_five_languages() {
+    fn load_all_reads_all_languages() {
         let items = load_all(&fixtures_dir()).expect("загрузка ast_golden");
         let langs: Vec<&str> = items
             .iter()
             .map(|(_, g)| g.language.as_str())
             .collect();
-        for lang in ["dart", "go", "python", "rust", "ts"] {
+        for lang in ["dart", "go", "python", "rust", "ts", "asm-gas", "asm-nasm", "asm-masm"] {
             assert!(langs.contains(&lang), "нет эталона для {lang}");
         }
     }
@@ -193,7 +213,7 @@ mod tests {
     #[test]
     fn load_embedded_matches_disk_fixtures() {
         let embedded = load_embedded().expect("вшитые эталоны валидны");
-        assert_eq!(embedded.len(), 5);
+        assert_eq!(embedded.len(), 8);
         let disk = load_all(&PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/ast_golden"))
             .expect("дисковые эталоны");

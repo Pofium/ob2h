@@ -632,14 +632,20 @@ pub fn ast_golden_section() -> anyhow::Result<(bool, Vec<serde_json::Value>)> {
         };
 
         // 71.7: F1-метрики на исчерпывающих эталонах. Предсказанные символы —
-        // словарь SYMBOL_TYPES; предсказанные вызовы — CALLS без эвристик
-        // (виртуальные вызовы измеряются отдельно, вне гарантированного слоя).
+        // словарь SYMBOL_TYPES; для asm (Ф78, issue #3) — плюс Macro/Data
+        // (первоклассные символы реестрового словаря asm-gas/asm-intel).
+        // Предсказанные вызовы — CALLS без эвристик (виртуальные вызовы
+        // измеряются отдельно, вне гарантированного слоя).
         use crate::graph::callpath::SYMBOL_TYPES;
         use std::collections::HashSet as BenchHashSet;
         let predicted_syms: BenchHashSet<(String, String)> = a
             .nodes
             .iter()
-            .filter(|n| SYMBOL_TYPES.contains(&n.node_type.as_str()))
+            .filter(|n| {
+                SYMBOL_TYPES.contains(&n.node_type.as_str())
+                    || n.node_type == "Macro"
+                    || n.node_type == "Data"
+            })
             .map(|n| (n.label.clone(), n.node_type.clone()))
             .collect();
         let required_syms: BenchHashSet<(String, String)> = item
@@ -1591,7 +1597,8 @@ mod tests {
     fn ast_golden_section_all_ok() {
         let (ok, langs) = ast_golden_section().expect("секция ast_golden");
         assert!(ok, "вшитые эталоны должны проходить паритет и присутствие");
-        assert_eq!(langs.len(), 5);
+        // Ф78 (issue #3): + asm-gas/asm-nasm/asm-masm
+        assert_eq!(langs.len(), 8);
         for e in &langs {
             assert!(e.get("ok").and_then(|v| v.as_bool()).unwrap_or(false));
         }
