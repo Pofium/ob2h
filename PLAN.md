@@ -255,6 +255,19 @@ ssh/manual (`data/sync/peers.toml`), фаза автодрима `after_dream`.
 - sqlite-vec как оптимизация векторного поиска, если база перерастёт ~50k векторов.
 - Импорт существующей памяти OmnesBOT (миграция `agent_memories`/`graph_nodes` из Postgres).
 
+### Исправления UX (по живому тесту v2.0.0, 16.11.2026 — заказ владельца)
+
+- [#1](https://github.com/Pofium/ob2h/issues/1) **PIN-диалог сейфа из MCP**: сценарий
+  «дал логин/пароль в чате → вылетело PIN-окно → ввёл → секрет сохранён» (и зеркально
+  при `secrets_get`). Сейчас MCP при locked только отдаёт ошибку (ADR-18: инициатор —
+  человек через CLI; GUI-окно есть только в CLI-пути и gui-сборке). Решение-кандидат:
+  spawn-хелпер `ob2h secrets ask-pin` (отдельный процесс = главный поток для eframe),
+  гейт `OB2H_PIN_GUI`, Cancelled/timeout-контракты, рассылка ключа через существующий IPC.
+- [#2](https://github.com/Pofium/ob2h/issues/2) **Мелкие UX-фиксы**: CLI `secrets unlock/set/show`
+  без TTY зависает на rpassword (нужен `is_terminal()`-гейт с честной ошибкой);
+  `memory_feedback` «key is required» без подсказки где взять key; degraded-режим
+  `warming_up_embeddings` без ETA; расхождение доков/хелпа `backup verify`.
+
 ---
 
 ## 3. Риски и их обработка
