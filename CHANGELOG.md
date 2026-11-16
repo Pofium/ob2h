@@ -3,7 +3,7 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
-## [Unreleased]
+## [2.0.1] - 2026-11-16
 
 ### Added
 - **Ф78 (заказ владельца)**: дрим читает daily-логы напрямую (`dream_status`/`dream_log` в stats — опциональное поле `daily`: сколько записей потреблено из daily помимо history.jsonl); `Workspace.read_daily_from_offsets` + курсор `.daily_dream_cursor`; daily-оффсеты двигаются только при успехе прогона.

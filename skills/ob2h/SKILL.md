@@ -82,7 +82,8 @@ description: Long-term memory, knowledge graph and dreaming backend of this Herm
   openapi.json|yaml), IaC (Dockerfile*, .tf/.hcl, docker-compose|compose.yml|yaml,
   k8s|deploy|helm|chart*/*.yaml|yml), манифесты (Cargo.toml, package.json,
   pyproject.toml, requirements.txt, go.mod, pubspec.yaml, composer.json; lock-файлы
-  исключены), спец-языки (.ipynb без outputs, .sol, .zig). Импорты внешних пакетов
+  исключены), спец-языки (.ipynb без outputs, .sol, .zig, .s/.S/.asm — ассемблер
+  GAS/NASM/MASM, v2.0.1). Импорты внешних пакетов
   сливаются с манифестами в узлы `pkg:<eco>:<name>` (версия в description).
 - Полезные запросы v1.7: `project_graph_search("pkg:rust:serde_json")` — пакет и его
   потребители; `project_graph_search("cssclass:<имя>")` — где определён CSS-класс;
