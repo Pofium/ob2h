@@ -108,6 +108,12 @@ harness-источника (ZCode (GLM)), ссылки на строки `daily/
 
 <img src="docs/screenshots/viewer-07-stats.png" alt="ob2h viewer — вкладка «Статистика»: дашборд счётчиков" width="900" />
 
+**8. Секреты** — сейф Secrets Vault: разблокировка локальным PIN (Argon2id +
+XChaCha20-Poly1305). PIN вводится только в самом окне (ADR-18) и никогда не
+попадает в чат, логи и аудит.
+
+<img src="docs/screenshots/viewer-08-secrets.png" alt="ob2h viewer — вкладка «Секреты»: разблокировка сейфа PIN" width="900" />
+
 ---
 
 ## ⚡ Почему именно версия на Rust?
