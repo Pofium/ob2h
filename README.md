@@ -68,45 +68,45 @@
 
 ## 🖼 Скриншоты окна просмотра (`ob2h viewer`)
 
-Нативное окно хранилища (сборка `--features gui`, строго read-only) — ниже реальные
-вкладки в той последовательности, в которой снимались (v2.0.1):
+Нативное окно хранилища (сборка `--features gui`, строго read-only) — вкладки ниже
+идут в порядке меню окна, слева направо (v2.0.1):
 
-**1. Граф знаний** — force-layout графа кода проекта: топ-узлы по степени (кап),
+**1. Память** — список записей с фильтрами (проект, категория, источник, мин.
+trust) и панелью «Подробности» справа.
+
+<img src="docs/screenshots/viewer-01-memory.png" alt="ob2h viewer — вкладка «Память»: фильтры и детали" width="900" />
+
+**2. Граф знаний** — force-layout графа кода проекта: топ-узлы по степени (кап),
 типы `File` / `ExternalModule`, pan/zoom; внизу — карточка выбранного узла
 (исходный файл, степень 104).
 
-<img src="docs/screenshots/viewer-01-graph.png" alt="ob2h viewer — вкладка «Граф»: force-layout графа кода" width="900" />
+<img src="docs/screenshots/viewer-02-graph.png" alt="ob2h viewer — вкладка «Граф»: force-layout графа кода" width="900" />
 
-**2. Сессии** — реплей диалогов из daily-логов: пары *user / assistant* с датами,
+**3. Сессии** — реплей диалогов из daily-логов: пары *user / assistant* с датами,
 справа — ссылка на строку исходного `daily/2026-10-20.jsonl`.
 
-<img src="docs/screenshots/viewer-02-sessions.png" alt="ob2h viewer — вкладка «Сессии»: реплей диалогов" width="900" />
+<img src="docs/screenshots/viewer-03-sessions.png" alt="ob2h viewer — вкладка «Сессии»: реплей диалогов" width="900" />
 
-**3. Уроки** — процедурный опыт агента: уверенность (confidence), теги и счётчик
+**4. Сессии с бейджами** — те же сессии с именами сессий и бейджем
+harness-источника (ZCode (GLM)), ссылки на строки `daily/2026-11-17.jsonl`.
+
+<img src="docs/screenshots/viewer-04-sessions-agents.png" alt="ob2h viewer — «Сессии» с бейджами harness" width="900" />
+
+**5. Уроки** — процедурный опыт агента: уверенность (confidence), теги и счётчик
 подкреплений; поиск и фильтр по вкладкам «Уроки» / «Слоты».
 
-<img src="docs/screenshots/viewer-03-lessons.png" alt="ob2h viewer — вкладка «Уроки»: уверенность и теги" width="900" />
+<img src="docs/screenshots/viewer-05-lessons.png" alt="ob2h viewer — вкладка «Уроки»: уверенность и теги" width="900" />
 
-**4. Слоты** — закреплённый (pinned) рабочий контекст проекта: имя проекта, лимит
+**6. Слоты** — закреплённый (pinned) рабочий контекст проекта: имя проекта, лимит
 размера (2203/4000) и раскрытие полного содержимого.
 
-<img src="docs/screenshots/viewer-04-slots.png" alt="ob2h viewer — вкладка «Слоты»: pinned-контекст" width="900" />
+<img src="docs/screenshots/viewer-06-slots.png" alt="ob2h viewer — вкладка «Слоты»: pinned-контекст" width="900" />
 
-**5. Статистика** — дашборд хранилища: счётчики (память, узлы и рёбра графа,
+**7. Статистика** — дашборд хранилища: счётчики (память, узлы и рёбра графа,
 уроки, слоты, проекты, документы, чанки, размер БД, версия схемы) и топ
 категорий / проектов.
 
-<img src="docs/screenshots/viewer-05-stats.png" alt="ob2h viewer — вкладка «Статистика»: дашборд счётчиков" width="900" />
-
-**6. Память** — список записей с фильтрами (проект, категория, источник, мин.
-trust) и панелью «Подробности» справа.
-
-<img src="docs/screenshots/viewer-06-memory.png" alt="ob2h viewer — вкладка «Память»: фильтры и детали" width="900" />
-
-**7. Сессии с бейджами** — реплей с именами сессий и бейджем harness-источника
-(ZCode (GLM)), ссылки на строки `daily/2026-11-17.jsonl`.
-
-<img src="docs/screenshots/viewer-07-sessions-agents.png" alt="ob2h viewer — «Сессии» с бейджами harness" width="900" />
+<img src="docs/screenshots/viewer-07-stats.png" alt="ob2h viewer — вкладка «Статистика»: дашборд счётчиков" width="900" />
 
 ---
 
