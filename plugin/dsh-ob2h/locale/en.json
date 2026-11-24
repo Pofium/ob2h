@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "OB2H memory",
+    "description": "Connects DeepSeek Harness to OB2H, a local store for long-term memory, a knowledge graph and an AST graph of your code. The bundle has two rows: mcp-ob2h adds the 57 ob2h tools (memory_save, memory_search, project_context, project_impact and others), and ob2h-memory recalls relevant memories before each turn and saves every finished turn. Both rows are disabled after installation. ob2h (https://github.com/Pofium/ob2h, 2.0.1 or later) must be installed. To use the bundle, enable it, then on the Plugins page override each row with the ob2h executable and one absolute data directory (OB2H_DATA_DIR for the MCP row, dataDir for the memory row) and enable the row. All data stays in that directory on this machine; it leaves the machine only in calls to the model or embedding API that ob2h is configured to use. With the bundle off, the agent has neither the tools nor the memory block.",
+    "detail": "docs/DETAIL.md"
+  }
+}

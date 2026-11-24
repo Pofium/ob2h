@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "OB2H 记忆",
+    "description": "将 DeepSeek Harness 连接到 OB2H——一个本地存储，提供长期记忆、知识图谱和代码的 AST 图谱。此 bundle 包含两个插件行：mcp-ob2h 提供 57 个 ob2h 工具（memory_save、memory_search、project_context、project_impact 等），ob2h-memory 在每一轮对话前回忆相关记忆，并在每轮结束后保存对话。安装后两个插件行均为禁用状态。需要先安装 ob2h（https://github.com/Pofium/ob2h，2.0.1 或更高版本）。使用方法：启用此 bundle，然后在“插件”页面为每个插件行指定 ob2h 可执行文件和同一个绝对路径的数据目录（MCP 行用 OB2H_DATA_DIR，记忆行用 dataDir），再启用该插件行。所有数据都保存在本机的该目录中；只有 ob2h 配置使用的模型或嵌入 API 调用会把数据带出本机。关闭此 bundle 后，智能体既没有这些工具，也不会收到记忆块。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}

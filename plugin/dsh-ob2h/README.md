@@ -5,7 +5,7 @@
 Это DSH-аналог Hermes-MemoryProvider (`plugin/ob2h/`, Python), повторяющий его
 поведение штатными средствами харнесса.
 
-Инструменты (`mcp__ob2h__*`, 36 шт.) ставит отдельная строка патча —
+Инструменты (`mcp__ob2h__*`, 57 шт.) ставит отдельная строка патча —
 `@deepseek-ai/dsh-mcp-client`; этот плагин инструментов не регистрирует и политику
 инструментов не обходит.
 
@@ -33,7 +33,9 @@
   `import '@deepseek-ai/...'` рискует упасть или подтянуть вторую копию пакета.
 - **Ноль dsh-пиров** в `package.json` — гейт совместимости харнесса
   (`evaluatePluginCompatibility`) тогда не может «молча отключить» строку при
-  обновлении DSH.
+  обновлении DSH. Для маркет-индекса DSH объявлен только `engines.dsh`
+  (`^0.2.0-rc.2`): это объявление обязательно для публикации в индексе, и оно одно
+  решает совместимость.
 - **Fail-open**: любая ошибка памяти (нет бинарника, таймаут, битый JSON, падение
   child) логируется на уровне `debug`/`warn` и не влияет на ход.
 - **Один долгоживущий child** `ob2h serve` на плагин, с backoff-перезапуском и
@@ -54,6 +56,53 @@ cargo build --release
 ```bash
 node -e "import('file:///C:/Projects/ob2h/plugin/dsh-ob2h/index.js').then(m => console.log(m.name, Object.keys(m)))"
 ```
+
+## Установка как bundle DSH (маркет-индекс)
+
+Пакет оформлен как bundle DeepSeek Harness: в `package.json` объявлены `dsh.bundle.patch`,
+`engines.dsh` и экспорт локалей (en/zh/ru); `cordis.patch.yml` вставляет те же две строки,
+что и `ob2h agent install --agent dsh` (`mcp-ob2h` — инструменты, `ob2h-memory` — память),
+но **выключенными**: у ob2h нет пользовательского каталога по умолчанию, и без
+`OB2H_DATA_DIR` он писал бы `data/` в рабочий каталог дочернего процесса.
+
+1. **Включите индексы**: Plugins → включите **Custom plugin indexes** (экспериментальный
+   bundle `dsh-experimental-plugin-market-bundle`) — появится вкладка **Discover**.
+2. **Добавьте индекс**: Discover → **Add index source** → адрес репозитория
+   `https://github.com/Pofium/ob2h` (индекс — `index.json` в корне, на `main`; поля
+   *Index file path* и *Git ref* оставить пустыми).
+3. **Установите** `dsh-ob2h` из списка и включите bundle.
+4. **Настройте обе строки** — переопределением по `id` в
+   `$DSH_HOME/profiles/<профиль>/cordis.patch.yml` (переопределение заменяет `config`
+   целиком) — и включите их переключателями на странице Plugins:
+
+   ```yaml
+   - id: mcp-ob2h
+     disabled: false
+     config:
+       serverName: ob2h
+       transport: stdio
+       command: 'C:/Tools/ob2h/ob2h.exe'      # или просто ob2h, если он в PATH
+       args: ['serve']
+       toolCallTimeoutMs: 300000
+       env:
+         OB2H_DATA_DIR: 'C:/Users/<user>/ob2h-data'
+   - id: ob2h-memory
+     disabled: false
+     config:
+       binary: 'C:/Tools/ob2h/ob2h.exe'
+       dataDir: 'C:/Users/<user>/ob2h-data'
+   ```
+
+   Обе строки должны указывать один и тот же каталог данных. Ключ LLM ob2h берёт сам —
+   из окружения процесса или из `.env` в рабочем каталоге (см. «Про ключ LLM» в
+   `docs/DSH_INTEGRATION.md`).
+5. Перезапустите DSH и проверьте: в новой сессии появились инструменты `mcp__ob2h__*`,
+   а на вопрос о прошлых решениях агент отвечает с блоком `<agent_memory>`.
+
+Источник версии в индексе — коммит Git (`source.type: git`, коммит + `path`), npm не
+используется. После изменения содержимого пакета: коммит с пакетом → его SHA и время
+коммита → новая запись версии в `index.json`. Иконка индекса — `icon-128.png`
+(data URL в `index.json`).
 
 ## Конфиг (все поля необязательны)
 

@@ -1,23 +1,55 @@
 {
   "name": "dsh-ob2h",
   "version": "0.1.0",
-  "private": true,
+  "description": "OB2H for DeepSeek Harness: the ob2h MCP tools plus automatic memory recall before a turn and capture of finished turns.",
   "type": "module",
-  "description": "cordis-плагин DeepSeek Harness: автозахват ходов и prefetch <agent_memory> через ob2h serve (JSON-RPC stdio)",
   "main": "index.js",
+  "icon": "./icon.png",
   "exports": {
     ".": "./index.js",
     "./provider": "./lib/provider.js",
-    "./rpc": "./lib/rpc.js"
+    "./rpc": "./lib/rpc.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "index.js",
-    "lib"
+    "lib",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.png",
+    "docs"
   ],
   "scripts": {
     "test": "node --test \"tests/*.test.js\""
   },
   "engines": {
-    "node": ">=20"
-  }
+    "node": ">=20",
+    "dsh": "^0.2.0-rc.2"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pofium/ob2h.git",
+    "directory": "plugin/dsh-ob2h"
+  },
+  "homepage": "https://github.com/Pofium/ob2h#readme",
+  "bugs": "https://github.com/Pofium/ob2h/issues",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "ob2h",
+    "memory",
+    "mcp",
+    "knowledge-graph",
+    "code-graph"
+  ]
 }

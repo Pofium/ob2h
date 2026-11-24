@@ -1,0 +1,24 @@
+# OB2H for DeepSeek Harness: the ob2h MCP tools and the memory bridge
+# (automatic recall before a turn, automatic capture of finished turns).
+#
+# Both rows start `ob2h serve` and are DISABLED until they are configured:
+# ob2h has no user-level default store, so without OB2H_DATA_DIR it would write
+# `data/` under the working directory of the child. Before you enable a row,
+# override it (same id) with the executable and the data directory — the full
+# example is in README.md, section «Установка как bundle DSH (маркет-индекс)».
+# An override replaces the complete config, so restate every field you keep.
+- insert:
+    - id: mcp-ob2h
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: true
+      config:
+        serverName: ob2h
+        transport: stdio
+        command: ob2h
+        args: ['serve']
+        toolCallTimeoutMs: 300000
+    - id: ob2h-memory
+      name: 'dsh-ob2h'
+      disabled: true
+      config:
+        binary: ob2h
