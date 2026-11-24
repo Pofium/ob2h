@@ -3,6 +3,11 @@
 Формат: Keep a Changelog (упрощённый). Версии — по мере появления пользовательского
 контракта (MCP-инструментов).
 
+## [Unreleased]
+
+### Added
+- **Плагин для маркетплейсов ZCode и Claude Code** (`plugins/ob2h/`, каталог `ob2h-plugins` в `.claude-plugin/marketplace.json`): MCP-сервер `ob2h` (57 инструментов) + скиллы `ob2h` и `ob2h-setup`; настройки `ob2h executable` и обязательная `Data directory` (`OB2H_DATA_DIR`); README на английском и китайском. Контракт MCP-инструментов не менялся.
+
 ## [2.0.1] - 2026-11-16
 
 ### Added

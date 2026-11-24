@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ob2h": {
+      "command": "${user_config.binary}",
+      "args": ["serve"],
+      "env": {
+        "OB2H_DATA_DIR": "${user_config.data_dir}"
+      }
+    }
+  }
+}

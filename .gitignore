@@ -14,3 +14,6 @@ __pycache__/
 .mimosa/
 .qoder/
 target_bench/
+
+# Локальный dev-каталог маркетплейса ZCode (плагин plugins/ob2h) — не публикуется
+/plugins/marketplace.json

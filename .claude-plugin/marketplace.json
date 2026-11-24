@@ -1,0 +1,42 @@
+{
+  "name": "ob2h-plugins",
+  "owner": {
+    "name": "Pofium",
+    "url": "https://github.com/Pofium"
+  },
+  "description": "Plugins for ob2h (OmnesBot to Harness): long-term memory, knowledge graph and AST code graph for AI agents.",
+  "plugins": [
+    {
+      "name": "ob2h",
+      "source": "./plugins/ob2h",
+      "version": "0.1.0",
+      "description": "Long-term memory, knowledge graph and AST code graph for coding agents: a local MCP server with 57 tools to recall past decisions, save new facts, analyze project architecture and estimate refactor blast radius. Data stays on your machine.",
+      "description_i18n": {
+        "en": "Long-term memory, knowledge graph and AST code graph for coding agents: a local MCP server with 57 tools to recall past decisions, save new facts, analyze project architecture and estimate refactor blast radius. Data stays on your machine.",
+        "zh-CN": "为编程智能体提供长期记忆、知识图谱与 AST 代码图谱：本地 MCP 服务器，包含 57 个工具，用于回忆过往决策、保存新事实、分析项目架构并评估重构影响范围。数据保存在你的本机。"
+      },
+      "displayName": "OB2H",
+      "displayName_i18n": {
+        "en": "OB2H",
+        "zh-CN": "OB2H 记忆与代码图谱"
+      },
+      "category": "developer-tools",
+      "author": {
+        "name": "Pofium",
+        "url": "https://github.com/Pofium"
+      },
+      "homepage": "https://github.com/Pofium/ob2h",
+      "license": "MIT",
+      "keywords": [
+        "ob2h",
+        "memory",
+        "long-term-memory",
+        "knowledge-graph",
+        "code-graph",
+        "ast",
+        "blast-radius",
+        "mcp"
+      ]
+    }
+  ]
+}
