@@ -6,7 +6,7 @@ DSH — харнесс, внутри которого живёт агент (`ds
 
 | Слой | Что даёт | Где живёт |
 |---|---|---|
-| **MCP-сервер** (`@deepseek-ai/dsh-mcp-client`) | 36 инструментов `mcp__ob2h__*` — явные операции | запись `insert` в `cordis.patch.yml` профиля |
+| **MCP-сервер** (`@deepseek-ai/dsh-mcp-client`) | 57 инструментов `mcp__ob2h__*` — явные операции | запись `insert` в `cordis.patch.yml` профиля |
 | **cordis-плагин** `plugin/dsh-ob2h` | авто-захват ходов (`session_ingest`), авто-prefetch памяти блоком `<agent_memory>`, заметка в системном промпте | вторая запись `insert` в том же блоке |
 | **Скилл** `ob2h` | знание, когда памятью пользоваться, и что блок `<agent_memory>` уже пришёл | `$DSH_HOME/skills/ob2h/SKILL.md` |
 
@@ -50,6 +50,28 @@ MCP-строку и скажет об этом — интеграция дегр
 Профиль выбирается так: `$DSH_PROFILE` → `desktop` → `web` → первый по алфавиту;
 `$DSH_HOME` → `~/.dsh`. Кастомный профиль можно указать явно:
 `ob2h agent install --agent dsh --path C:/Users/<u>/.dsh/profiles/my`.
+
+## Установка как bundle (маркет-индекс DSH)
+
+Второй путь — без репозитория и сборки: пакет `plugin/dsh-ob2h` оформлен как bundle
+DeepSeek Harness и лежит в маркет-индексе этого репозитория (`index.json` в корне,
+`format: 1`; версия пакета закреплена за коммитом, источник — Git).
+
+1. В DSH: **Plugins** → включить **Custom plugin indexes** (экспериментальный bundle
+   `dsh-experimental-plugin-market-bundle`) → вкладка **Discover**.
+2. **Add index source** → адрес репозитория `https://github.com/Pofium/ob2h`
+   (*Index file path* и *Git ref* пустые — читается корневой `index.json` на `main`).
+3. Установить `dsh-ob2h` и включить bundle.
+4. Обе строки пакета (`mcp-ob2h`, `ob2h-memory`) вставляются **выключенными**: у ob2h нет
+   пользовательского каталога по умолчанию, без `OB2H_DATA_DIR` он писал бы `data/` в cwd
+   дочернего процесса. Переопределите строки по `id` в `cordis.patch.yml` профиля
+   (исполняемый файл + один каталог данных) и включите их. Готовый YAML — в
+   `plugin/dsh-ob2h/README.md`, раздел «Установка как bundle DSH (маркет-индекс)».
+
+Индекс генерируется `scripts/make_dsh_index.py <версия> <SHA коммита с пакетом>`;
+`--check <версия>` сверяет индекс с манифестом пакета в закреплённом коммите.
+Официального индекса у DSH нет — Discover показывает только источники, которые добавил
+пользователь.
 
 ## Перезапуск
 

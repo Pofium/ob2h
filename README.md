@@ -172,7 +172,7 @@ ob2h doctor --fix
 Команда автоматически обнаружит и сконфигурирует Claude Code, Cursor, Windsurf, ZCode, Gemini/Antigravity, Qwen Code, OpenCode и DSH (DeepSeek Harness).
 
 Для DSH (`dsh` / Electron-GUI) интеграция — двухслойная: MCP-сервер через штатный плагин
-`@deepseek-ai/dsh-mcp-client` (56 инструментов `mcp__ob2h__*`) плюс скилл `ob2h` **и**
+`@deepseek-ai/dsh-mcp-client` (57 инструментов `mcp__ob2h__*`) плюс скилл `ob2h` **и**
 cordis-плагин `plugin/dsh-ob2h`, который даёт то же, что MemoryProvider в Hermes:
 сам подмешивает релевантные воспоминания блоком `<agent_memory>` перед ходом и сам
 пишет состоявшиеся ходы в память. Подробности — в
@@ -182,6 +182,12 @@ cordis-плагин `plugin/dsh-ob2h`, который даёт то же, что
 ob2h agent install --agent dsh     # блок ob2h в patch-слое профиля (MCP + плагин) + скилл
 ob2h agent status                  # строка «DSH (DeepSeek Harness)»
 ```
+
+Для DSH есть и второй путь — пакет оформлен как bundle и лежит в маркет-индексе этого
+репозитория (`index.json` в корне): в DSH включите **Custom plugin indexes**, на вкладке
+**Discover** добавьте источник `https://github.com/Pofium/ob2h` и установите `dsh-ob2h`.
+Обе строки пакета выходят выключенными — их настраивают перед включением
+(`plugin/dsh-ob2h/README.md`, раздел «Установка как bundle DSH»).
 
 ### Шаг 3.7. Плагин из маркетплейса (ZCode, Claude Code)
 
